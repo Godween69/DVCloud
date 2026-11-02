@@ -1,0 +1,12 @@
+{
+  "name": "@dvcloud/admin",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "set-password": "node bin/set-password.mjs"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "dvcloud",
+  "version": "0.0.1",
+  "private": true,
+  "description": "DV Cloud: домашнее облако для семьи (фото и файлы). Монорепозиторий.",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/server",
+    "apps/web",
+    "apps/admin"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "licenses": "node tools/check-licenses.mjs",
+    "dev:server": "npm run build --workspace @dvcloud/server && node --env-file=dvcloud.env apps/server/dist/src/main.js",
+    "dev:web": "npm run dev --workspace @dvcloud/web",
+    "dev:admin": "node --env-file=dvcloud.env apps/admin/server.mjs",
+    "admin:set-password": "node apps/admin/bin/set-password.mjs dvcloud.env"
+  },
+  "overrides": {
+    "multer": "^2.5.0"
+  }
+}
