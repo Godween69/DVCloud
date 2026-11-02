@@ -15,7 +15,10 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "licenses": "node tools/check-licenses.mjs"
+    "licenses": "node tools/check-licenses.mjs",
+    "dev:server": "npm run build --workspace @dvcloud/server && node --env-file=dvcloud.env apps/server/dist/src/main.js",
+    "dev:admin": "node --env-file=dvcloud.env apps/admin/server.mjs",
+    "admin:set-password": "node apps/admin/bin/set-password.mjs dvcloud.env"
   },
   "overrides": {
     "multer": "^2.5.0"
