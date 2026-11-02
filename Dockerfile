@@ -12,7 +12,7 @@ COPY apps ./apps
 RUN npm run build --workspace @dvcloud/server
 
 FROM node:22.23.1-alpine AS server
-ENV NODE_ENV=production DVCLOUD_HOST=0.0.0.0
+ENV NODE_ENV=production DVCLOUD_HOST=0.0.0.0 DVCLOUD_INTERNAL_HOST=0.0.0.0
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/

@@ -8,7 +8,8 @@
     "start": "node dist/src/main.js",
     "start:dev": "tsc -p tsconfig.json && node dist/src/main.js",
     "migrate": "node dist/src/db/migrate-cli.js",
-    "test": "tsc -p tsconfig.json && node --test \"dist/test/*.test.js\""
+    "test": "tsc -p tsconfig.json && node --test \"dist/test/*.test.js\"",
+    "test:db": "tsc -p tsconfig.json && node --test \"dist/test/*.integration.js\""
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -19,6 +20,7 @@
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/node": "^22.10.7",
     "@types/pg": "^8.11.10",
     "typescript": "^5.7.3"

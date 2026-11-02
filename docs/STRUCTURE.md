@@ -9,8 +9,9 @@
 
 ## Порты для разработки (всё только на 127.0.0.1)
 
-    3004  server
+    3004  server, публичный порт (вход, API)
     3005  admin
+    3006  server, внутренний порт для админки (управление людьми)
     5177  web (Vite dev)
     5436  Postgres (docker-compose.dev.yml)
 
@@ -18,7 +19,9 @@
 
     npm install        поставить зависимости всех приложений
     npm run build      собрать server и web
-    npm test           тесты всех приложений (node --test)
+    npm test           тесты всех приложений (node --test), без базы
+    npm run test:db --workspace @dvcloud/server
+                       тесты входа на настоящем Postgres (нужен DVCLOUD_TEST_DATABASE_URL)
     npm run licenses   проверка лицензий зависимостей
 
 ## База данных

@@ -1,14 +1,12 @@
-import 'reflect-metadata';
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { createApps } from './bootstrap';
 import { loadConfig } from './config';
 
 async function bootstrap(): Promise<void> {
   const cfg = loadConfig();
-  const app = await NestFactory.create(AppModule);
-  app.setGlobalPrefix('api');
-  await app.listen(cfg.port, cfg.host);
-  console.log(`DVCloud server слушает ${cfg.host}:${cfg.port}`);
+  const { pub, internal } = await createApps(cfg);
+  await pub.listen(cfg.port, cfg.host);
+  await internal.listen(cfg.internalPort, cfg.internalHost);
+  console.log(`DVCloud server: публичный ${cfg.host}:${cfg.port}, внутренний ${cfg.internalHost}:${cfg.internalPort}`);
 }
 
 bootstrap().catch((e) => {
