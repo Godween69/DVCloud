@@ -1,0 +1,23 @@
+{
+  "name": "dvcloud",
+  "version": "0.0.1",
+  "private": true,
+  "description": "DV Cloud: домашнее облако для семьи (фото и файлы). Монорепозиторий.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/server",
+    "apps/web",
+    "apps/admin"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "licenses": "node tools/check-licenses.mjs"
+  },
+  "overrides": {
+    "multer": "^2.5.0"
+  }
+}

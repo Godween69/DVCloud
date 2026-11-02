@@ -1,0 +1,23 @@
+# Только база для разработки. Порт наружу не торчит: 127.0.0.1:5436.
+# Запуск: docker compose --env-file dvcloud.env -f docker-compose.dev.yml up -d
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: dvcloud-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dvcloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD в dvcloud.env}
+      POSTGRES_DB: ${POSTGRES_DB:-dvcloud}
+    ports:
+      - "127.0.0.1:5436:5432"
+    volumes:
+      - dvcloud-pg-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-dvcloud} -d $${POSTGRES_DB:-dvcloud}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  dvcloud-pg-dev:
