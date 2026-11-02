@@ -10,6 +10,7 @@ export interface Config {
   cookieSecure: boolean;
   trustProxy: number; // сколько прокси стоит перед сервером (0 = никого)
   sessionIdleDays: number;
+  maxUploadBytes: number; // предел размера одного файла
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -46,5 +47,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cookieSecure: (env.DVCLOUD_COOKIE_SECURE ?? 'true') !== 'false',
     trustProxy: intVar(env, 'DVCLOUD_TRUST_PROXY', 0, 0, 10),
     sessionIdleDays: intVar(env, 'DVCLOUD_SESSION_IDLE_DAYS', 14, 1, 365),
+    maxUploadBytes: intVar(env, 'DVCLOUD_MAX_UPLOAD_BYTES', 50 * 1024 ** 3, 1, Number.MAX_SAFE_INTEGER),
   };
 }

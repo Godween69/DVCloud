@@ -5,6 +5,9 @@ import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
 import { AuditService } from './db/audit.service';
 import { DbService } from './db/db.service';
+import { FilesController } from './files/files.controller';
+import { FilesService } from './files/files.service';
+import { StorageService } from './files/storage.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
 import { InternalHealthController, InternalUsersController } from './internal/internal.controller';
@@ -21,15 +24,15 @@ export class CoreModule {
   }
 }
 
-// Публичный порт: вход, выход, кто я, состояние.
+// Публичный порт: вход, выход, кто я, состояние, файлы.
 @Module({})
 export class AppModule {
   static forRoot(cfg: Config): DynamicModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController],
-      providers: [SessionGuard],
+      controllers: [HealthController, AuthController, FilesController],
+      providers: [SessionGuard, StorageService, FilesService],
     };
   }
 }
