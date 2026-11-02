@@ -1,0 +1,14 @@
+# Не кладём в контекст сборки: чужие модули, готовые сборки, git, секреты, данные
+.git
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+data
+library
+inbox
+trash
+cache
+docs

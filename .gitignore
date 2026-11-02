@@ -1,0 +1,34 @@
+# Зависимости и сборка
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.log
+*.tsbuildinfo
+
+# Секреты и ключи (никогда не попадают в репозиторий)
+.env
+.env.*
+!.env.example
+dvcloud.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+secrets/
+
+# Данные: фото, база, кэш (только на сервере, не в git)
+/data/
+/library/
+/inbox/
+/trash/
+/cache/
+*.sqlite
+
+# Системное
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
