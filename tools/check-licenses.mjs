@@ -1,28 +1,33 @@
-// Проверка лицензий зависимостей. Политика: MIT, BSD, Apache-2.0, MPL-2.0 разрешены;
-// ISC, 0BSD и подобные разрешены, но показываются в отчёте; AGPL/GPL и неизвестные — ошибка.
+// Проверка лицензий зависимостей. Проект распространяется под AGPL-3.0, поэтому в нём допустимо всё, что с ним совместимо.
+// Политика:
+//   разрешены без оговорок: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, MPL-2.0;
+//   разрешены, но видны в отчёте: ISC, 0BSD и подобные свободные лицензии;
+//   копилефт, совместимый с AGPL-3.0, виден отдельным списком: LGPL-3.0, GPL-3.0, AGPL-3.0, LGPL-2.1-or-later, GPL-2.0-or-later;
+//   ошибка: GPL-2.0-only, LGPL-2.1-only (несовместимы с AGPL-3.0), несвободные и неизвестные лицензии, пакет без лицензии.
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ALLOWED = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', 'MPL-2.0']);
 const VISIBLE = new Set(['ISC', '0BSD', 'BlueOak-1.0.0', 'Unlicense', 'CC0-1.0', 'Python-2.0', 'CC-BY-4.0']);
-const FORBIDDEN = /GPL/i;
+const COPYLEFT_OK = new Set([
+  'LGPL-3.0', 'LGPL-3.0-only', 'LGPL-3.0-or-later',
+  'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
+  'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
+  'LGPL-2.1-or-later', 'GPL-2.0-or-later',
+]);
 
-// Единственное исключение: готовая графическая библиотека libvips из sharp (LGPL-3.0). Она подключается как отдельный
-// бинарный файл, в репозиторий не копируется и не изменяется; сам sharp под Apache-2.0. Решение владельца проекта, см. docs/PREVIEWS.md.
-const EXCEPTIONS = [{ name: /^@img\/sharp-(libvips-|wasm32$)/, why: 'libvips из sharp, LGPL, отдельная готовая библиотека' }];
-
-// Правило для одного SPDX-идентификатора: 'ok' | 'visible' | 'bad'
+// Правило для одного SPDX-идентификатора: 'ok' | 'visible' | 'copyleft' | 'bad'
 function rate(id) {
   const x = id.replace(/\+$/, '');
-  if (FORBIDDEN.test(x)) return 'bad';
   if (ALLOWED.has(x)) return 'ok';
   if (VISIBLE.has(x)) return 'visible';
+  if (COPYLEFT_OK.has(x)) return 'copyleft';
   return 'bad';
 }
 
 // Выражение вида "(MIT OR Apache-2.0)" или "MIT AND ISC": OR — лучшее из вариантов, AND — худшее.
 export function rateExpression(expr) {
-  const order = { ok: 0, visible: 1, bad: 2 };
+  const order = { ok: 0, visible: 1, copyleft: 2, bad: 3 };
   const s = String(expr || '').trim().replace(/^\(|\)$/g, '');
   if (!s) return 'bad';
   const ors = s.split(/\s+OR\s+/i).map((part) => {
@@ -63,32 +68,26 @@ export function check(root) {
     seen.set(`${pkg.name}@${pkg.version}`, licenseOf(pkg));
   }
   const visible = [];
-  const excepted = [];
+  const copyleft = [];
   const bad = [];
   const counts = {};
   for (const [id, lic] of [...seen].sort()) {
-    const name = id.slice(0, id.lastIndexOf('@'));
-    const ex = EXCEPTIONS.find((x) => x.name.test(name));
-    if (ex) {
-      excepted.push(`${id}  ${lic}  (${ex.why})`);
-      counts[lic || '(нет)'] = (counts[lic || '(нет)'] ?? 0) + 1;
-      continue;
-    }
     const r = rateExpression(lic);
     counts[lic || '(нет)'] = (counts[lic || '(нет)'] ?? 0) + 1;
     if (r === 'visible') visible.push(`${id}  ${lic}`);
+    if (r === 'copyleft') copyleft.push(`${id}  ${lic}`);
     if (r === 'bad') bad.push(`${id}  ${lic || '(лицензия не указана)'}`);
   }
-  return { total: seen.size, counts, visible, excepted, bad };
+  return { total: seen.size, counts, visible, copyleft, bad };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const root = process.argv[2] ?? process.cwd();
-  const { total, counts, visible, excepted, bad } = check(root);
+  const { total, counts, visible, copyleft, bad } = check(root);
   console.log(`Пакетов проверено: ${total}`);
   for (const [k, v] of Object.entries(counts).sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${v}`);
   if (visible.length) console.log(`\nТребуют внимания (разрешены, но видны в отчёте): ${visible.length}\n  ${visible.join('\n  ')}`);
-  if (excepted.length) console.log(`\nИсключения (решение владельца): ${excepted.length}\n  ${excepted.join('\n  ')}`);
+  if (copyleft.length) console.log(`\nКопилефт, совместимый с AGPL-3.0: ${copyleft.length}\n  ${copyleft.join('\n  ')}`);
   if (bad.length) {
     console.error(`\nЗАПРЕЩЕНО или неизвестно: ${bad.length}\n  ${bad.join('\n  ')}`);
     process.exit(1);

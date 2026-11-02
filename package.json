@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "DV Cloud: домашнее облако для семьи (фото и файлы). Монорепозиторий.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=22"
   },
