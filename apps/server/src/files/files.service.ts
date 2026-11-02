@@ -7,6 +7,7 @@ import { CONFIG } from '../tokens';
 import { UserRow } from '../users/users.service';
 import { cleanFileName, libraryDir, parseTakenAt, trashDir } from './names';
 import { StorageService, TooLargeError } from './storage.service';
+import { ThumbsService } from './thumbs.service';
 
 export interface FileRow {
   id: string;
@@ -54,6 +55,7 @@ export class FilesService {
   constructor(
     private readonly db: DbService,
     private readonly storage: StorageService,
+    private readonly thumbs: ThumbsService,
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
@@ -107,6 +109,7 @@ export class FilesService {
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
           [user.id, rel, clean.name, clean.mime, size, sha256, takenAt],
         );
+        this.thumbs.warm(r.rows[0]); // миниатюра строится в фоне, загрузка её не ждёт
         return { file: r.rows[0], duplicate: false };
       } catch (e) {
         await this.storage.remove(rel);
@@ -180,5 +183,6 @@ export class FilesService {
     if (!f.trashed_at) throw new ConflictException('Сначала переложите файл в корзину');
     await this.db.query('DELETE FROM files WHERE id = $1 AND owner_id = $2 AND trashed_at IS NOT NULL', [f.id, user.id]);
     await this.storage.remove(f.path);
+    await this.thumbs.remove(f);
   }
 }

@@ -8,6 +8,7 @@ import { DbService } from './db/db.service';
 import { FilesController } from './files/files.controller';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
+import { ThumbsService } from './files/thumbs.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
 import { InternalHealthController, InternalUsersController } from './internal/internal.controller';
@@ -32,7 +33,7 @@ export class AppModule {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
       controllers: [HealthController, AuthController, FilesController],
-      providers: [SessionGuard, StorageService, FilesService],
+      providers: [SessionGuard, StorageService, ThumbsService, FilesService],
     };
   }
 }

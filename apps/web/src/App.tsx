@@ -1,20 +1,17 @@
+import { Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { api, setUnauthorizedHandler } from './api';
+import { Login } from './components/Login';
+import { Shell } from './components/Shell';
+import type { User } from './types';
 
-export function App() {
-  const [status, setStatus] = useState('проверяю сервер…');
-
+export default function App() {
+  // undefined = ещё проверяем сессию, null = не вошли
+  const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => r.json())
-      .then((j: { status: string }) => setStatus(j.status === 'ok' ? 'сервер работает' : 'сервер ответил странно'))
-      .catch(() => setStatus('сервер недоступен'));
+    setUnauthorizedHandler(() => setUser(null));
+    api.me().then(setUser).catch(() => setUser(null));
   }, []);
-
-  return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 480, margin: '4rem auto', padding: '0 1rem' }}>
-      <h1>DV Cloud</h1>
-      <p>Домашнее облако. Ранняя разработка.</p>
-      <p>Состояние: {status}</p>
-    </main>
-  );
+  if (user === undefined) return <div className="flex min-h-screen items-center justify-center text-gray-500"><Loader2 className="size-6 animate-spin" aria-label="Загрузка" /></div>;
+  return user ? <Shell user={user} onLogout={() => setUser(null)} /> : <Login onLogin={setUser} />;
 }

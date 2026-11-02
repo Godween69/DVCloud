@@ -17,6 +17,7 @@
     "test": "npm run test --workspaces --if-present",
     "licenses": "node tools/check-licenses.mjs",
     "dev:server": "npm run build --workspace @dvcloud/server && node --env-file=dvcloud.env apps/server/dist/src/main.js",
+    "dev:web": "npm run dev --workspace @dvcloud/web",
     "dev:admin": "node --env-file=dvcloud.env apps/admin/server.mjs",
     "admin:set-password": "node apps/admin/bin/set-password.mjs dvcloud.env"
   },

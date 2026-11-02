@@ -7,6 +7,10 @@ const ALLOWED = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', 'M
 const VISIBLE = new Set(['ISC', '0BSD', 'BlueOak-1.0.0', 'Unlicense', 'CC0-1.0', 'Python-2.0', 'CC-BY-4.0']);
 const FORBIDDEN = /GPL/i;
 
+// Единственное исключение: готовая графическая библиотека libvips из sharp (LGPL-3.0). Она подключается как отдельный
+// бинарный файл, в репозиторий не копируется и не изменяется; сам sharp под Apache-2.0. Решение владельца проекта, см. docs/PREVIEWS.md.
+const EXCEPTIONS = [{ name: /^@img\/sharp-(libvips-|wasm32$)/, why: 'libvips из sharp, LGPL, отдельная готовая библиотека' }];
+
 // Правило для одного SPDX-идентификатора: 'ok' | 'visible' | 'bad'
 function rate(id) {
   const x = id.replace(/\+$/, '');
@@ -59,23 +63,32 @@ export function check(root) {
     seen.set(`${pkg.name}@${pkg.version}`, licenseOf(pkg));
   }
   const visible = [];
+  const excepted = [];
   const bad = [];
   const counts = {};
   for (const [id, lic] of [...seen].sort()) {
+    const name = id.slice(0, id.lastIndexOf('@'));
+    const ex = EXCEPTIONS.find((x) => x.name.test(name));
+    if (ex) {
+      excepted.push(`${id}  ${lic}  (${ex.why})`);
+      counts[lic || '(нет)'] = (counts[lic || '(нет)'] ?? 0) + 1;
+      continue;
+    }
     const r = rateExpression(lic);
     counts[lic || '(нет)'] = (counts[lic || '(нет)'] ?? 0) + 1;
     if (r === 'visible') visible.push(`${id}  ${lic}`);
     if (r === 'bad') bad.push(`${id}  ${lic || '(лицензия не указана)'}`);
   }
-  return { total: seen.size, counts, visible, bad };
+  return { total: seen.size, counts, visible, excepted, bad };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const root = process.argv[2] ?? process.cwd();
-  const { total, counts, visible, bad } = check(root);
+  const { total, counts, visible, excepted, bad } = check(root);
   console.log(`Пакетов проверено: ${total}`);
   for (const [k, v] of Object.entries(counts).sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${v}`);
   if (visible.length) console.log(`\nТребуют внимания (разрешены, но видны в отчёте): ${visible.length}\n  ${visible.join('\n  ')}`);
+  if (excepted.length) console.log(`\nИсключения (решение владельца): ${excepted.length}\n  ${excepted.join('\n  ')}`);
   if (bad.length) {
     console.error(`\nЗАПРЕЩЕНО или неизвестно: ${bad.length}\n  ${bad.join('\n  ')}`);
     process.exit(1);

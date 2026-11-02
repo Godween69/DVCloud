@@ -19,6 +19,8 @@
 
     npm install        поставить зависимости всех приложений
     npm run build      собрать server и web
+    npm run dev:server / dev:admin / dev:web
+                       запустить сервер, админку, сайт (сайт на http://127.0.0.1:5177)
     npm test           тесты всех приложений (node --test), без базы
     npm run test:db --workspace @dvcloud/server
                        тесты входа на настоящем Postgres (нужен DVCLOUD_TEST_DATABASE_URL)

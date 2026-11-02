@@ -6,6 +6,7 @@ import { UserRow } from '../users/users.service';
 import { FilesService, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { StorageService } from './storage.service';
+import { ThumbsService } from './thumbs.service';
 
 type Req_ = Request & { user: UserRow };
 
@@ -16,6 +17,7 @@ export class FilesController {
   constructor(
     private readonly files: FilesService,
     private readonly storage: StorageService,
+    private readonly thumbs: ThumbsService,
   ) {}
 
   // Загрузка одного файла потоком: тело запроса это сам файл. Имя в ?name=, дата снимка в заголовке X-File-Modified.
@@ -57,6 +59,31 @@ export class FilesController {
     res.setHeader('Cache-Control', 'no-store');
     const u = await this.files.usage(req.user.id);
     return { ...u, quotaBytes: req.user.quota_bytes === null ? null : Number(req.user.quota_bytes) };
+  }
+
+  // Миниатюра фото (маленький WebP). id неизменен и содержимое тоже, поэтому браузер может хранить её год.
+  // Если миниатюру сделать нельзя (видео, HEIC, битый файл), отвечаем 404, и сайт показывает значок.
+  @Get(':id/thumb')
+  async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
+    const f = await this.files.getOwned(req.user.id, id);
+    const rel = f.trashed_at ? null : await this.thumbs.ensure(f);
+    if (!rel) {
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.status(404).json({ message: 'Миниатюры нет' });
+      return;
+    }
+    res.setHeader('Content-Type', 'image/webp');
+    res.sendFile(rel, {
+      root: this.storage.root,
+      dotfiles: 'deny',
+      headers: {
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Cache-Control': 'private, max-age=31536000, immutable',
+      },
+    }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Миниатюры нет' });
+    });
   }
 
   // Отдача оригинала. sendFile сам умеет Range (докачка и перемотка видео) и не выходит за каталог данных.
