@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import { CheckCheck, Download, FolderMinus, FolderPlus, X, Zap } from 'lucide-react';
 import { MAX_ZIP_IDS, zipHref } from '../lib/albums';
-import { countFiles } from '../lib/format';
 
 interface Props {
   ids: string[];
@@ -27,7 +26,6 @@ export function SelectionBar({ ids, total, zipName, inAlbum, onAlbum, quickName,
   return (
     <motion.div initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }} className="fixed inset-x-0 bottom-20 z-30 flex justify-center px-3">
       <div role="toolbar" aria-label="Действия с выбранным" className="flex max-w-full flex-wrap items-center gap-1 rounded-2xl bg-gray-900 px-2 py-1.5 text-white shadow-2xl dark:bg-paper-100 dark:text-gray-900">
-        <span className="px-3 text-sm font-medium" aria-live="polite">{none ? 'Ничего не выбрано' : `Выбрано: ${countFiles(ids.length)}`}</span>
         <button type="button" onClick={onAll} disabled={ids.length >= total} className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><CheckCheck className="size-4" aria-hidden /><span className="hidden sm:inline">Выбрать всё</span></button>
         {quickName && <button type="button" onClick={onQuick} disabled={none} className={`${btn} bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40`}><Zap className="size-4" aria-hidden /><span className="max-w-[9rem] truncate">В «{quickName}»</span></button>}
         <button type="button" onClick={onAlbum} disabled={none} className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><FolderPlus className="size-4" aria-hidden /><span className="hidden sm:inline">{quickName ? 'Другой альбом' : 'В альбом'}</span></button>

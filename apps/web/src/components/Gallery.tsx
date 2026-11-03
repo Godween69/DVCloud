@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { CalendarDays, Check, CheckSquare, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
 import { countFiles, formatDateTime } from '../lib/format';
@@ -35,7 +35,9 @@ interface Props {
   onToggle: (id: string) => void;
   onToggleMany: (ids: string[], on: boolean) => void;
   empty?: ReactNode;
-  quick: QuickView | null; // «быстрый альбом»: плюсик на плитках
+  quick: QuickView | null; // «быстрый альбом»: плюсик на плитках (null: выключен)
+  chip: { name: string; on: boolean } | null; // выбранный быстрый альбом для переключателя над сеткой
+  onQuickOn: (on: boolean) => void; // включить или выключить быстрый альбом
   onPickQuick: () => void; // открыть выбор быстрого альбома
 }
 
@@ -45,13 +47,19 @@ export interface QuickView {
   toggle: (id: string) => void;
 }
 
-function Tile({ file, onOpen, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
+function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
   const [broken, setBroken] = useState(false);
+  // Долгое нажатие пальцем включает выбор (как в Google Фото); следующий за ним «клик» не открывает просмотр.
+  const hold = useRef<{ t: ReturnType<typeof setTimeout> | null; fired: boolean }>({ t: null, fired: false });
+  const stopHold = () => { if (hold.current.t) { clearTimeout(hold.current.t); hold.current.t = null; } };
   const video = isVideo(file.mime);
   const inQuick = !!quick && quick.has(file.id);
   return (
     <div className="group relative aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
-    <button type="button" onClick={() => onOpen(file.id)} aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="absolute inset-0 block size-full overflow-hidden">
+    <button type="button" onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } onOpen(file.id); }}
+      onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
+      onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
+      aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="absolute inset-0 block size-full overflow-hidden">
       {video || broken ? (
         <div className="flex size-full flex-col items-center justify-center gap-2 p-2 text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-500 dark:group-hover:text-gray-300">
           {video ? <Film className="size-7" aria-hidden /> : <ImageOff className="size-7" aria-hidden />}
@@ -72,6 +80,9 @@ function Tile({ file, onOpen, selecting, picked, quick }: { file: FileItem; onOp
         </>
       )}
     </button>
+    {!selecting && (
+      <button type="button" onClick={() => onPick(file.id)} aria-label={`Выбрать: ${file.name}`} title="Выбрать" className="absolute left-1.5 top-1.5 flex size-6 items-center justify-center rounded-full border-2 border-white/90 bg-black/30 text-transparent opacity-0 transition-opacity hover:bg-violet-600 hover:text-white focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:hidden"><Check className="size-3.5" strokeWidth={3} aria-hidden /></button>
+    )}
     {quick && !selecting && (
       <button type="button" onClick={() => quick.toggle(file.id)} aria-pressed={inQuick} aria-label={inQuick ? `Убрать из «${quick.name}»: ${file.name}` : `Добавить в «${quick.name}»: ${file.name}`} title={inQuick ? `Уже в «${quick.name}». Нажмите, чтобы убрать` : `В «${quick.name}»`}
         className={`absolute bottom-1.5 right-1.5 flex size-8 items-center justify-center rounded-full text-white shadow-md backdrop-blur transition-all focus-visible:opacity-100 active:scale-90 ${inQuick ? 'bg-violet-600 opacity-100 hover:bg-violet-500' : 'bg-black/45 opacity-0 hover:bg-violet-600 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
@@ -82,7 +93,7 @@ function Tile({ file, onOpen, selecting, picked, quick }: { file: FileItem; onOp
   );
 }
 
-export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, onPickQuick }: Props) {
+export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, chip, onQuickOn, onPickQuick }: Props) {
   const groups = useMemo(() => groupByMonth(files), [files]);
   const [layout, setLayout] = usePref<Layout>('layout', 'months', LAYOUTS);
   const [density, setDensity] = usePref<Density>('density', 'm', DENSITIES);
@@ -90,6 +101,8 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   const sentinel = useRef<HTMLDivElement>(null);
   // В режиме выбора нажатие на плитку отмечает её, а не открывает просмотр.
   const tap = (id: string) => (selecting ? onToggle(id) : onOpen(id));
+  // Выбрать фото прямо с плитки: режим выбора включается сам.
+  const pick = (id: string) => { if (!selecting) onSelecting(true); onToggle(id); };
 
   // Когда нижний край списка показался на экране, подгружаем следующую страницу.
   useEffect(() => {
@@ -136,10 +149,30 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   return (
     <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6">
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
-        <button type="button" onClick={() => onSelecting(!selecting)} aria-pressed={selecting} className={seg(selecting)}><CheckSquare className="size-4" aria-hidden /><span>{selecting ? 'Готово' : 'Выбрать'}</span></button>
-        <button type="button" onClick={onPickQuick} title={quick ? 'Сменить или выключить быстрый альбом' : 'Выбрать альбом, в который фото кладутся одним нажатием'} className={`mr-auto flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors ${quick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'border border-dashed border-paper-300 text-gray-700 hover:border-violet-400 hover:text-violet-700 dark:border-gray-700 dark:text-gray-300 dark:hover:text-violet-300'}`}>
-          <Zap className="size-4 shrink-0" aria-hidden /><span className="truncate">{quick ? <><span className="hidden sm:inline">Быстрый альбом: </span>{quick.name}</> : 'Быстрый альбом'}</span>
-        </button>
+        {selecting ? (
+          <div className="mr-auto flex items-center gap-1">
+            <button type="button" onClick={() => onSelecting(false)} aria-label="Отменить выбор" title="Отменить выбор" className="flex size-9 items-center justify-center rounded-full text-gray-700 transition-colors hover:bg-paper-200 dark:text-gray-200 dark:hover:bg-gray-800"><X className="size-5" aria-hidden /></button>
+            <span className="text-base font-semibold text-gray-900 dark:text-white" aria-live="polite">{selected.size === 0 ? 'Выберите фото' : `Выбрано: ${countFiles(selected.size)}`}</span>
+          </div>
+        ) : (
+          <>
+            <button type="button" onClick={() => onSelecting(true)} className={seg(false)}><CheckSquare className="size-4" aria-hidden /><span>Выбрать</span></button>
+            {chip ? (
+              <div className={`mr-auto flex min-w-0 items-center rounded-lg border transition-colors ${chip.on ? 'border-violet-500/60 bg-violet-600/10' : 'border-paper-300 dark:border-gray-700'}`}>
+                <button type="button" onClick={onPickQuick} title="Выбрать другой альбом" className={`flex min-w-0 items-center gap-1.5 py-1.5 pl-2.5 pr-1.5 text-sm font-medium ${chip.on ? 'text-violet-800 dark:text-violet-200' : 'text-gray-500'}`}>
+                  <Zap className="size-4 shrink-0" aria-hidden /><span className="truncate"><span className="hidden sm:inline">Быстрый альбом: </span>{chip.name}</span><ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
+                </button>
+                <button type="button" role="switch" aria-checked={chip.on} aria-label="Быстрый альбом" onClick={() => onQuickOn(!chip.on)} title={chip.on ? 'Выключить быстрый альбом' : 'Включить быстрый альбом'} className="flex items-center px-2 py-2">
+                  <span className={`relative h-5 w-9 rounded-full transition-colors ${chip.on ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-700'}`}><span className={`absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow transition-transform ${chip.on ? 'translate-x-4' : ''}`} /></span>
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={onPickQuick} title="Выбрать альбом, в который фото кладутся одним нажатием" className="mr-auto flex min-w-0 items-center gap-1.5 rounded-lg border border-dashed border-paper-300 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:border-violet-400 hover:text-violet-700 dark:border-gray-700 dark:text-gray-300 dark:hover:text-violet-300">
+                <Zap className="size-4 shrink-0" aria-hidden /><span className="truncate">Быстрый альбом</span>
+              </button>
+            )}
+          </>
+        )}
         <div className="flex items-center rounded-lg border border-paper-300 p-0.5 dark:border-gray-800" role="group" aria-label="Размер плиток">
           <button type="button" className={step} disabled={di === 0} onClick={() => setDensity(DENSITIES[di - 1])} aria-label="Мельче" title="Мельче"><ZoomOut className="size-4" aria-hidden /></button>
           <button type="button" className={step} disabled={di === DENSITIES.length - 1} onClick={() => setDensity(DENSITIES[di + 1])} aria-label="Крупнее" title="Крупнее"><ZoomIn className="size-4" aria-hidden /></button>
@@ -152,7 +185,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
       {layout === 'wall' ? (
         <div className={`grid gap-1 ${GRID[density]}`}>
           {files.map((f) => (
-            <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
+            <Tile key={f.id} file={f} onOpen={tap} onPick={pick} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
           ))}
         </div>
       ) : (
@@ -168,7 +201,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
             </div>
             <div className={`grid gap-1 ${GRID[density]}`}>
               {g.items.map((f) => (
-                <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
+                <Tile key={f.id} file={f} onOpen={tap} onPick={pick} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
               ))}
             </div>
           </section>

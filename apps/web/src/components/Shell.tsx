@@ -118,13 +118,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   }
 
   // Быстрый альбом: положить файл (или убрать, если он там уже). Если файл из-за этого ушёл из открытого альбома, лента подправляется.
-  async function quickFile(f: FileItem): Promise<'added' | 'removed' | 'moved' | null> {
+  async function quickFile(f: FileItem): Promise<'added' | 'moved' | null> {
     const t = quick.target;
-    if (!t) return null;
+    if (!t || quick.has(f.id)) return null;
     const r = await quick.toggle(f.id);
-    if (r === null) return null;
-    if (inAlbum && album && (r ? album.id !== t.id : album.id === t.id)) { leaveFeed(f.id); return 'moved'; }
-    return r ? 'added' : 'removed';
+    if (r !== true) return null;
+    if (inAlbum && album && album.id !== t.id) { leaveFeed(f.id); return 'moved'; }
+    return 'added';
   }
 
   async function quickTile(id: string) {
@@ -177,7 +177,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const gallery = (feed: typeof library) => (
     <Gallery files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
-      quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} onPickQuick={() => setTargetPicker(true)}
+      quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} chip={quick.saved ? { name: quick.saved.name, on: quick.on } : null} onQuickOn={quick.setOn} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
       empty={inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined} />
   );
@@ -216,7 +216,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </AnimatePresence>
       {picker && <AlbumPicker ids={picker} current={null} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
-      {targetPicker && <AlbumPicker target ids={[]} current={quick.target} onClose={() => setTargetPicker(false)} onError={say}
+      {targetPicker && <AlbumPicker target ids={[]} current={quick.saved} onClose={() => setTargetPicker(false)} onError={say}
         onDone={(a) => { setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
