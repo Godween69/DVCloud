@@ -1,0 +1,57 @@
+# DV Cloud: пример запуска (сервер, админка, сайт и своя база). Скопируйте как docker-compose.yml и поправьте.
+# Порты опубликованы только на 127.0.0.1: наружу сайт выводит ваш обратный прокси (см. docs/DEPLOY.md).
+# Подробно: docs/DEPLOY.md
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dvcloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в файле .env рядом}
+      POSTGRES_DB: dvcloud
+    volumes:
+      - dvcloud-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvcloud -d dvcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: { context: ., target: server }
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    env_file: dvcloud.env
+    environment:
+      # Адрес базы внутри сети compose перекрывает значение из dvcloud.env.
+      DVCLOUD_DATABASE_URL: postgres://dvcloud:${POSTGRES_PASSWORD}@db:5432/dvcloud
+      DVCLOUD_DATA_DIR: /data
+      # Внутри контейнера слушаем все адреса (значения 127.0.0.1 из dvcloud.env годятся для запуска без Docker).
+      # Наружу порты не публикуются: до сервера дотягиваются только web и admin по сети compose.
+      DVCLOUD_HOST: 0.0.0.0
+      DVCLOUD_INTERNAL_HOST: 0.0.0.0
+    volumes:
+      # Каталог с вашими файлами. Хозяин должен быть пользователь 1000 (в контейнере это node):
+      # sudo chown 1000:1000 ./data
+      - ./data:/data
+
+  admin:
+    build: { context: ., target: admin }
+    restart: unless-stopped
+    depends_on: [server]
+    env_file: dvcloud.env
+    environment:
+      DVCLOUD_INTERNAL_URL: http://server:3006
+      DVCLOUD_ADMIN_HOST: 0.0.0.0     # внутри контейнера; наружу порт опубликован ниже только на 127.0.0.1
+    ports:
+      - "127.0.0.1:3005:3005"   # админка: только локально, наружу не выводить
+
+  web:
+    build: { context: ., target: web }
+    restart: unless-stopped
+    depends_on: [server]
+    ports:
+      - "127.0.0.1:8080:80"     # сайт и /api: за вашим прокси с HTTPS
+
+volumes:
+  dvcloud-db:
