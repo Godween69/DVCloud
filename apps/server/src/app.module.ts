@@ -5,6 +5,8 @@ import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
 import { AuditService } from './db/audit.service';
 import { DbService } from './db/db.service';
+import { AlbumsController, ZipController } from './files/albums.controller';
+import { AlbumsService } from './files/albums.service';
 import { FilesController } from './files/files.controller';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
@@ -32,8 +34,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, FilesController],
-      providers: [SessionGuard, StorageService, ThumbsService, FilesService],
+      controllers: [HealthController, AuthController, FilesController, AlbumsController, ZipController],
+      providers: [SessionGuard, StorageService, ThumbsService, FilesService, AlbumsService],
     };
   }
 }

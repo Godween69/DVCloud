@@ -125,7 +125,7 @@ export class FilesService {
   }
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string }): Promise<{ files: FileRow[]; next: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string }): Promise<{ files: FileRow[]; next: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -134,6 +134,10 @@ export class FilesService {
       if (!m) throw new BadRequestException('Неверный курсор before');
       params.push(m[1], m[2]);
       where += ` AND (${col}, id) < ($2::timestamptz, $3::bigint)`;
+    }
+    if (opts.albumId !== undefined) {
+      params.push(opts.albumId);
+      where += ` AND id IN (SELECT file_id FROM album_files WHERE album_id = $${params.length})`;
     }
     params.push(opts.limit + 1);
     const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} DESC, id DESC LIMIT $${params.length}`, params);

@@ -23,3 +23,16 @@ export interface Usage {
   quotaBytes: number | null;
   count: number;
 }
+
+export interface Album {
+  id: string;
+  name: string;
+  count: number;
+  coverFileId: string | null;
+  createdAt: string;
+}
+
+export interface AlbumRef {
+  id: string;
+  name: string;
+}

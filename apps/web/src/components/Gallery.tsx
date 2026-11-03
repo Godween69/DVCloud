@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
-import { CalendarDays, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Upload, ZoomIn, ZoomOut } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarDays, Check, CheckSquare, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Upload, ZoomIn, ZoomOut } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
 import { countFiles, formatDateTime } from '../lib/format';
 import { groupByMonth } from '../lib/group';
@@ -29,13 +29,19 @@ interface Props {
   onMore: () => void;
   onOpen: (id: string) => void;
   onAdd: () => void;
+  selecting: boolean;
+  selected: ReadonlySet<string>;
+  onSelecting: (on: boolean) => void;
+  onToggle: (id: string) => void;
+  onToggleMany: (ids: string[], on: boolean) => void;
+  empty?: ReactNode;
 }
 
-function Tile({ file, onOpen }: { file: FileItem; onOpen: (id: string) => void }) {
+function Tile({ file, onOpen, selecting, picked }: { file: FileItem; onOpen: (id: string) => void; selecting: boolean; picked: boolean }) {
   const [broken, setBroken] = useState(false);
   const video = isVideo(file.mime);
   return (
-    <button type="button" onClick={() => onOpen(file.id)} aria-label={`Открыть: ${file.name}`} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="group relative block aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
+    <button type="button" onClick={() => onOpen(file.id)} aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="group relative block aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
       {video || broken ? (
         <div className="flex size-full flex-col items-center justify-center gap-2 p-2 text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-500 dark:group-hover:text-gray-300">
           {video ? <Film className="size-7" aria-hidden /> : <ImageOff className="size-7" aria-hidden />}
@@ -49,16 +55,24 @@ function Tile({ file, onOpen }: { file: FileItem; onOpen: (id: string) => void }
       ) : (
         <img src={thumbUrl(file.id)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} className="size-full object-cover transition-transform duration-300 group-hover:scale-[1.04]" />
       )}
+      {selecting && (
+        <>
+          <span className={`pointer-events-none absolute inset-0 transition-colors ${picked ? 'bg-violet-600/25 ring-2 ring-inset ring-violet-500' : 'bg-black/0 group-hover:bg-black/10'}`} />
+          <span className={`pointer-events-none absolute left-1.5 top-1.5 flex size-6 items-center justify-center rounded-full border-2 ${picked ? 'border-violet-500 bg-violet-600 text-white' : 'border-white/90 bg-black/30 text-transparent'}`}><Check className="size-3.5" strokeWidth={3} aria-hidden /></span>
+        </>
+      )}
     </button>
   );
 }
 
-export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd }: Props) {
+export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty }: Props) {
   const groups = useMemo(() => groupByMonth(files), [files]);
   const [layout, setLayout] = usePref<Layout>('layout', 'months', LAYOUTS);
   const [density, setDensity] = usePref<Density>('density', 'm', DENSITIES);
   const di = DENSITIES.indexOf(density);
   const sentinel = useRef<HTMLDivElement>(null);
+  // В режиме выбора нажатие на плитку отмечает её, а не открывает просмотр.
+  const tap = (id: string) => (selecting ? onToggle(id) : onOpen(id));
 
   // Когда нижний край списка показался на экране, подгружаем следующую страницу.
   useEffect(() => {
@@ -83,6 +97,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   }
 
   if (files.length === 0) {
+    if (empty) return <>{empty}</>;
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
         <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-violet-600/10 text-violet-600 dark:text-violet-400">
@@ -104,6 +119,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   return (
     <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6">
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
+        <button type="button" onClick={() => onSelecting(!selecting)} aria-pressed={selecting} className={`mr-auto ${seg(selecting)}`}><CheckSquare className="size-4" aria-hidden /><span>{selecting ? 'Готово' : 'Выбрать'}</span></button>
         <div className="flex items-center rounded-lg border border-paper-300 p-0.5 dark:border-gray-800" role="group" aria-label="Размер плиток">
           <button type="button" className={step} disabled={di === 0} onClick={() => setDensity(DENSITIES[di - 1])} aria-label="Мельче" title="Мельче"><ZoomOut className="size-4" aria-hidden /></button>
           <button type="button" className={step} disabled={di === DENSITIES.length - 1} onClick={() => setDensity(DENSITIES[di + 1])} aria-label="Крупнее" title="Крупнее"><ZoomIn className="size-4" aria-hidden /></button>
@@ -116,7 +132,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
       {layout === 'wall' ? (
         <div className={`grid gap-1 ${GRID[density]}`}>
           {files.map((f) => (
-            <Tile key={f.id} file={f} onOpen={onOpen} />
+            <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} />
           ))}
         </div>
       ) : (
@@ -125,10 +141,14 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
             <div className="mb-3 lg:sticky lg:top-28 lg:mb-0 lg:self-start">
               <h2 className="text-xl font-semibold tracking-tight text-gray-900 lg:text-2xl dark:text-white">{g.title}</h2>
               <p className="text-sm text-gray-500">{countFiles(g.items.length)}</p>
+              {selecting && (() => {
+                const all = g.items.every((f) => selected.has(f.id));
+                return <button type="button" onClick={() => onToggleMany(g.items.map((f) => f.id), !all)} className="mt-1 text-sm text-violet-700 hover:underline dark:text-violet-300">{all ? 'Снять месяц' : 'Выбрать месяц'}</button>;
+              })()}
             </div>
             <div className={`grid gap-1 ${GRID[density]}`}>
               {g.items.map((f) => (
-                <Tile key={f.id} file={f} onOpen={onOpen} />
+                <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} />
               ))}
             </div>
           </section>

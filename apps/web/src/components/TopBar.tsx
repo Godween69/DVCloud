@@ -4,7 +4,7 @@ import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
 
-export type View = 'library' | 'trash';
+export type View = 'library' | 'albums' | 'trash';
 
 interface Props {
   user: User;
@@ -35,7 +35,7 @@ export function TopBar({ user, view, onView, usage, onAdd, theme, onToggleTheme,
         </div>
 
         <nav aria-label="Разделы" className="ml-1 flex gap-1 sm:ml-4">
-          {([['library', 'Библиотека'], ['trash', 'Корзина']] as const).map(([id, label]) => (
+          {([['library', 'Библиотека'], ['albums', 'Альбомы'], ['trash', 'Корзина']] as const).map(([id, label]) => (
             <button key={id} type="button" onClick={() => onView(id)} aria-current={view === id ? 'page' : undefined} className="relative rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:text-white">
               {view === id && <motion.span layoutId="nav-pill" className="absolute inset-0 rounded-lg bg-paper-200 dark:bg-gray-800" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
               <span className="relative">{label}</span>

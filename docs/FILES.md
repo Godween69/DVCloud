@@ -36,6 +36,8 @@
 - Отдача с заголовками `X-Content-Type-Options: nosniff` и `Content-Security-Policy: default-src 'none'; sandbox`.
 - Загрузка принимает только `application/octet-stream`: форма с чужого сайта так отправить не может, это защита от CSRF.
 
+Альбомы и скачивание архивом описаны в docs/ALBUMS.md.
+
 ## Пока не сделано
 
 - Дата снимка берётся со слов клиента (`X-File-Modified`), а не из EXIF. Чтение EXIF будет вместе с превью.

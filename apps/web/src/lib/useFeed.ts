@@ -3,8 +3,8 @@ import { api, ApiError } from '../api';
 import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
-// Список файлов с подгрузкой страницами. trashed=true даёт корзину.
-export function useFeed(trashed: boolean) {
+// Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
+export function useFeed(trashed: boolean, albumId?: string) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -13,15 +13,27 @@ export function useFeed(trashed: boolean) {
   const busy = useRef(false);
   const cursor = useRef<string | null>(null);
   const done = useRef(false); // последняя страница уже получена
+  const gen = useRef(0); // номер запуска: ответ устаревшего запуска (другой альбом) отбрасывается
 
   const loadMore = useCallback(
     async (reset = false) => {
-      if (busy.current || (!reset && done.current)) return;
+      if (!reset && (busy.current || done.current)) return;
+      const my = reset ? ++gen.current : gen.current;
+      if (reset) {
+        cursor.current = null;
+        done.current = false;
+        if (albumId) {
+          setFiles([]);
+          setLoaded(false);
+        }
+      }
       busy.current = true;
       setLoading(true);
       setError(null);
       try {
-        const r = await api.list(trashed, reset ? undefined : (cursor.current ?? undefined));
+        const before = reset ? undefined : (cursor.current ?? undefined);
+        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before);
+        if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
         setHasMore(r.next !== null);
@@ -32,13 +44,15 @@ export function useFeed(trashed: boolean) {
         });
         setLoaded(true);
       } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Не удалось загрузить список');
+        if (my === gen.current) setError(e instanceof ApiError ? e.message : 'Не удалось загрузить список');
       } finally {
-        busy.current = false;
-        setLoading(false);
+        if (my === gen.current) {
+          busy.current = false;
+          setLoading(false);
+        }
       }
     },
-    [trashed],
+    [trashed, albumId],
   );
 
   const add = useCallback((f: FileItem) => setFiles((prev) => insertSorted(prev, f)), []);

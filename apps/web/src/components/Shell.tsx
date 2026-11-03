@@ -5,8 +5,12 @@ import { api, sendFile } from '../api';
 import { useFeed } from '../lib/useFeed';
 import { UploadQueue, type UploadJob } from '../lib/uploader';
 import { useTheme } from '../lib/theme';
-import type { Usage, User } from '../types';
+import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
+import type { Album, AlbumRef, FileItem, Usage, User } from '../types';
+import { AlbumPicker } from './AlbumPicker';
+import { AlbumHeader, AlbumsView } from './AlbumsView';
 import { Gallery } from './Gallery';
+import { SelectionBar } from './SelectionBar';
 import { Toast, type ToastData } from './Toast';
 import { TopBar, type View } from './TopBar';
 import { TrashView } from './TrashView';
@@ -24,8 +28,17 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const input = useRef<HTMLInputElement>(null);
   const toastId = useRef(0);
 
+  const [album, setAlbum] = useState<Album | null>(null); // открытый альбом (внутри вкладки «Альбомы»)
+  const [albums, setAlbums] = useState<Album[] | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
+
   const library = useFeed(false);
   const trash = useFeed(true);
+  const albumFeed = useFeed(false, album?.id);
+  const inAlbum = view === 'albums' && album !== null;
+  const active = inAlbum ? albumFeed : library; // из какой ленты листает просмотрщик
 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
@@ -39,6 +52,16 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   useEffect(() => { library.loadMore(true); refreshUsage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   useEffect(() => { if (view === 'trash') trash.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
+  const refreshAlbums = useCallback(() => { api.albums().then(setAlbums).catch(() => {}); }, []);
+  useEffect(() => { if (view === 'albums' && !album) refreshAlbums(); }, [view, album, refreshAlbums]);
+  useEffect(() => { if (album) albumFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [album?.id]);
+
+  const endSelect = useCallback(() => { setSelecting(false); setSelected(new Set()); }, []);
+  function changeView(v: View) {
+    setView(v);
+    setAlbum(null);
+    endSelect();
+  }
 
   // Перетаскивание файлов в окно: счётчик нужен, потому что dragenter/leave срабатывают на вложенных элементах.
   useEffect(() => {
@@ -61,11 +84,19 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     return () => { window.removeEventListener('dragenter', enter); window.removeEventListener('dragleave', leave); window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); };
   }, [queue]);
 
-  const openIndex = viewer ? library.files.findIndex((f) => f.id === viewer.id) : -1;
+  const openIndex = viewer ? active.files.findIndex((f) => f.id === viewer.id) : -1;
   useEffect(() => { if (viewer && openIndex === -1) setViewer(null); }, [viewer, openIndex]);
 
+  // Файл ушёл из текущей ленты (в корзину или в другой альбом): просмотр переходит к соседнему.
+  function leaveFeed(id: string) {
+    const next = active.files[openIndex + 1] ?? active.files[openIndex - 1];
+    // Функциональное обновление: если окно просмотра успели закрыть, пока шёл запрос, оно не открывается заново.
+    setViewer((v) => (v && v.id === id && next ? { id: next.id } : v));
+    active.remove(id);
+  }
+
   async function toTrash(id: string) {
-    const f = library.files.find((x) => x.id === id);
+    const f = active.files.find((x) => x.id === id);
     if (!f) return;
     try {
       await api.trash(id);
@@ -74,16 +105,47 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       return;
     }
     // Соседний файл показываем вместо удалённого; если соседей нет, просмотрщик закроется сам.
-    const next = library.files[openIndex + 1] ?? library.files[openIndex - 1];
-    // Функциональное обновление: если окно просмотра успели закрыть, пока шёл запрос, оно не открывается заново.
-    setViewer((v) => (v && v.id === id && next ? { id: next.id } : v));
-    library.remove(id);
+    leaveFeed(id);
+    if (inAlbum) library.remove(id);
     say('Файл в корзине', {
       label: 'Вернуть',
       run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось вернуть файл')); },
     });
     refreshUsage();
   }
+
+  function albumChanged(file: FileItem, a: AlbumRef | null, n: number) {
+    say(a ? `В альбоме «${a.name}»` : n ? 'Убрано из альбома' : 'Ничего не изменилось');
+    if (inAlbum && album && a?.id !== album.id) leaveFeed(file.id);
+  }
+
+  async function removeSelectedFromAlbum() {
+    if (!album) return;
+    const ids = [...selected];
+    try {
+      const n = await api.albumRemoveFiles(album.id, ids);
+      ids.forEach((id) => albumFeed.remove(id));
+      say(`Убрано из альбома: ${n}`);
+      endSelect();
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось');
+    }
+  }
+
+  function selectionPicked(a: AlbumRef | null, n: number) {
+    const ids = picker ?? [];
+    setPicker(null);
+    if (!a) return;
+    say(`В альбом «${a.name}»: ${n}`);
+    if (inAlbum && album && a.id !== album.id) ids.forEach((id) => albumFeed.remove(id));
+    endSelect();
+  }
+
+  const gallery = (feed: typeof library) => (
+    <Gallery files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
+      selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
+      empty={inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined} />
+  );
 
   async function logout() {
     try { await api.logout(); } catch { /* всё равно уходим на экран входа */ }
@@ -92,20 +154,34 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={setView} usage={usage} onAdd={() => input.current?.click()} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { queue.add(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
       <main>
-        {view === 'library' ? (
-          <Gallery files={library.files} loaded={library.loaded} loading={library.loading} hasMore={library.hasMore} error={library.error} onMore={() => library.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()} />
-        ) : (
+        {view === 'library' && gallery(library)}
+        {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say} />}
+        {view === 'albums' && album && (
+          <>
+            <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); say('Название изменено'); }} onDeleted={() => { say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say} />
+            {gallery(albumFeed)}
+          </>
+        )}
+        {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}
             onRestored={(f) => { trash.remove(f.id); library.add(f); refreshUsage(); say('Файл возвращён в библиотеку'); }}
             onPurged={(id) => { trash.remove(id); refreshUsage(); say('Файл удалён навсегда'); }} onError={say} />
         )}
       </main>
       <AnimatePresence>
+        {selecting && (view === 'library' || inAlbum) && (
+          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum}
+            onAlbum={() => setPicker([...selected])} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
+            onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
+        )}
+      </AnimatePresence>
+      {picker && <AlbumPicker ids={picker} current={null} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
+      <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={library.files} index={openIndex} onIndex={(i) => setViewer({ id: library.files[i].id })} onClose={() => setViewer(null)} onTrash={(f) => toTrash(f.id)} />
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={(f) => toTrash(f.id)} onAlbumChanged={albumChanged} onError={say} />
         )}
       </AnimatePresence>
       <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} />

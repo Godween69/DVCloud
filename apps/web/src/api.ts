@@ -1,4 +1,4 @@
-import type { FileItem, Usage, User } from './types';
+import type { Album, AlbumRef, FileItem, Usage, User } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -52,6 +52,18 @@ export const api = {
   trash: (id: string) => request<{ file: FileItem }>('DELETE', `/api/files/${id}`),
   restore: (id: string) => request<{ file: FileItem }>('POST', `/api/files/${id}/restore`, {}),
   purge: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${id}?permanent=1`),
+  albums: () => request<{ albums: Album[] }>('GET', '/api/albums').then((r) => r.albums),
+  albumCreate: (name: string) => request<{ album: Album }>('POST', '/api/albums', { name }).then((r) => r.album),
+  albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
+  albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
+  albumFiles: (id: string, before?: string) => {
+    const q = new URLSearchParams({ limit: '200' });
+    if (before) q.set('before', before);
+    return request<{ album: Album; files: FileItem[]; next: string | null }>('GET', `/api/albums/${id}/files?${q}`);
+  },
+  albumAdd: (id: string, ids: string[]) => request<{ added: number }>('POST', `/api/albums/${id}/add`, { ids }).then((r) => r.added),
+  albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),
+  albumOf: (fileId: string) => request<{ album: AlbumRef | null }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.album),
 };
 
 // Миниатюра для плиток: маленький WebP, который сервер строит сам (для видео и неразбираемых форматов её нет).

@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Download, FileQuestion, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
-import { fileUrl } from '../api';
+import { api, fileUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
-import type { FileItem } from '../types';
+import type { AlbumRef, FileItem } from '../types';
+import { AlbumPicker } from './AlbumPicker';
 
 interface Props {
   files: FileItem[];
@@ -13,11 +14,13 @@ interface Props {
   onIndex: (i: number) => void;
   onClose: () => void;
   onTrash: (f: FileItem) => void;
+  onAlbumChanged: (f: FileItem, album: AlbumRef | null, count: number) => void;
+  onError: (message: string) => void;
 }
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged, onError }: Props) {
   const file = files[index];
   const [broken, setBroken] = useState(false);
   const touch = useRef<number | null>(null);
@@ -25,11 +28,23 @@ export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
   const img = useRef<HTMLImageElement>(null);
   const [view, setView] = useState<View>(NO_ZOOM);
   const [dragging, setDragging] = useState(false);
+  const [album, setAlbum] = useState<AlbumRef | null | undefined>(undefined); // undefined = ещё загружается
+  const [picking, setPicking] = useState(false);
   const drag = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
 
   // Новое фото: масштаб сбрасывается.
   useEffect(() => { setBroken(false); setView(NO_ZOOM); }, [file?.id]);
+
+  // В каком альбоме лежит открытый файл (для подписи кнопки «В альбом» / «Сменить альбом»).
+  useEffect(() => {
+    if (!file) return;
+    let alive = true;
+    setAlbum(undefined);
+    setPicking(false);
+    api.albumOf(file.id).then((a) => alive && setAlbum(a)).catch(() => alive && setAlbum(null));
+    return () => { alive = false; };
+  }, [file?.id]);
 
   const size = () => ({ w: img.current?.offsetWidth ?? 0, h: img.current?.offsetHeight ?? 0 });
 
@@ -87,6 +102,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (picking) return; // пока открыто окно выбора альбома, листать и закрывать просмотр нельзя
       if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
       else if (e.key === 'ArrowRight' && index < files.length - 1) onIndex(index + 1);
@@ -98,7 +114,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [index, files.length, onClose, onIndex]);
+  }, [index, files.length, onClose, onIndex, picking]);
 
   if (!file) return null;
   const video = isVideo(file.mime);
@@ -117,8 +133,12 @@ export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
         <button type="button" className={btn} onClick={onClose} aria-label="Закрыть"><X className="size-5" aria-hidden /></button>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{file.name}</p>
-          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}</p>
+          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{album ? ` · альбом «${album.name}»` : ''}</p>
         </div>
+        <button type="button" onClick={() => setPicking(true)} disabled={album === undefined} className={`${btn} w-auto max-w-[40vw] gap-2 px-3.5 disabled:opacity-50`} aria-label={album ? `Сменить альбом (сейчас: ${album.name})` : 'В альбом'} title={album ? `Сейчас в альбоме «${album.name}»` : 'Добавить в альбом'}>
+          {album ? <FolderOpen className="size-5 shrink-0" aria-hidden /> : <FolderPlus className="size-5 shrink-0" aria-hidden />}
+          <span className="hidden truncate text-sm sm:inline">{album ? 'Сменить альбом' : 'В альбом'}</span>
+        </button>
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
         <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину"><Trash2 className="size-5" aria-hidden /></button>
       </div>
@@ -148,6 +168,10 @@ export function Viewer({ files, index, onIndex, onClose, onTrash }: Props) {
           {view.scale > 1 ? `${Math.round(view.scale * 100)}%. Клик вернёт масштаб` : 'Клик: дальше. Правый клик: назад. Колесо: масштаб. Клик по фону или Esc: закрыть'}
         </p>
       </div>
+      {picking && (
+        <AlbumPicker ids={[file.id]} current={album ?? null} onClose={() => setPicking(false)} onError={onError}
+          onDone={(a, n) => { setPicking(false); setAlbum(a); onAlbumChanged(file, a, n); }} />
+      )}
     </motion.div>
   );
 }
