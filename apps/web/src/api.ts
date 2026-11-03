@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, FileItem, Usage, User } from './types';
+import type { Album, AlbumRef, Challenge, FactorStatus, FileItem, LoginResult, Usage, User } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -32,7 +32,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     /* не JSON */
   }
   if (!r.ok) {
-    if (r.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') onUnauthorized();
+    // 401 на проверке пароля или кода (вход, второй шаг, настройки безопасности) означает «неверно», а не «сессия кончилась».
+    const soft = path.startsWith('/api/auth/') && !(method === 'GET' && path === '/api/auth/security');
+    if (r.status === 401 && !soft) onUnauthorized();
     throw new ApiError(r.status, typeof json?.message === 'string' ? json.message : `Ошибка сервера (${r.status})`);
   }
   return json as T;
@@ -40,7 +42,21 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   me: () => request<{ user: User }>('GET', '/api/auth/me').then((r) => r.user),
-  login: (login: string, password: string) => request<{ user: User }>('POST', '/api/auth/login', { login, password }).then((r) => r.user),
+  login: (login: string, password: string) =>
+    request<{ user?: User; twoFactor?: { ticket: string; methods: string[] } }>('POST', '/api/auth/login', { login, password }).then((r): LoginResult =>
+      r.twoFactor ? { ticket: r.twoFactor.ticket, methods: r.twoFactor.methods } : { user: r.user as User },
+    ),
+  twoFactorCode: (ticket: string, code: string) => request<{ user: User }>('POST', '/api/auth/2fa/code', { ticket, code }).then((r) => r.user),
+  chatStart: (ticket: string) => request<Challenge>('POST', '/api/auth/2fa/chat/start', { ticket }),
+  chatStatus: (ticket: string) => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; user?: User }>('POST', '/api/auth/2fa/chat/status', { ticket }),
+  security: () => request<FactorStatus>('GET', '/api/auth/security'),
+  totpBegin: (password: string) => request<{ secret: string; uri: string }>('POST', '/api/auth/security/totp/begin', { password }),
+  totpEnable: (code: string) => request<{ recoveryCodes: string[] | null }>('POST', '/api/auth/security/totp/enable', { code }),
+  totpDisable: (password: string, code?: string) => request<{ ok: true }>('POST', '/api/auth/security/totp/disable', { password, code }),
+  recoveryNew: (password: string, code?: string) => request<{ recoveryCodes: string[] }>('POST', '/api/auth/security/recovery/new', { password, code }),
+  chatLinkStart: (password: string, code?: string) => request<Challenge>('POST', '/api/auth/security/chat/start', { password, code }),
+  chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
+  chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
   list: (trashed: boolean, before?: string) => {
     const q = new URLSearchParams({ limit: '200' });

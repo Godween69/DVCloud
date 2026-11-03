@@ -1,5 +1,7 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
 import { AuthController } from './auth/auth.controller';
+import { SecurityController } from './auth/security.controller';
+import { DvAuthClient } from './auth/dvauth.client';
 import { SessionGuard } from './auth/session.guard';
 import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
@@ -22,7 +24,7 @@ import { UsersService } from './users/users.service';
 @Module({})
 export class CoreModule {
   static forRoot(cfg: Config): DynamicModule {
-    const providers = [{ provide: CONFIG, useValue: cfg }, DbService, AuditService, UsersService, SessionsService];
+    const providers = [{ provide: CONFIG, useValue: cfg }, DbService, AuditService, UsersService, SessionsService, DvAuthClient];
     return { module: CoreModule, providers, exports: providers.map((p) => (typeof p === 'function' ? p : p.provide)) };
   }
 }
@@ -34,7 +36,7 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, FilesController, AlbumsController, ZipController],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController],
       providers: [SessionGuard, StorageService, ThumbsService, FilesService, AlbumsService],
     };
   }

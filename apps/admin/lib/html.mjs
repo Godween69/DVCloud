@@ -61,10 +61,11 @@ function userRow(u, csrf) {
     `<form class="inline" method="post" action="/users/${encodeURIComponent(u.login)}/${path}">${csrfInput(csrf)}${extra}<button class="${cls}" type="submit">${label}</button></form>`;
   const quotaGb = u.quotaBytes === null ? '' : (u.quotaBytes / GIB).toFixed(u.quotaBytes % GIB === 0 ? 0 : 1);
   return `<tr class="${u.disabled ? 'off' : ''}">
-<td><b>${login}</b></td><td>${esc(u.displayName)}</td><td>${u.disabled ? 'отключён' : 'активен'}</td><td>${esc(formatQuota(u.quotaBytes))}</td>
+<td><b>${login}</b></td><td>${esc(u.displayName)}</td><td>${u.disabled ? 'отключён' : 'активен'}</td><td>${esc(formatQuota(u.quotaBytes))}</td><td>${u.twoFactor ? 'включена' : '—'}</td>
 <td>${act(u.disabled ? 'enable' : 'disable', u.disabled ? 'Включить' : 'Отключить', u.disabled ? '' : 'danger')}
 ${act('quota', 'Квота', '', `<input class="narrow" type="text" name="quota" value="${esc(quotaGb)}" placeholder="ГБ" aria-label="Квота, ГБ">`)}
-${act('reset', 'Сбросить пароль', 'danger')}</td></tr>`;
+${act('reset', 'Сбросить пароль', 'danger')}
+${u.twoFactor ? act('reset2fa', 'Сбросить 2FA', 'danger') : ''}</td></tr>`;
 }
 
 export function usersPage({ users, csrf, flash, loadError }) {
@@ -74,8 +75,8 @@ export function usersPage({ users, csrf, flash, loadError }) {
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit">Выйти</button></form></header>
 ${flash ? `<div class="msg ${flash.kind === 'error' ? 'error' : 'ok'}">${esc(flash.text)}</div>` : ''}
 ${loadError ? `<div class="msg error">${esc(loadError)}</div>` : ''}
-<table><thead><tr><th>Логин</th><th>Имя</th><th>Состояние</th><th>Квота</th><th>Действия</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="5" class="muted">Людей пока нет.</td></tr>'}</tbody></table>
+<table><thead><tr><th>Логин</th><th>Имя</th><th>Состояние</th><th>Квота</th><th>2FA</th><th>Действия</th></tr></thead>
+<tbody>${rows || '<tr><td colspan="6" class="muted">Людей пока нет.</td></tr>'}</tbody></table>
 <h2>Новый человек</h2>
 <form method="post" action="/users" class="card">${csrfInput(csrf)}
   <p><input type="text" name="login" placeholder="логин (a-z, 0-9, _)" pattern="[a-z0-9_]{2,32}" required>

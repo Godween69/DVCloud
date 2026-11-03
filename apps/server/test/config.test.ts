@@ -33,3 +33,13 @@ test('кука Secure отключается только явным false', () 
   assert.equal(loadConfig({ ...base, DVCLOUD_COOKIE_SECURE: 'false' }).cookieSecure, false);
   assert.equal(loadConfig({ ...base, DVCLOUD_COOKIE_SECURE: 'no' }).cookieSecure, true);
 });
+
+test('второй фактор: адрес и секрет DV Auth задаются вместе, секрет не короче 32 символов', () => {
+  assert.equal(loadConfig(base).authUrl, '');
+  assert.throws(() => loadConfig({ ...base, DVCLOUD_AUTH_URL: 'http://127.0.0.1:3011' }), /вместе/);
+  assert.throws(() => loadConfig({ ...base, DVCLOUD_AUTH_SECRET: 'x'.repeat(32) }), /вместе/);
+  assert.throws(() => loadConfig({ ...base, DVCLOUD_AUTH_URL: 'ftp://x', DVCLOUD_AUTH_SECRET: 'x'.repeat(32) }), /http/);
+  assert.throws(() => loadConfig({ ...base, DVCLOUD_AUTH_URL: 'http://x', DVCLOUD_AUTH_SECRET: 'short' }), /32/);
+  const c = loadConfig({ ...base, DVCLOUD_AUTH_URL: 'http://127.0.0.1:3011/', DVCLOUD_AUTH_SECRET: 'x'.repeat(32) });
+  assert.equal(c.authUrl, 'http://127.0.0.1:3011');
+});

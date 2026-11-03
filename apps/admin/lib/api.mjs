@@ -41,5 +41,6 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     create: (login, displayName) => call('POST', '/internal/users', { login, displayName }),
     update: (login, patch) => call('PATCH', u(login), patch),
     reset: (login) => call('POST', `${u(login)}/reset-password`, {}),
+    reset2fa: (login) => call('POST', `${u(login)}/reset-2fa`, {}),
   };
 }

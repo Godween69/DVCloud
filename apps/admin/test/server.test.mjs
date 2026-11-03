@@ -35,6 +35,7 @@ describe('админка', () => {
         }
         const m = /^\/internal\/users\/([a-z0-9_]+)(\/reset-password)?$/.exec(req.url);
         if (m && req.method === 'PATCH') return j(200, { user: { ...users[0], ...JSON.parse(body) } });
+        if (/^\/internal\/users\/[a-z0-9_]+\/reset-2fa$/.test(req.url)) return j(200, { ok: true });
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
         j(404, { message: 'нет' });
       });
@@ -130,6 +131,22 @@ describe('админка', () => {
     assert.ok(reset.text.includes('newpass23456789zz'));
     assert.ok(calls.some((c) => c.startsWith('PATCH /internal/users/anna') && c.includes('"disabled":true')));
     assert.ok(calls.some((c) => c.includes(`"quotaBytes":${500 * 1024 ** 3}`)));
+  });
+
+  it('сброс второго фактора: кнопка только у тех, у кого он включён, запрос доходит до сервера', async () => {
+    const cookie = await login();
+    users[0].twoFactor = true;
+    let page = await req('GET', '/', { cookie });
+    assert.ok(page.text.includes('Сбросить 2FA'));
+    assert.ok(page.text.includes('включена'));
+    const csrf = csrfOf(page.text);
+    const r = await req('POST', '/users/anna/reset2fa', { cookie, form: { csrf } });
+    assert.equal(r.status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/users/anna/reset-2fa')));
+    assert.equal((await req('POST', '/users/anna/reset2fa', { cookie, form: { csrf: 'wrong' } })).status, 403);
+    users[0].twoFactor = false;
+    page = await req('GET', '/', { cookie });
+    assert.ok(!page.text.includes('Сбросить 2FA'));
   });
 
   it('плохая квота не уходит на сервер', async () => {

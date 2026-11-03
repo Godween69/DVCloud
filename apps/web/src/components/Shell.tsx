@@ -11,6 +11,7 @@ import type { Album, AlbumRef, FileItem, Usage, User } from '../types';
 import { AlbumPicker } from './AlbumPicker';
 import { AlbumHeader, AlbumsView } from './AlbumsView';
 import { Gallery } from './Gallery';
+import { SecurityView } from './SecurityView';
 import { SelectionBar } from './SelectionBar';
 import { Toast, type ToastData } from './Toast';
 import { TopBar, type View } from './TopBar';
@@ -202,6 +203,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             {gallery(albumFeed)}
           </>
         )}
+        {view === 'security' && <SecurityView onError={say} />}
         {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}
             onRestored={(f) => { trash.remove(f.id); library.add(f); refreshUsage(); say('Файл возвращён в библиотеку'); }}

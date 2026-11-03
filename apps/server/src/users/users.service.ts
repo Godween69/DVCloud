@@ -51,6 +51,15 @@ export class UsersService {
     return r.rows[0] ?? null;
   }
 
+  async findById(id: string): Promise<UserRow | null> {
+    const r = await this.db.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
+    return r.rows[0] ?? null;
+  }
+
+  async closeSessions(userId: string): Promise<void> {
+    await this.db.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+  }
+
   async list(): Promise<UserRow[]> {
     return (await this.db.query<UserRow>('SELECT * FROM users ORDER BY id')).rows;
   }

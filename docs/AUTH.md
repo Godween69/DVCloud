@@ -17,6 +17,21 @@
     POST /api/auth/logout   {}                                   -> закрывает сессию
     GET  /api/health                                             -> состояние
 
+Если подключён второй фактор (docs/TWOFACTOR.md), то login после верного пароля куку не ставит,
+а отдаёт `{"twoFactor": {"ticket": "...", "methods": ["chat", "totp", "recovery"]}}`. Второй шаг:
+
+    POST /api/auth/2fa/code         {"ticket", "code"}  -> код из приложения или запасной, ставит куку
+    POST /api/auth/2fa/chat/start   {"ticket"}          -> QR-код и число для подтверждения в чате
+    POST /api/auth/2fa/chat/status  {"ticket"}          -> опрос: pending, approved (ставит куку), failed
+
+Настройки (нужна кука, опасные действия с паролем и, если включены коды, с кодом):
+
+    GET    /api/auth/security                  состояние второго фактора
+    POST   /api/auth/security/totp/begin|enable|disable
+    POST   /api/auth/security/recovery/new     новые запасные коды
+    POST   /api/auth/security/chat/start|status
+    DELETE /api/auth/security/chat             отвязать чат
+
 Изменяющие запросы принимаются только как application/json: форма на чужом сайте так
 отправить не может. Кука dvcloud_sid: HttpOnly, SameSite=Lax, Secure (кроме разработки).
 
@@ -26,6 +41,7 @@
     POST  /internal/users                       {"login", "displayName", "password"?}
     PATCH /internal/users/:login                {"disabled"?, "quotaBytes"?}
     POST  /internal/users/:login/reset-password {"password"?}
+    POST  /internal/users/:login/reset-2fa      снять второй фактор в DV Auth, закрыть сессии
 
 Если пароль не передан, сервер придумывает его и возвращает один раз в ответе.
 Хеш пароля наружу не отдаётся. Каждое действие пишется в таблицу audit_log
@@ -41,6 +57,9 @@
   все его сессии.
 - Ответы входа и /me не кэшируются.
 
+- Второй фактор: см. docs/TWOFACTOR.md. Сессия открывается только после второго шага; если
+  DV Auth настроен, но недоступен, вход закрыт.
+
 ## Что дальше
 
-Хранение файлов с проверкой владельца на каждый запрос, превью, затем админка и сайт.
+Смена пароля самим человеком, список сессий и «выйти везде».

@@ -1,10 +1,10 @@
 import { motion } from 'framer-motion';
-import { Cloud, LogOut, Moon, Sun, Upload } from 'lucide-react';
+import { Cloud, LogOut, Moon, ShieldCheck, Sun, Upload } from 'lucide-react';
 import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
 
-export type View = 'library' | 'albums' | 'trash';
+export type View = 'library' | 'albums' | 'trash' | 'security';
 
 interface Props {
   user: User;
@@ -55,6 +55,9 @@ export function TopBar({ user, view, onView, usage, onAdd, theme, onToggleTheme,
           <button type="button" onClick={onAdd} aria-label="Добавить" className="flex items-center gap-2 rounded-lg bg-violet-600 px-2.5 py-2 sm:px-3.5 text-sm font-medium text-white transition-colors hover:bg-violet-500">
             <Upload className="size-4" aria-hidden />
             <span className="hidden sm:inline">Добавить</span>
+          </button>
+          <button type="button" onClick={() => onView('security')} aria-current={view === 'security' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Безопасность" title="Безопасность">
+            <ShieldCheck className="size-5" aria-hidden />
           </button>
           <button type="button" onClick={onToggleTheme} className={iconBtn} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
             {theme === 'dark' ? <Sun className="size-5" aria-hidden /> : <Moon className="size-5" aria-hidden />}

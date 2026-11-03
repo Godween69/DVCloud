@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import { DvAuthClient } from '../auth/dvauth.client';
 import { AuditService } from '../db/audit.service';
 import { asObject, optStrField, requireJson, strField } from '../http';
 import { PublicUser, toPublic, UsersService } from '../users/users.service';
@@ -20,11 +21,13 @@ export class InternalUsersController {
   constructor(
     private readonly users: UsersService,
     private readonly audit: AuditService,
+    private readonly dvauth: DvAuthClient,
   ) {}
 
   @Get()
-  async list(): Promise<{ users: PublicUser[] }> {
-    return { users: (await this.users.list()).map(toPublic) };
+  async list(): Promise<{ users: (PublicUser & { twoFactor: boolean })[] }> {
+    const on = new Set(this.dvauth.enabled ? (await this.dvauth.call<{ subjects: string[] }>('GET', '/v1/subjects')).subjects : []);
+    return { users: (await this.users.list()).map((u) => ({ ...toPublic(u), twoFactor: on.has(u.id) })) };
   }
 
   @Post()
@@ -67,5 +70,17 @@ export class InternalUsersController {
     const { generatedPassword } = await this.users.resetPassword(login, optStrField(asObject(body), 'password', 1, 200));
     await this.audit.write('user.reset-password', login);
     return { password: generatedPassword };
+  }
+
+  // Человек потерял телефон и запасные коды: второй фактор снимается в DV Auth, все сессии закрываются.
+  @Post(':login/reset-2fa')
+  @HttpCode(200)
+  async reset2fa(@Param('login') login: string): Promise<{ ok: true }> {
+    const user = await this.users.findByLogin(login);
+    if (!user) throw new NotFoundException('Нет такого человека');
+    if (this.dvauth.enabled) await this.dvauth.call('POST', '/v1/reset', { subject: user.id });
+    await this.users.closeSessions(user.id);
+    await this.audit.write('user.reset-2fa', login);
+    return { ok: true };
   }
 }

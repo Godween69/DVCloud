@@ -20,8 +20,21 @@ export class SessionsService {
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
-  async login(login: string, password: string, ip: string): Promise<{ token: string; user: UserRow }> {
+  // Проверка пароля с ограничением перебора. Сессию не создаёт: это нужно и для входа, и для подтверждения паролем в настройках.
+  async checkCredentials(login: string, password: string, ip: string): Promise<UserRow> {
     const key = login.toLowerCase().slice(0, 64);
+    await this.assertNotLocked(key, ip);
+    const user = await this.users.findByLogin(key);
+    const passwordOk = await verifyPassword(password, user ? user.password_hash : await dummyHash());
+    if (!user || !passwordOk || user.disabled) {
+      await this.recordFail(key, ip);
+      throw new UnauthorizedException('Неверный логин или пароль');
+    }
+    return user;
+  }
+
+  // Слишком много неудач за 15 минут по логину или по адресу: ответ 429.
+  async assertNotLocked(key: string, ip: string): Promise<void> {
     await this.db.query("DELETE FROM login_attempts WHERE at < now() - interval '1 day'");
     const c = await this.db.query<{ by_login: string; by_ip: string }>(
       `SELECT (SELECT count(*) FROM login_attempts WHERE login = $1 AND at > now() - interval '15 minutes') AS by_login,
@@ -31,16 +44,27 @@ export class SessionsService {
     if (Number(c.rows[0].by_login) >= MAX_FAILS_PER_LOGIN || Number(c.rows[0].by_ip) >= MAX_FAILS_PER_IP) {
       throw new HttpException('Слишком много попыток входа. Подождите 15 минут.', 429);
     }
-    const user = await this.users.findByLogin(key);
-    const passwordOk = await verifyPassword(password, user ? user.password_hash : await dummyHash());
-    if (!user || !passwordOk || user.disabled) {
-      await this.db.query('INSERT INTO login_attempts (login, ip) VALUES ($1, $2)', [key, ip]);
-      throw new UnauthorizedException('Неверный логин или пароль');
-    }
+  }
+
+  async recordFail(key: string, ip: string): Promise<void> {
+    await this.db.query('INSERT INTO login_attempts (login, ip) VALUES ($1, $2)', [key, ip]);
+  }
+
+  async clearFails(key: string): Promise<void> {
     await this.db.query('DELETE FROM login_attempts WHERE login = $1', [key]);
+  }
+
+  async createSession(userId: string): Promise<string> {
     const token = randomBytes(32).toString('base64url');
-    await this.db.query('INSERT INTO sessions (user_id, token_hash) VALUES ($1, $2)', [user.id, sha256(token)]);
-    return { token, user };
+    await this.db.query('INSERT INTO sessions (user_id, token_hash) VALUES ($1, $2)', [userId, sha256(token)]);
+    return token;
+  }
+
+  // Вход без второго фактора (если он у человека не включён).
+  async login(login: string, password: string, ip: string): Promise<{ token: string; user: UserRow }> {
+    const user = await this.checkCredentials(login, password, ip);
+    await this.clearFails(user.login);
+    return { token: await this.createSession(user.id), user };
   }
 
   async authenticate(token: string | undefined): Promise<UserRow | null> {

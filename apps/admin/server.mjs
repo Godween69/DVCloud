@@ -54,7 +54,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.cookieSecure ? '; Secure' : ''}`;
 
   async function doAction(session, req, res, path, form) {
-    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset)$/.exec(path);
+    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa)$/.exec(path);
     try {
       if (path === '/users') {
         const r = await api.create(form.get('login') ?? '', form.get('displayName') ?? '');
@@ -65,6 +65,11 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       if (action === 'reset') {
         const r = await api.reset(login);
         return html(res, 200, secretPage({ title: 'Пароль сброшен', login, password: r.password }));
+      }
+      if (action === 'reset2fa') {
+        await api.reset2fa(login);
+        session.flash = { kind: 'ok', text: `${login}: второй фактор снят, сессии закрыты. Человек настроит его заново после входа.` };
+        return redirect(res, '/');
       }
       if (action === 'quota') {
         const q = parseQuotaGb(form.get('quota'));
