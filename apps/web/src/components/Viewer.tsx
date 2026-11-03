@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X, Zap } from 'lucide-react';
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
@@ -20,6 +20,41 @@ interface Props {
   onQuick: (f: FileItem) => Promise<'added' | 'moved' | null>; // 'moved': Shell уже сам перешёл к соседнему
 }
 
+const FADE = { duration: 0.15 }; // уход старой кнопки 0,15 с + появление новой 0,15 с = плавная замена за 0,3 с
+
+// Кнопка «В альбом»: замена надписи плавная, сама кнопка не перерисовывается, пока ничего не изменилось.
+const AlbumButton = memo(function AlbumButton({ name, label, onOpen }: { name: string | null; label: string; onOpen: () => void }) {
+  const inAlbum = name !== null;
+  return (
+    <button type="button" onClick={onOpen} className="flex h-10 items-center justify-center gap-2 rounded-full bg-white/10 px-3.5 text-white transition-colors hover:bg-white/20 sm:w-44" aria-label={inAlbum ? `Сменить альбом (сейчас: ${name})` : 'В альбом'} title={inAlbum ? `Сейчас в альбоме «${name}»` : 'Добавить в альбом'}>
+      {inAlbum ? <FolderOpen className="size-5 shrink-0" aria-hidden /> : <FolderPlus className="size-5 shrink-0" aria-hidden />}
+      <span className="hidden min-w-0 flex-1 sm:inline">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span key={label} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={FADE} className="block truncate text-sm">{label}</motion.span>
+        </AnimatePresence>
+      </span>
+    </button>
+  );
+});
+
+// Быстрая кнопка: «В «Имя»» плавно сменяется надписью «Уже в альбоме». Ширина одна, соседние кнопки не прыгают.
+const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; has: boolean; onAdd: () => void }) {
+  const base = 'flex h-10 items-center justify-center gap-2 rounded-full px-3.5 text-sm font-medium sm:w-44';
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      {has ? (
+        <motion.span key="in" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={FADE} className={`${base} cursor-default bg-white/10 text-white/60`} role="status" title={`Это фото уже в «${name}»`}>
+          <Check className="size-5 shrink-0" strokeWidth={3} aria-hidden /><span className="hidden truncate sm:inline">Уже в альбоме</span><span className="sr-only sm:hidden">Уже в альбоме</span>
+        </motion.span>
+      ) : (
+        <motion.button key="add" type="button" onClick={onAdd} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={FADE} aria-label={`Добавить в «${name}»`} title={`Быстро в «${name}» (клавиша A)`} className={`${base} bg-violet-600 text-white hover:bg-violet-500 active:scale-95`}>
+          <Zap className="size-5 shrink-0" aria-hidden /><span className="hidden truncate sm:inline">В «{name}»</span>
+        </motion.button>
+      )}
+    </AnimatePresence>
+  );
+});
+
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
 export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged, onError, quick, onQuick }: Props) {
@@ -33,7 +68,12 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
   const img = useRef<HTMLImageElement>(null);
   const [view, setView] = useState<View>(NO_ZOOM);
   const [dragging, setDragging] = useState(false);
-  const [album, setAlbum] = useState<AlbumRef | null | undefined>(undefined); // undefined = ещё загружается
+  // Альбом каждого файла запоминается (и подгружается для соседних фото заранее), поэтому при листании кнопки не мигают.
+  const albums = useRef(new Map<string, AlbumRef | null>());
+  const [, bump] = useState(0);
+  const lastLabel = useRef('В альбом');
+  const remember = (id: string, a: AlbumRef | null) => { albums.current.set(id, a); bump((n) => n + 1); };
+  const load = (id: string) => { if (!albums.current.has(id)) api.albumOf(id).then((a) => remember(id, a)).catch(() => remember(id, null)); };
   const [picking, setPicking] = useState(false);
   const drag = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
@@ -44,12 +84,16 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
   // В каком альбоме лежит открытый файл (для подписи кнопки «В альбом» / «Сменить альбом»).
   useEffect(() => {
     if (!file) return;
-    let alive = true;
-    setAlbum(undefined);
     setPicking(false);
-    api.albumOf(file.id).then((a) => alive && setAlbum(a)).catch(() => alive && setAlbum(null));
-    return () => { alive = false; };
+    load(file.id);
+    [files[index - 1], files[index + 1]].forEach((f) => f && load(f.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id]);
+  // Известный альбом файла: быстрый альбом знаем сразу, остальное из запомненного; undefined = ещё не узнали.
+  const album: AlbumRef | null | undefined = file ? (quick?.has(file.id) ? { id: quick.id, name: quick.name } : albums.current.get(file.id)) : undefined;
+  const albumLabel = album === undefined ? lastLabel.current : album ? 'Сменить альбом' : 'В альбом';
+  lastLabel.current = albumLabel;
+  const openPicker = useCallback(() => setPicking(true), []);
 
   // Одно нажатие: положить в быстрый альбом и открыть следующее фото. Если фото уже там, ничего не делает.
   async function doQuick() {
@@ -59,7 +103,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
     try {
       const r = await onQuick(file);
       if (cur.current !== id || r === null) return;
-      setAlbum({ id: quick.id, name: quick.name });
+      remember(id, { id: quick.id, name: quick.name });
       if (r === 'added' && index < files.length - 1) onIndex(index + 1);
     } finally {
       busy.current = false;
@@ -67,6 +111,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
   }
   const quickRef = useRef(doQuick);
   quickRef.current = doQuick;
+  const addQuick = useCallback(() => { void quickRef.current(); }, []);
 
   const size = () => ({ w: img.current?.offsetWidth ?? 0, h: img.current?.offsetHeight ?? 0 });
 
@@ -160,19 +205,8 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
           <p className="truncate font-medium">{file.name}</p>
           <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{album ? ` · альбом «${album.name}»` : ''}</p>
         </div>
-        {quick && (quick.has(file.id) ? (
-          <span className="flex h-10 max-w-[40vw] cursor-default items-center gap-2 rounded-full bg-white/10 px-3.5 text-sm font-medium text-white/60" role="status" title={`Это фото уже в «${quick.name}»`}>
-            <Check className="size-5 shrink-0" strokeWidth={3} aria-hidden /><span className="hidden truncate sm:inline">Уже в альбоме</span><span className="sr-only sm:hidden">Уже в альбоме</span>
-          </span>
-        ) : (
-          <button type="button" onClick={() => void doQuick()} aria-label={`Добавить в «${quick.name}»`} title={`Быстро в «${quick.name}» (клавиша A)`} className="flex h-10 max-w-[40vw] items-center gap-2 rounded-full bg-violet-600 px-3.5 text-sm font-medium text-white transition-all hover:bg-violet-500 active:scale-95">
-            <Zap className="size-5 shrink-0" aria-hidden /><span className="hidden truncate sm:inline">В «{quick.name}»</span>
-          </button>
-        ))}
-        <button type="button" onClick={() => setPicking(true)} disabled={album === undefined} className={`${btn} w-auto max-w-[40vw] gap-2 px-3.5 disabled:opacity-50`} aria-label={album ? `Сменить альбом (сейчас: ${album.name})` : 'В альбом'} title={album ? `Сейчас в альбоме «${album.name}»` : 'Добавить в альбом'}>
-          {album ? <FolderOpen className="size-5 shrink-0" aria-hidden /> : <FolderPlus className="size-5 shrink-0" aria-hidden />}
-          <span className="hidden truncate text-sm sm:inline">{album ? 'Сменить альбом' : 'В альбом'}</span>
-        </button>
+        {quick && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
+        <AlbumButton name={album ? album.name : null} label={albumLabel} onOpen={openPicker} />
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
         <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину"><Trash2 className="size-5" aria-hidden /></button>
       </div>
@@ -204,7 +238,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
       </div>
       {picking && (
         <AlbumPicker ids={[file.id]} current={album ?? null} onClose={() => setPicking(false)} onError={onError}
-          onDone={(a, n) => { setPicking(false); setAlbum(a); onAlbumChanged(file, a, n); }} />
+          onDone={(a, n) => { setPicking(false); remember(file.id, a); onAlbumChanged(file, a, n); }} />
       )}
     </motion.div>
   );
