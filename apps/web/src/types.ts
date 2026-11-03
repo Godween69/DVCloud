@@ -10,6 +10,23 @@ export interface FileItem {
   trashedAt: string | null;
 }
 
+// Похожие фото (см. docs/SIMILAR.md): группа, лучший снимок первым
+export interface SimilarFile extends FileItem {
+  width: number;
+  height: number;
+  sharpness: number;
+  suggestRemove: boolean;
+}
+export interface SimilarGroup {
+  id: string;
+  files: SimilarFile[];
+}
+export interface SimilarResult {
+  groups: SimilarGroup[];
+  images: number; // сколько фото в библиотеке
+  ready: number; // для скольких уже посчитан отпечаток
+}
+
 export interface User {
   id: string;
   login: string;

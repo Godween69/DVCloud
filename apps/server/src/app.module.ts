@@ -10,6 +10,9 @@ import { DbService } from './db/db.service';
 import { AlbumsController, ZipController } from './files/albums.controller';
 import { AlbumsService } from './files/albums.service';
 import { FilesController } from './files/files.controller';
+import { FingerprintService } from './files/fingerprint.service';
+import { SimilarController } from './files/similar.controller';
+import { SimilarService } from './files/similar.service';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
 import { ThumbsService } from './files/thumbs.service';
@@ -36,8 +39,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController],
-      providers: [SessionGuard, StorageService, ThumbsService, FilesService, AlbumsService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController],
+      providers: [SessionGuard, StorageService, ThumbsService, FilesService, AlbumsService, FingerprintService, SimilarService],
     };
   }
 }

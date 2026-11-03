@@ -15,6 +15,7 @@ import { SecurityView } from './SecurityView';
 import { SelectionBar } from './SelectionBar';
 import { Toast, type ToastData } from './Toast';
 import { TopBar, type View } from './TopBar';
+import { SimilarView } from './SimilarView';
 import { TrashView } from './TrashView';
 import { UploadPanel } from './UploadPanel';
 import { Viewer } from './Viewer';
@@ -204,6 +205,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
           </>
         )}
         {view === 'security' && <SecurityView onError={say} />}
+        {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}
             onRestored={(f) => { trash.remove(f.id); library.add(f); refreshUsage(); say('Файл возвращён в библиотеку'); }}

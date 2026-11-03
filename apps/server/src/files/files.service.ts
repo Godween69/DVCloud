@@ -7,6 +7,7 @@ import { CONFIG } from '../tokens';
 import { UserRow } from '../users/users.service';
 import { cleanFileName, libraryDir, parseTakenAt, trashDir } from './names';
 import { StorageService, TooLargeError } from './storage.service';
+import { FingerprintService } from './fingerprint.service';
 import { ThumbsService } from './thumbs.service';
 
 export interface FileRow {
@@ -56,6 +57,7 @@ export class FilesService {
     private readonly db: DbService,
     private readonly storage: StorageService,
     private readonly thumbs: ThumbsService,
+    private readonly fingerprints: FingerprintService,
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
@@ -110,6 +112,7 @@ export class FilesService {
           [user.id, rel, clean.name, clean.mime, size, sha256, takenAt],
         );
         this.thumbs.warm(r.rows[0]); // миниатюра строится в фоне, загрузка её не ждёт
+        this.fingerprints.warm(r.rows[0]); // отпечаток для поиска похожих тоже в фоне
         return { file: r.rows[0], duplicate: false };
       } catch (e) {
         await this.storage.remove(rel);

@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, Challenge, FactorStatus, FileItem, LoginResult, Usage, User } from './types';
+import type { Album, AlbumRef, Challenge, FactorStatus, FileItem, LoginResult, SimilarResult, Usage, User } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -65,6 +65,7 @@ export const api = {
     return request<{ files: FileItem[]; next: string | null }>('GET', `/api/files?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
+  similar: (kind: 'duplicates' | 'series') => request<SimilarResult>('GET', `/api/similar/${kind}`),
   trash: (id: string) => request<{ file: FileItem }>('DELETE', `/api/files/${id}`),
   restore: (id: string) => request<{ file: FileItem }>('POST', `/api/files/${id}/restore`, {}),
   purge: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${id}?permanent=1`),
