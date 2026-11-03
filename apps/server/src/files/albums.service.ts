@@ -122,6 +122,17 @@ export class AlbumsService {
     return r.rowCount ?? 0;
   }
 
+  // Номера всех файлов альбома (без корзины): сайт по ним отмечает, что уже добавлено в «быстрый альбом».
+  async fileIds(ownerId: string, albumId: string): Promise<string[]> {
+    await this.get(ownerId, albumId);
+    const r = await this.db.query<{ id: string }>(
+      `SELECT f.id FROM files f JOIN album_files af ON af.file_id = f.id
+       WHERE af.album_id = $1 AND f.owner_id = $2 AND f.trashed_at IS NULL`,
+      [albumId, ownerId],
+    );
+    return r.rows.map((x) => x.id);
+  }
+
   async albumOfFile(ownerId: string, fileId: string): Promise<{ id: string; name: string } | null> {
     if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
     const r = await this.db.query<{ id: string; name: string }>(

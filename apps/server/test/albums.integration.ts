@@ -162,6 +162,17 @@ describe('альбомы (настоящий Postgres и диск)', () => {
     assert.equal((await api('GET', '/api/zip?ids=1,abc', { cookie: e.anna })).status, 400);
   });
 
+  it('список номеров файлов альбома: только свои и не из корзины', async () => {
+    const r = await api('GET', `/api/albums/${album}/ids`, { cookie: e.anna });
+    assert.equal(r.status, 200);
+    assert.deepEqual([...r.json.ids].sort(), [a1, a2].sort());
+    await api('DELETE', `/api/files/${a2}`, { cookie: e.anna });
+    assert.deepEqual((await api('GET', `/api/albums/${album}/ids`, { cookie: e.anna })).json.ids, [a1]);
+    await api('POST', `/api/files/${a2}/restore`, { cookie: e.anna, body: '{}', ...J });
+    const bid = (await api('GET', '/api/albums', { cookie: e.boris })).json.albums[0].id;
+    assert.equal((await api('GET', `/api/albums/${bid}/ids`, { cookie: e.anna })).status, 404);
+  });
+
   it('удаление альбома не трогает фото', async () => {
     assert.equal((await api('DELETE', `/api/albums/${album}`, { cookie: e.anna })).status, 200);
     assert.equal((await api('GET', `/api/files/${a1}`, { cookie: e.anna })).status, 200);

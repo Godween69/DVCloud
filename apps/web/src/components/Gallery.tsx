@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { CalendarDays, Check, CheckSquare, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Upload, ZoomIn, ZoomOut } from 'lucide-react';
+import { CalendarDays, Check, CheckSquare, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
 import { countFiles, formatDateTime } from '../lib/format';
@@ -35,13 +35,23 @@ interface Props {
   onToggle: (id: string) => void;
   onToggleMany: (ids: string[], on: boolean) => void;
   empty?: ReactNode;
+  quick: QuickView | null; // «быстрый альбом»: плюсик на плитках
+  onPickQuick: () => void; // открыть выбор быстрого альбома
 }
 
-function Tile({ file, onOpen, selecting, picked }: { file: FileItem; onOpen: (id: string) => void; selecting: boolean; picked: boolean }) {
+export interface QuickView {
+  name: string;
+  has: (id: string) => boolean;
+  toggle: (id: string) => void;
+}
+
+function Tile({ file, onOpen, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
   const [broken, setBroken] = useState(false);
   const video = isVideo(file.mime);
+  const inQuick = !!quick && quick.has(file.id);
   return (
-    <button type="button" onClick={() => onOpen(file.id)} aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="group relative block aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
+    <div className="group relative aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
+    <button type="button" onClick={() => onOpen(file.id)} aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="absolute inset-0 block size-full overflow-hidden">
       {video || broken ? (
         <div className="flex size-full flex-col items-center justify-center gap-2 p-2 text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-500 dark:group-hover:text-gray-300">
           {video ? <Film className="size-7" aria-hidden /> : <ImageOff className="size-7" aria-hidden />}
@@ -62,10 +72,17 @@ function Tile({ file, onOpen, selecting, picked }: { file: FileItem; onOpen: (id
         </>
       )}
     </button>
+    {quick && !selecting && (
+      <button type="button" onClick={() => quick.toggle(file.id)} aria-pressed={inQuick} aria-label={inQuick ? `Убрать из «${quick.name}»: ${file.name}` : `Добавить в «${quick.name}»: ${file.name}`} title={inQuick ? `Уже в «${quick.name}». Нажмите, чтобы убрать` : `В «${quick.name}»`}
+        className={`absolute bottom-1.5 right-1.5 flex size-8 items-center justify-center rounded-full text-white shadow-md backdrop-blur transition-all focus-visible:opacity-100 active:scale-90 ${inQuick ? 'bg-violet-600 opacity-100 hover:bg-violet-500' : 'bg-black/45 opacity-0 hover:bg-violet-600 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+        {inQuick ? <Check className="size-4" strokeWidth={3} aria-hidden /> : <Plus className="size-4" strokeWidth={3} aria-hidden />}
+      </button>
+    )}
+    </div>
   );
 }
 
-export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty }: Props) {
+export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, onPickQuick }: Props) {
   const groups = useMemo(() => groupByMonth(files), [files]);
   const [layout, setLayout] = usePref<Layout>('layout', 'months', LAYOUTS);
   const [density, setDensity] = usePref<Density>('density', 'm', DENSITIES);
@@ -119,7 +136,10 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   return (
     <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6">
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
-        <button type="button" onClick={() => onSelecting(!selecting)} aria-pressed={selecting} className={`mr-auto ${seg(selecting)}`}><CheckSquare className="size-4" aria-hidden /><span>{selecting ? 'Готово' : 'Выбрать'}</span></button>
+        <button type="button" onClick={() => onSelecting(!selecting)} aria-pressed={selecting} className={seg(selecting)}><CheckSquare className="size-4" aria-hidden /><span>{selecting ? 'Готово' : 'Выбрать'}</span></button>
+        <button type="button" onClick={onPickQuick} title={quick ? 'Сменить или выключить быстрый альбом' : 'Выбрать альбом, в который фото кладутся одним нажатием'} className={`mr-auto flex min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors ${quick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'border border-dashed border-paper-300 text-gray-700 hover:border-violet-400 hover:text-violet-700 dark:border-gray-700 dark:text-gray-300 dark:hover:text-violet-300'}`}>
+          <Zap className="size-4 shrink-0" aria-hidden /><span className="truncate">{quick ? <><span className="hidden sm:inline">Быстрый альбом: </span>{quick.name}</> : 'Быстрый альбом'}</span>
+        </button>
         <div className="flex items-center rounded-lg border border-paper-300 p-0.5 dark:border-gray-800" role="group" aria-label="Размер плиток">
           <button type="button" className={step} disabled={di === 0} onClick={() => setDensity(DENSITIES[di - 1])} aria-label="Мельче" title="Мельче"><ZoomOut className="size-4" aria-hidden /></button>
           <button type="button" className={step} disabled={di === DENSITIES.length - 1} onClick={() => setDensity(DENSITIES[di + 1])} aria-label="Крупнее" title="Крупнее"><ZoomIn className="size-4" aria-hidden /></button>
@@ -132,7 +152,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
       {layout === 'wall' ? (
         <div className={`grid gap-1 ${GRID[density]}`}>
           {files.map((f) => (
-            <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} />
+            <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
           ))}
         </div>
       ) : (
@@ -148,7 +168,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
             </div>
             <div className={`grid gap-1 ${GRID[density]}`}>
               {g.items.map((f) => (
-                <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} />
+                <Tile key={f.id} file={f} onOpen={tap} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
               ))}
             </div>
           </section>

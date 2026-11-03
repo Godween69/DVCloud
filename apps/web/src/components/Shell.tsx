@@ -3,6 +3,7 @@ import { Upload } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, sendFile } from '../api';
 import { useFeed } from '../lib/useFeed';
+import { useQuickAlbum } from '../lib/quick';
 import { UploadQueue, type UploadJob } from '../lib/uploader';
 import { useTheme } from '../lib/theme';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
@@ -33,6 +34,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
+  const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
 
   const library = useFeed(false);
   const trash = useFeed(true);
@@ -43,6 +45,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
   const doneToast = useCallback(() => setToast(null), []);
+  const quick = useQuickAlbum(say);
 
   const addLib = library.add;
   const queue = useMemo(
@@ -114,7 +117,36 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     refreshUsage();
   }
 
+  // Быстрый альбом: положить файл (или убрать, если он там уже). Если файл из-за этого ушёл из открытого альбома, лента подправляется.
+  async function quickFile(f: FileItem): Promise<'added' | 'removed' | 'moved' | null> {
+    const t = quick.target;
+    if (!t) return null;
+    const r = await quick.toggle(f.id);
+    if (r === null) return null;
+    if (inAlbum && album && (r ? album.id !== t.id : album.id === t.id)) { leaveFeed(f.id); return 'moved'; }
+    return r ? 'added' : 'removed';
+  }
+
+  async function quickTile(id: string) {
+    const t = quick.target;
+    if (!t) return;
+    const r = await quick.toggle(id);
+    if (r !== null && inAlbum && album && (r ? album.id !== t.id : album.id === t.id)) albumFeed.remove(id);
+  }
+
+  async function quickSelected() {
+    const t = quick.target;
+    if (!t) return;
+    const ids = [...selected];
+    const n = await quick.addMany(ids);
+    if (n === null) return;
+    say(`В «${t.name}»: ${n}`);
+    if (inAlbum && album && album.id !== t.id) ids.forEach((id) => albumFeed.remove(id));
+    endSelect();
+  }
+
   function albumChanged(file: FileItem, a: AlbumRef | null, n: number) {
+    quick.note([file.id], a?.id ?? null);
     say(a ? `В альбоме «${a.name}»` : n ? 'Убрано из альбома' : 'Ничего не изменилось');
     if (inAlbum && album && a?.id !== album.id) leaveFeed(file.id);
   }
@@ -124,6 +156,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = [...selected];
     try {
       const n = await api.albumRemoveFiles(album.id, ids);
+      quick.note(ids, null);
       ids.forEach((id) => albumFeed.remove(id));
       say(`Убрано из альбома: ${n}`);
       endSelect();
@@ -136,6 +169,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = picker ?? [];
     setPicker(null);
     if (!a) return;
+    quick.note(ids, a.id);
     say(`В альбом «${a.name}»: ${n}`);
     if (inAlbum && album && a.id !== album.id) ids.forEach((id) => albumFeed.remove(id));
     endSelect();
@@ -143,6 +177,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const gallery = (feed: typeof library) => (
     <Gallery files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
+      quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
       empty={inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined} />
   );
@@ -158,10 +193,12 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { queue.add(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
       <main>
         {view === 'library' && gallery(library)}
-        {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say} />}
+        {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
+          quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (
           <>
-            <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); say('Название изменено'); }} onDeleted={() => { say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say} />
+            <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
+              isQuick={quick.target?.id === album.id} onQuick={() => { const on = quick.target?.id !== album.id; quick.set(on ? { id: album.id, name: album.name } : null); say(on ? `Быстрый альбом: «${album.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />
             {gallery(albumFeed)}
           </>
         )}
@@ -174,14 +211,17 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <AnimatePresence>
         {selecting && (view === 'library' || inAlbum) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum}
-            onAlbum={() => setPicker([...selected])} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
+            onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
         )}
       </AnimatePresence>
       {picker && <AlbumPicker ids={picker} current={null} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
+      {targetPicker && <AlbumPicker target ids={[]} current={quick.target} onClose={() => setTargetPicker(false)} onError={say}
+        onDone={(a) => { setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={(f) => toTrash(f.id)} onAlbumChanged={albumChanged} onError={say} />
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={(f) => toTrash(f.id)} onAlbumChanged={albumChanged} onError={say}
+            quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile} />
         )}
       </AnimatePresence>
       <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} />

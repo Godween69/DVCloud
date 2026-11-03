@@ -21,3 +21,12 @@ test('выбор месяца целиком и снятие', () => {
   assert.deepEqual([...a].sort(), ['1', '2', '3', '9']);
   assert.deepEqual([...setMany(a, ['1', '2', '3'], false)], ['9']);
 });
+
+test('запомненный быстрый альбом: принимаются только настоящие записи', async () => {
+  const { parseTarget } = await import('../src/lib/quick-target.ts');
+  assert.deepEqual(parseTarget('{"id":"12","name":"Отпуск"}'), { id: '12', name: 'Отпуск' });
+  assert.equal(parseTarget(null), null);
+  assert.equal(parseTarget('мусор'), null);
+  assert.equal(parseTarget('{"id":"1; drop","name":"x"}'), null);
+  assert.equal(parseTarget('{"id":"5","name":""}'), null);
+});

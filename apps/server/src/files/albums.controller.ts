@@ -81,6 +81,12 @@ export class AlbumsController {
     return { album, files: r.files.map(toPublicFile), next: r.next };
   }
 
+  @Get(':id/ids')
+  async ids(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ ids: string[] }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return { ids: await this.albums.fileIds(req.user.id, id) };
+  }
+
   @Post(':id/add')
   @HttpCode(200)
   async add(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ added: number }> {

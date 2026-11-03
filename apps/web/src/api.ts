@@ -61,6 +61,7 @@ export const api = {
     if (before) q.set('before', before);
     return request<{ album: Album; files: FileItem[]; next: string | null }>('GET', `/api/albums/${id}/files?${q}`);
   },
+  albumIds: (id: string) => request<{ ids: string[] }>('GET', `/api/albums/${id}/ids`).then((r) => r.ids),
   albumAdd: (id: string, ids: string[]) => request<{ added: number }>('POST', `/api/albums/${id}/add`, { ids }).then((r) => r.added),
   albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),
   albumOf: (fileId: string) => request<{ album: AlbumRef | null }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.album),

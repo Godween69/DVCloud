@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ChevronsRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X, Zap } from 'lucide-react';
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
+import { usePref } from '../lib/prefs';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
 import type { AlbumRef, FileItem } from '../types';
 import { AlbumPicker } from './AlbumPicker';
@@ -16,12 +17,19 @@ interface Props {
   onTrash: (f: FileItem) => void;
   onAlbumChanged: (f: FileItem, album: AlbumRef | null, count: number) => void;
   onError: (message: string) => void;
+  quick: { id: string; name: string; has: (id: string) => boolean } | null; // «быстрый альбом»
+  onQuick: (f: FileItem) => Promise<'added' | 'removed' | 'moved' | null>; // 'moved': Shell уже сам перешёл к соседнему
 }
 
+const ADV = ['on', 'off'] as const;
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged, onError }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged, onError, quick, onQuick }: Props) {
   const file = files[index];
+  const [advance, setAdvance] = usePref<'on' | 'off'>('quickAdvance', 'on', ADV);
+  const cur = useRef(file?.id);
+  cur.current = file?.id;
+  const busy = useRef(false);
   const [broken, setBroken] = useState(false);
   const touch = useRef<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -45,6 +53,23 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
     api.albumOf(file.id).then((a) => alive && setAlbum(a)).catch(() => alive && setAlbum(null));
     return () => { alive = false; };
   }, [file?.id]);
+
+  // Одно нажатие: положить в быстрый альбом (или убрать, если уже там) и, если включено, листнуть дальше.
+  async function doQuick() {
+    if (!file || !quick || busy.current) return;
+    busy.current = true;
+    const id = file.id;
+    try {
+      const r = await onQuick(file);
+      if (cur.current !== id || r === null) return;
+      setAlbum(r === 'removed' ? null : { id: quick.id, name: quick.name });
+      if (r === 'added' && advance === 'on' && index < files.length - 1) onIndex(index + 1);
+    } finally {
+      busy.current = false;
+    }
+  }
+  const quickRef = useRef(doQuick);
+  quickRef.current = doQuick;
 
   const size = () => ({ w: img.current?.offsetWidth ?? 0, h: img.current?.offsetHeight ?? 0 });
 
@@ -103,7 +128,10 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (picking) return; // пока открыто окно выбора альбома, листать и закрывать просмотр нельзя
-      if (e.key === 'Escape') onClose();
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
+      else if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
       else if (e.key === 'ArrowRight' && index < files.length - 1) onIndex(index + 1);
     };
@@ -135,6 +163,16 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
           <p className="truncate font-medium">{file.name}</p>
           <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{album ? ` · альбом «${album.name}»` : ''}</p>
         </div>
+        {quick && (
+          <>
+            <button type="button" onClick={() => void doQuick()} aria-pressed={quick.has(file.id)} aria-label={quick.has(file.id) ? `Убрать из «${quick.name}»` : `Добавить в «${quick.name}»`} title={`${quick.has(file.id) ? `Уже в «${quick.name}». Нажмите, чтобы убрать` : `Быстро в «${quick.name}»`} (клавиша A)`}
+              className={`flex h-10 max-w-[40vw] items-center gap-2 rounded-full px-3.5 text-sm font-medium text-white transition-all active:scale-95 ${quick.has(file.id) ? 'bg-violet-600 hover:bg-violet-500' : 'bg-white/15 hover:bg-violet-600'}`}>
+              {quick.has(file.id) ? <Check className="size-5 shrink-0" strokeWidth={3} aria-hidden /> : <Zap className="size-5 shrink-0" aria-hidden />}
+              <span className="hidden truncate sm:inline">В «{quick.name}»</span>
+            </button>
+            <button type="button" onClick={() => setAdvance(advance === 'on' ? 'off' : 'on')} aria-pressed={advance === 'on'} aria-label="Листать дальше после добавления" title={advance === 'on' ? 'После добавления сразу следующее фото. Нажмите, чтобы выключить' : 'Остаться на этом фото после добавления. Нажмите, чтобы включить листание'} className={`${btn} ${advance === 'on' ? 'bg-violet-600/80 hover:bg-violet-500' : ''}`}><ChevronsRight className="size-5" aria-hidden /></button>
+          </>
+        )}
         <button type="button" onClick={() => setPicking(true)} disabled={album === undefined} className={`${btn} w-auto max-w-[40vw] gap-2 px-3.5 disabled:opacity-50`} aria-label={album ? `Сменить альбом (сейчас: ${album.name})` : 'В альбом'} title={album ? `Сейчас в альбоме «${album.name}»` : 'Добавить в альбом'}>
           {album ? <FolderOpen className="size-5 shrink-0" aria-hidden /> : <FolderPlus className="size-5 shrink-0" aria-hidden />}
           <span className="hidden truncate text-sm sm:inline">{album ? 'Сменить альбом' : 'В альбом'}</span>
