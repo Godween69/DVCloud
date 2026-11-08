@@ -3,19 +3,23 @@ import { Cloud, Loader2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { api, ApiError } from '../api';
 import type { User } from '../types';
+import { TwoFactorStep } from './TwoFactorStep';
 
 export function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<{ ticket: string; methods: string[] } | null>(null); // второй шаг входа
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      onLogin(await api.login(login.trim(), password));
+      const r = await api.login(login.trim(), password);
+      if ('user' in r) onLogin(r.user);
+      else { setStep(r); setPassword(''); setBusy(false); }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Не удалось войти');
       setBusy(false);
@@ -37,6 +41,7 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
           <h1 className="text-3xl font-semibold tracking-tight text-gray-900 dark:text-white">DV Cloud</h1>
           <p className="mt-1.5 text-gray-600 dark:text-gray-400">Семейный архив фото и видео</p>
         </div>
+        {step ? <TwoFactorStep ticket={step.ticket} methods={step.methods} onLogin={onLogin} onCancel={() => setStep(null)} /> : (
         <form onSubmit={submit} className="rounded-2xl border border-paper-300 bg-paper-50 p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
             Логин
@@ -56,6 +61,7 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
             Войти
           </button>
         </form>
+        )}
         <p className="mt-6 text-center text-sm text-gray-500">Аккаунты создаёт администратор. Если нет доступа, попросите его.</p>
       </motion.main>
     </div>

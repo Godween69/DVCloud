@@ -100,8 +100,7 @@ describe('файлы: загрузка, чужие файлы, корзина (�
     assert.ok(!(await api('GET', '/api/files', { cookie: e.boris })).json.files.some((f: any) => f.id === id));
     assert.ok((await api('GET', '/api/files?trashed=1', { cookie: e.boris })).json.files.some((f: any) => f.id === id));
     assert.equal((await api('GET', `/api/files/${id}`, { cookie: e.boris })).status, 404, 'из корзины не отдаётся');
-    assert.ok((await readdir(join(e.dataDir, 'trash/boris'))).some((n) => n.startsWith(`${id}-`)));
-    await assert.rejects(stat(join(e.dataDir, 'library/boris/2026/07/trash-me.png')));
+    assert.ok((await stat(join(e.dataDir, 'library/boris/2026/07/trash-me.png'))).isFile(), 'скрытие ничего не двигает на диске');
 
     assert.equal((await api('POST', `/api/files/${id}/restore`, { cookie: e.boris, body: '{}', type: 'application/json' })).status, 200);
     assert.equal((await api('GET', `/api/files/${id}`, { cookie: e.boris })).status, 200);
@@ -110,15 +109,18 @@ describe('файлы: загрузка, чужие файлы, корзина (�
     await api('DELETE', `/api/files/${id}`, { cookie: e.boris });
     assert.equal((await api('DELETE', `/api/files/${id}?permanent=1`, { cookie: e.boris })).status, 200);
     assert.equal((await api('GET', '/api/files?trashed=1', { cookie: e.boris })).json.files.some((f: any) => f.id === id), false);
-    assert.equal((await readdir(join(e.dataDir, 'trash/boris'))).some((n) => n.startsWith(`${id}-`)), false);
+    assert.ok((await stat(join(e.dataDir, 'library/boris/2026/07/trash-me.png'))).isFile(), 'убрать у себя насовсем: файл на диске остаётся до решения администратора');
   });
 
   it('возврат из корзины, если такой файл уже загружен заново, даёт 409 и ничего не ломает', async () => {
     const data = jpeg('again');
     const first = (await upload(e.boris, 'again.jpg', data, '2026-08-01T00:00:00Z')).json.file.id;
     await api('DELETE', `/api/files/${first}`, { cookie: e.boris });
-    assert.equal((await upload(e.boris, 'again2.jpg', data, '2026-08-01T00:00:00Z')).status, 201);
+    // Тот же файл заново: скрытая запись оживает (вторая копия на диск не пишется).
+    const again = await upload(e.boris, 'again2.jpg', data, '2026-08-01T00:00:00Z');
+    assert.equal(again.status, 201);
+    assert.equal(again.json.file.id, first);
     assert.equal((await api('POST', `/api/files/${first}/restore`, { cookie: e.boris, body: '{}', type: 'application/json' })).status, 409);
-    assert.ok((await readdir(join(e.dataDir, 'trash/boris'))).some((n) => n.startsWith(`${first}-`)), 'файл остался в корзине');
+    assert.equal((await api('GET', '/api/files', { cookie: e.boris })).json.files.filter((f: any) => f.sha256 === again.json.file.sha256).length, 1);
   });
 });

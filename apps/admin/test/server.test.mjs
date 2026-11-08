@@ -35,7 +35,25 @@ describe('админка', () => {
         }
         const m = /^\/internal\/users\/([a-z0-9_]+)(\/reset-password)?$/.exec(req.url);
         if (m && req.method === 'PATCH') return j(200, { user: { ...users[0], ...JSON.parse(body) } });
+        if (/^\/internal\/users\/[a-z0-9_]+\/reset-2fa$/.test(req.url)) return j(200, { ok: true });
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
+        if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
+        if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z' }] });
+        if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
+        if (req.method === 'GET' && req.url === '/internal/quota-requests') return j(200, { requests: [{ id: '9', login: 'anna', displayName: 'Анна', needBytes: 5368709120, note: 'отпуск', createdAt: '2026-11-02T00:00:00.000Z', usedBytes: 1073741824, quotaBytes: 2147483648 }] });
+        if (req.method === 'POST' && req.url === '/internal/files/dedupe') return j(200, { checked: 2, removed: JSON.parse(body).apply ? 2 : 0, freedBytes: 4096, mismatched: [] });
+        if (req.method === 'POST' && req.url === '/internal/files/orphans/purge') return JSON.parse(body).confirm === 1 ? j(200, { count: 1, bytes: 2048, skipped: 0 }) : j(409, { message: 'Файлов без владельца сейчас 1' });
+        if (req.method === 'POST' && /^\/internal\/files\/\d+\/purge$/.test(req.url)) return j(200, { links: 0, bytes: 2048 });
+        if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
+        if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
+        if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
+        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: true, petsEnabled: false }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 }, people: { faces: { enabled: true, modelFiles: true, total: 100, done: 60, failed: 1, pending: 39 }, pets: { enabled: false, modelFiles: false, total: 100, done: 0, failed: 0, pending: 100 }, detections: { faces: 75, pets: 0 }, groups: 6, named: 2 } });
+        if (req.method === 'PATCH' && req.url === '/internal/media/settings') { const b = JSON.parse(body); return b.previewMaxSide < 600 ? j(400, { message: 'previewMaxSide: целое число от 600 до 4000' }) : j(200, { settings: b, cleared: b.previewMaxSide ? ['previews'] : [] }); }
+        if (req.method === 'GET' && req.url === '/internal/media/dates') return j(200, { job: { running: false, apply: false, startedAt: 'x', finishedAt: 'y', total: 100, checked: 100, changed: 3, examples: [{ name: '<i>a</i>.jpg', before: '2025-07-01T09:45:00.000Z', after: '2020-05-25T18:55:28.000Z' }] } });
+        if (req.method === 'POST' && req.url === '/internal/media/dates') return j(200, { job: { running: true, apply: JSON.parse(body).apply, total: 100, checked: 0, changed: 0, examples: [] } });
+        if (req.method === 'POST' && req.url === '/internal/media/clear') return j(200, { files: 7, bytes: 100 });
+        if (req.method === 'POST' && /^\/internal\/quota-requests\/\d+\/resolve$/.test(req.url)) return j(200, { ok: true });
+        if (req.method === 'DELETE' && /^\/internal\/users\/[a-z0-9_]+/.test(req.url)) return j(200, { links: 3 });
         j(404, { message: 'нет' });
       });
     });
@@ -132,6 +150,22 @@ describe('админка', () => {
     assert.ok(calls.some((c) => c.includes(`"quotaBytes":${500 * 1024 ** 3}`)));
   });
 
+  it('сброс второго фактора: кнопка только у тех, у кого он включён, запрос доходит до сервера', async () => {
+    const cookie = await login();
+    users[0].twoFactor = true;
+    let page = await req('GET', '/', { cookie });
+    assert.ok(page.text.includes('Сбросить 2FA'));
+    assert.ok(page.text.includes('включена'));
+    const csrf = csrfOf(page.text);
+    const r = await req('POST', '/users/anna/reset2fa', { cookie, form: { csrf } });
+    assert.equal(r.status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/users/anna/reset-2fa')));
+    assert.equal((await req('POST', '/users/anna/reset2fa', { cookie, form: { csrf: 'wrong' } })).status, 403);
+    users[0].twoFactor = false;
+    page = await req('GET', '/', { cookie });
+    assert.ok(!page.text.includes('Сбросить 2FA'));
+  });
+
   it('плохая квота не уходит на сервер', async () => {
     const cookie = await login();
     const csrf = csrfOf((await req('GET', '/', { cookie })).text);
@@ -144,6 +178,157 @@ describe('админка', () => {
     const cookie = await login();
     assert.equal((await req('POST', '/users/anna/disable', { cookie, form: { csrf: 'wrong' } })).status, 403);
     assert.equal((await req('POST', '/users/anna/disable', { cookie, form: {} })).status, 403);
+  });
+
+  it('страница «Хранилище»: сводка, просьбы, файлы без владельца, альбомы; имена экранированы', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/storage', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Отпуск'));
+    assert.ok(page.text.includes('отпуск'));
+    assert.ok(page.text.includes('5,0 ГБ'));
+    assert.ok(!page.text.includes('<b>x</b>'), 'имя файла с разметкой не должно попасть как есть');
+    assert.ok(page.text.includes('&lt;b&gt;x&lt;/b&gt;'));
+    assert.equal((await req('GET', '/storage')).status, 303, 'без входа не открывается');
+  });
+
+  it('хранилище: стереть, отдать, скопировать альбом, задать квоту, закрыть просьбу', async () => {
+    const cookie = await login();
+    const csrf = csrfOf((await req('GET', '/storage', { cookie })).text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    assert.equal((await post('/storage/files/7/purge', {})).status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/7/purge')));
+    await post('/storage/files/7/adopt', { login: 'anna' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/7/adopt') && c.includes('"login":"anna"')));
+    await post('/storage/albums/3/transfer', { login: 'boris' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/transfer') && c.includes('"move":false')));
+    await post('/storage/albums/3/delete', {});
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums/3')));
+    const before = calls.length;
+    await post('/storage/requests/9/grant', { login: 'anna', quota: 'много' });
+    assert.equal(calls.length, before, 'плохая квота не уходит на сервер');
+    await post('/storage/requests/9/grant', { login: 'anna', quota: '20' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/users/anna') && c.includes(`"quotaBytes":${20 * 1024 ** 3}`)));
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/quota-requests/9/resolve')));
+    // массовая чистка: без слова и с чужим числом на сервер уходит только верное
+    const n0 = calls.length;
+    await post('/storage/orphans/purge', { count: '1', word: 'нет' });
+    assert.equal(calls.length, n0, 'без слова «стереть» запроса нет');
+    await post('/storage/orphans/purge', { count: '5', word: 'стереть' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/orphans/purge') && c.includes('"confirm":5')));
+    await post('/storage/orphans/purge', { count: '1', word: ' Стереть ' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/orphans/purge') && c.includes('"confirm":1')));
+    const page2 = await req('GET', '/storage', { cookie });
+    assert.ok(page2.text.includes('впишите: стереть') && page2.text.includes('Стереть с диска все 1'));
+    await post('/storage/dedupe', { apply: '1' });
+    const after = await req('GET', '/storage', { cookie });
+    assert.ok(after.text.includes('удалено: 2'));
+    assert.equal((await req('POST', '/storage/files/7/purge', { cookie, form: { csrf: 'wrong' } })).status, 403);
+  });
+
+  it('страница «Люди»: аватар, полоса квоты и меню действий на раскрывающемся блоке, без скриптов', async () => {
+    users[0].quotaBytes = 10 * 1024 ** 3;
+    users[0].usedBytes = 4 * 1024 ** 3;
+    try {
+      const cookie = await login();
+      const page = await req('GET', '/', { cookie });
+      assert.ok(page.text.includes('class="menu"'), 'меню действий');
+      assert.ok(page.text.includes('<meter'), 'полоса квоты');
+      assert.ok(page.text.includes('4,0 ГБ из 10 ГБ'));
+      assert.ok(page.text.includes('Добавить человека'));
+      assert.ok(!page.text.includes('<script'));
+      assert.ok(page.text.includes('href="/media"'), 'вкладка про превью и видео');
+    } finally {
+      users[0].quotaBytes = null;
+      delete users[0].usedBytes;
+    }
+  });
+
+  it('страница «Превью и видео»: счётчики, настройки, очистка, ошибка сервера показывается', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Копии видео'));
+    assert.ok(page.text.includes('готово 1 из 4'));
+    assert.ok(page.text.includes('name="previewMaxSide"'));
+    assert.ok(page.text.includes('value="2000"'));
+    assert.equal((await req('GET', '/media')).status, 303, 'без входа не открывается');
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    const ok = await post('/media/settings', { previewEnabled: '1', previewMaxSide: '1600', previewQuality: '75', videoHeight: '480', videoCrf: '31' });
+    assert.equal(ok.status, 303);
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"previewMaxSide":1600') && sent.includes('"videoEnabled":false') && sent.includes('"previewEnabled":true') && sent.includes('"videoCrf":31'));
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Стёрты и построятся заново: превью'));
+    await post('/media/settings', { previewMaxSide: '100' });
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('целое число от 600 до 4000'));
+    assert.ok(page.text.includes('name="timezone"') && page.text.includes('Даты у загруженных файлов'));
+    assert.ok(page.text.includes('2020-05-25 18:55') && !page.text.includes('<i>a</i>'), 'пример: дата показана, имя экранировано');
+    await post('/media/dates', { apply: '0' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/dates') && c.includes('"apply":false')));
+    await post('/media/dates', { apply: '1' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/dates') && c.includes('"apply":true')));
+    await post('/media/settings', { previewEnabled: '1', timezone: 'Europe/Moscow' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"timezone":"Europe/Moscow"'));
+    await post('/media/clear', { what: 'videos' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"videos"')));
+    assert.equal((await req('POST', '/media/clear', { cookie, form: { csrf: 'wrong', what: 'videos' } })).status, 403);
+  });
+
+  it('поиск по смыслу: панель с ходом и состоянием службы, настройки и сброс векторов', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.ok(page.text.includes('Поиск по смыслу'));
+    assert.ok(page.text.includes('Готово 40 из 100, не удалось прочитать: 2, в очереди: 58'));
+    assert.ok(page.text.includes('работает, модель xlm-test'));
+    assert.ok(page.text.includes('name="searchEnabled"') && page.text.includes('name="searchCutoff"') && page.text.includes('value="80"'));
+    assert.ok(page.text.includes('Повторить неудачные'), 'есть неудачные: кнопка повтора видна');
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/media/settings', { searchEnabled: '1', searchCutoff: '70' });
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"searchEnabled":true') && sent.includes('"searchCutoff":70'), sent);
+    await post('/media/settings', { previewEnabled: '1' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"searchEnabled":false'), 'снятая галочка выключает поиск');
+    await post('/media/clear', { what: 'index-failed' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"index-failed"')));
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Сброшено записей поиска'));
+  });
+
+  it('люди и питомцы: панель с ходом, настройки, стирание только со словом', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.ok(page.text.includes('Люди и питомцы') && page.text.includes('Найдено лиц: 75, питомцев: 0. Групп: 6, из них названо людьми: 2.'));
+    assert.ok(page.text.includes('Готово 60 из 100, не удалось прочитать: 1, в очереди: 39'));
+    assert.ok(page.text.includes('<b>Лица:</b> идёт просмотр') && page.text.includes('<b>Питомцы:</b> выключено'));
+    assert.ok(page.text.includes('name="facesEnabled" value="1" checked') && !page.text.includes('name="petsEnabled" value="1" checked'));
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/media/settings', { facesEnabled: '1', petsEnabled: '1' });
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"facesEnabled":true') && sent.includes('"petsEnabled":true'), sent);
+    await post('/media/settings', { previewEnabled: '1' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"facesEnabled":false'), 'снятая галочка выключает лица');
+    const before = calls.filter((c) => c.includes('"what":"people"')).length;
+    await post('/media/clear', { what: 'people' });
+    await post('/media/clear', { what: 'people', word: 'нет' });
+    assert.equal(calls.filter((c) => c.includes('"what":"people"')).length, before, 'без слова ничего не стирается');
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('впишите слово'));
+    await post('/media/clear', { what: 'people', word: ' Стереть ' });
+    assert.equal(calls.filter((c) => c.includes('"what":"people"')).length, before + 1);
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Стёрто находок: 7'));
+  });
+
+  it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {
+    const cookie = await login();
+    const csrf = csrfOf((await req('GET', '/', { cookie })).text);
+    const before = calls.length;
+    await req('POST', '/users/anna/delete', { cookie, form: { csrf, confirm: 'не тот' } });
+    assert.equal(calls.length, before);
+    await req('POST', '/users/anna/delete', { cookie, form: { csrf, confirm: 'anna', force: '1' } });
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/users/anna?force=1')));
+    await req('POST', '/users/anna/delete', { cookie, form: { csrf, confirm: 'anna' } });
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/users/anna ')));
   });
 
   it('выход закрывает сессию', async () => {

@@ -1,0 +1,184 @@
+import { motion } from 'framer-motion';
+import { ArrowLeft, Download, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Trash2, Users, Zap } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, ApiError, thumbUrl } from '../api';
+import { albumZipHref } from '../lib/albums';
+import { countFiles } from '../lib/format';
+import type { Album } from '../types';
+
+interface ListProps {
+  albums: Album[] | null;
+  onOpen: (a: Album) => void;
+  onCreated: (a: Album) => void;
+  onError: (m: string) => void;
+  quickId?: string; // какой альбом сейчас «быстрый»
+  onQuick: (a: Album | null) => void; // сделать быстрым или выключить (null)
+}
+
+// Список альбомов: карточки с обложкой и кнопка «Новый альбом».
+export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuick }: ListProps) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    try {
+      onCreated(await api.albumCreate(n));
+      setName('');
+      setAdding(false);
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось создать альбом');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (albums === null) return <div className="flex justify-center py-24 text-gray-500"><Loader2 className="size-6 animate-spin" aria-label="Загружаем" /></div>;
+  return (
+    <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-6 sm:px-6">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">Альбомы</h2>
+        {adding ? (
+          <form onSubmit={create} className="flex gap-2">
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setAdding(false)} maxLength={100} placeholder="Название" aria-label="Название альбома" className="w-52 rounded-lg border border-paper-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
+            <button type="submit" disabled={busy || !name.trim()} className="rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">Создать</button>
+            <button type="button" onClick={() => setAdding(false)} className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800">Отмена</button>
+          </form>
+        ) : (
+          <button type="button" onClick={() => setAdding(true)} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500"><FolderPlus className="size-4" aria-hidden />Новый альбом</button>
+        )}
+      </div>
+      {albums.length === 0 ? (
+        <div className="mx-auto flex max-w-md flex-col items-center px-4 py-20 text-center">
+          <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-violet-600/10 text-violet-600 dark:text-violet-400"><Folders className="size-8" aria-hidden /></span>
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Альбомов пока нет</h3>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">Создайте альбом, затем добавляйте в него фото из просмотра кнопкой «В альбом» или выбирайте сразу много в библиотеке. Одно фото может лежать в нескольких альбомах. Альбомом можно поделиться с другими людьми облака.</p>
+        </div>
+      ) : (
+        <ul className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(13rem,16rem))]">
+          {albums.map((a) => {
+            const quick = a.id === quickId;
+            return (
+              <li key={a.id} className="group relative">
+                <button type="button" onClick={() => onOpen(a)} aria-label={`${a.name}, ${countFiles(a.count)}`} className={`relative block aspect-[4/5] w-full overflow-hidden rounded-2xl bg-paper-200 text-left shadow-sm ring-1 ring-black/5 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-gray-800 dark:ring-white/10 ${quick ? 'ring-2 ring-violet-500 dark:ring-violet-500' : ''}`}>
+                  {a.coverFileId ? <img src={thumbUrl(a.coverFileId)} alt="" loading="lazy" className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105" /> : <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-violet-500/20 to-paper-200 text-violet-500/60 dark:to-gray-800"><Images className="size-12" aria-hidden /></div>}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-3.5 pb-3 pt-14 text-white">
+                    <p className="truncate text-base font-semibold drop-shadow">{a.name}</p>
+                    <p className="text-sm text-white/80">{countFiles(a.count)}</p>
+                    {!a.mine && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><Users className="size-3.5 shrink-0" aria-hidden />Поделился: {a.ownerName}</p>}
+                    {a.mine && a.sharedWith > 0 && <p className="mt-0.5 flex items-center gap-1 text-xs text-white/80"><Share2 className="size-3.5 shrink-0" aria-hidden />Общий, людей: {a.sharedWith}</p>}
+                  </div>
+                </button>
+                {a.mine && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
+                  className={`absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full py-1.5 text-xs font-medium text-white shadow-md backdrop-blur transition-all ${quick ? 'bg-violet-600 pl-2.5 pr-3 opacity-100' : 'bg-black/45 px-2 opacity-0 hover:bg-violet-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+                  <Zap className="size-3.5" aria-hidden />{quick && 'Быстрый'}
+                </button>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+interface HeaderProps {
+  album: Album;
+  count: number;
+  onBack: () => void;
+  onRenamed: (a: Album) => void;
+  onDeleted: () => void;
+  onError: (m: string) => void;
+  isQuick: boolean;
+  onQuick: () => void;
+  onShare: () => void;
+  onSaved: (r: { added: number; skipped: number; quota: boolean }) => void;
+  onLeft: () => void;
+}
+
+// Шапка открытого альбома: назад, название (можно переименовать), скачать целиком, удалить альбом.
+export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick, onShare, onSaved, onLeft }: HeaderProps) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(album.name);
+  const [confirm, setConfirm] = useState(false);
+
+  useEffect(() => { setName(album.name); setEditing(false); setConfirm(false); }, [album.id, album.name]);
+  useEffect(() => {
+    if (!confirm) return;
+    const t = setTimeout(() => setConfirm(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirm]);
+
+  async function rename(e: FormEvent) {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n || n === album.name) { setEditing(false); return; }
+    try {
+      onRenamed(await api.albumRename(album.id, n));
+      setEditing(false);
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось переименовать');
+    }
+  }
+  async function remove() {
+    try {
+      await api.albumDelete(album.id);
+      onDeleted();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось удалить альбом');
+    }
+  }
+
+  async function saveAll() {
+    try {
+      onSaved(await api.saveAlbum(album.id));
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось сохранить');
+    }
+  }
+  async function leave() {
+    try {
+      await api.leave(album.id);
+      onLeft();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось');
+    }
+  }
+
+  const ghost = 'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-paper-200 dark:text-gray-300 dark:hover:bg-gray-800';
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-2 px-3 pt-4 sm:px-6">
+      <button type="button" onClick={onBack} className={ghost}><ArrowLeft className="size-4" aria-hidden />Альбомы</button>
+      {editing && album.mine ? (
+        <form onSubmit={rename} className="flex gap-2">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setEditing(false)} maxLength={100} aria-label="Название альбома" className="w-56 rounded-lg border border-paper-300 bg-white px-3 py-1.5 text-lg font-semibold outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
+          <button type="submit" className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-500">Сохранить</button>
+        </form>
+      ) : (
+        <h2 className="min-w-0 truncate text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">{album.name}</h2>
+      )}
+      <span className="text-sm text-gray-500">{countFiles(count)}{!album.mine && album.ownerName ? ` · поделился ${album.ownerName}` : ''}</span>
+      {!album.mine ? (
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {count > 0 && <button type="button" onClick={saveAll} className={`${ghost} text-violet-700 dark:text-violet-300`} title="Копии появятся в вашей библиотеке, место на диске почти не тратится"><Save className="size-4" aria-hidden /><span className="hidden sm:inline">Сохранить себе</span></button>}
+          {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
+          <button type="button" onClick={leave} className={ghost} title="Альбом исчезнет из вашего списка, у владельца он останется"><LogOut className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из списка</span></button>
+        </div>
+      ) : (
+      <div className="ml-auto flex flex-wrap items-center gap-1">
+        <button type="button" onClick={onShare} className={ghost}><Share2 className="size-4" aria-hidden /><span className="hidden sm:inline">{album.sharedWith > 0 ? `Общий (${album.sharedWith})` : 'Поделиться'}</span></button>
+        <button type="button" onClick={onQuick} aria-pressed={isQuick} title={isQuick ? 'Фото из библиотеки кладутся сюда одним нажатием «+». Нажмите, чтобы выключить' : 'Фото из библиотеки будут кладываться сюда одним нажатием «+»'} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isQuick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'text-violet-700 hover:bg-violet-600/10 dark:text-violet-300'}`}><Zap className="size-4" aria-hidden /><span className="hidden sm:inline">{isQuick ? 'Быстрый альбом' : 'Набирать сюда'}</span></button>
+        {!editing && <button type="button" onClick={() => setEditing(true)} className={ghost}><Pencil className="size-4" aria-hidden /><span className="hidden sm:inline">Переименовать</span></button>}
+        {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
+        <button type="button" onClick={() => (confirm ? remove() : setConfirm(true))} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${confirm ? 'bg-red-600 text-white hover:bg-red-500' : 'text-red-700 hover:bg-red-500/10 dark:text-red-300'}`}>
+          <Trash2 className="size-4" aria-hidden />{confirm ? 'Удалить альбом? Фото останутся' : <span className="hidden sm:inline">Удалить альбом</span>}
+        </button>
+      </div>
+      )}
+    </motion.div>
+  );
+}

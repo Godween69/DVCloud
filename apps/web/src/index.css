@@ -15,5 +15,14 @@ body {
   outline-offset: 2px;
 }
 
+/* Мерцание вместо серой плитки, пока миниатюра ещё грузится */
+@keyframes dv-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+.dv-shimmer {
+  background-image: linear-gradient(100deg, transparent 30%, rgba(148, 163, 184, 0.22) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: dv-shimmer 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .dv-shimmer { animation: none; } }
+
 /* Список загрузок и корзина листаются, но без толстой полосы */
 .thin-scroll { scrollbar-width: thin; }

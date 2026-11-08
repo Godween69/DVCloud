@@ -51,6 +51,21 @@ export class UsersService {
     return r.rows[0] ?? null;
   }
 
+  async findById(id: string): Promise<UserRow | null> {
+    const r = await this.db.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
+    return r.rows[0] ?? null;
+  }
+
+  async closeSessions(userId: string): Promise<void> {
+    await this.db.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+  }
+
+  // Занято у каждого человека (сумма размеров его записей, включая скрытые), для страницы админки.
+  async usedByOwner(): Promise<Map<string, number>> {
+    const r = await this.db.query<{ owner_id: string; used: string }>('SELECT owner_id, COALESCE(SUM(size_bytes), 0) AS used FROM files GROUP BY owner_id');
+    return new Map(r.rows.map((x) => [x.owner_id, Number(x.used)]));
+  }
+
   async list(): Promise<UserRow[]> {
     return (await this.db.query<UserRow>('SELECT * FROM users ORDER BY id')).rows;
   }

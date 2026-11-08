@@ -1,17 +1,39 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
 import { AuthController } from './auth/auth.controller';
+import { SecurityController } from './auth/security.controller';
+import { DvAuthClient } from './auth/dvauth.client';
 import { SessionGuard } from './auth/session.guard';
 import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
 import { AuditService } from './db/audit.service';
 import { DbService } from './db/db.service';
+import { AlbumsController, ZipController } from './files/albums.controller';
+import { AlbumsService } from './files/albums.service';
+import { ActivityService } from './files/activity.service';
+import { UploadsController } from './files/uploads.controller';
+import { UploadsService } from './files/uploads.service';
 import { FilesController } from './files/files.controller';
+import { FingerprintService } from './files/fingerprint.service';
+import { SimilarController } from './files/similar.controller';
+import { SimilarService } from './files/similar.service';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
 import { ThumbsService } from './files/thumbs.service';
+import { PeopleController } from './files/people.controller';
+import { PeopleScanService } from './files/people-scan.service';
+import { PeopleService } from './files/people.service';
+import { VideoService } from './files/video.service';
+import { MediaSettingsService } from './files/media-settings';
+import { AdminMediaService } from './files/admin-media.service';
+import { MlClient } from './files/ml-client';
+import { EmbedService } from './files/embed.service';
+import { SearchService } from './files/search.service';
+import { SearchController } from './files/search.controller';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
-import { InternalHealthController, InternalUsersController } from './internal/internal.controller';
+import { InternalHealthController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
+import { AdminStorageService } from './files/admin-storage.service';
+import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
 import { UsersService } from './users/users.service';
 
@@ -20,7 +42,7 @@ import { UsersService } from './users/users.service';
 @Module({})
 export class CoreModule {
   static forRoot(cfg: Config): DynamicModule {
-    const providers = [{ provide: CONFIG, useValue: cfg }, DbService, AuditService, UsersService, SessionsService];
+    const providers = [{ provide: CONFIG, useValue: cfg }, DbService, AuditService, UsersService, SessionsService, DvAuthClient];
     return { module: CoreModule, providers, exports: providers.map((p) => (typeof p === 'function' ? p : p.provide)) };
   }
 }
@@ -32,8 +54,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, FilesController],
-      providers: [SessionGuard, StorageService, ThumbsService, FilesService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
     };
   }
 }
@@ -45,8 +67,8 @@ export class InternalModule {
     return {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [InternalHealthController, InternalUsersController],
-      providers: [InternalTokenGuard],
+      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, AdminMediaService],
     };
   }
 }

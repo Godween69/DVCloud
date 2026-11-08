@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, loginPage, parseQuotaGb, secretPage, usersPage } from './lib/html.mjs';
+import { CSS, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -53,8 +53,105 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
   const cookie = (value, maxAge) =>
     `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.cookieSecure ? '; Secure' : ''}`;
 
+  // Настройки превью и видео. Числа из формы проверяет сервер DVCloud, его текст ошибки показывается как есть.
+  async function mediaAction(session, res, path, form) {
+    try {
+      if (path === '/media/settings') {
+        const num = (k) => (form.get(k) === null || form.get(k) === '' ? undefined : Number(form.get(k)));
+        const patch = {
+          previewEnabled: form.get('previewEnabled') === '1',
+          previewMaxSide: num('previewMaxSide'),
+          previewQuality: num('previewQuality'),
+          videoEnabled: form.get('videoEnabled') === '1',
+          videoHeight: num('videoHeight'),
+          videoCrf: num('videoCrf'),
+          timezone: (form.get('timezone') ?? '').trim() || undefined,
+          searchEnabled: form.get('searchEnabled') === '1',
+          searchCutoff: num('searchCutoff'),
+          facesEnabled: form.get('facesEnabled') === '1',
+          petsEnabled: form.get('petsEnabled') === '1',
+        };
+        for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
+        const r = await api.saveMedia(patch);
+        const names = { previews: 'превью', videos: 'копии видео' };
+        session.flash = { kind: 'ok', text: `Настройки сохранены${r.cleared.length ? `. Стёрты и построятся заново: ${r.cleared.map((c) => names[c] ?? c).join(', ')}` : ''}` };
+      } else if (path === '/media/dates') {
+        const apply = form.get('apply') === '1';
+        const r = await api.startDates(apply);
+        session.flash = { kind: 'ok', text: `${apply ? 'Пересчёт дат запущен' : 'Проверка дат запущена'}: файлов ${r.job.total}. Обновите страницу, чтобы увидеть ход.` };
+      } else if (path === '/media/clear') {
+        const what = form.get('what') ?? '';
+        // Данные лиц стираются целиком, вместе с названиями людей: нужно вписать слово.
+        if (what === 'people' && (form.get('word') ?? '').trim().toLowerCase() !== 'стереть') throw new ApiError(400, 'Чтобы стереть данные лиц, впишите слово «стереть»');
+        const r = await api.clearMedia(what);
+        session.flash = { kind: 'ok', text: what === 'people' ? `Стёрто находок: ${r.files}. Групп и названий больше нет` : what.startsWith('index') ? `Сброшено записей поиска: ${r.files}. Они посчитаются заново в фоне` : `Очищено: ${r.files} файлов` };
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/media');
+  }
+
+  async function storageAction(session, res, path, form) {
+    const ok = (text) => { session.flash = { kind: 'ok', text }; };
+    try {
+      let m;
+      if (path === '/storage/orphans/purge') {
+        // Двойная защита: нужно вписать слово и число должно совпасть с тем, что сейчас на диске (проверяет сервер).
+        const count = Number(form.get('count'));
+        if ((form.get('word') ?? '').trim().toLowerCase() !== 'стереть') throw new ApiError(400, 'Чтобы стереть, впишите слово «стереть»');
+        if (!Number.isInteger(count) || count < 0) throw new ApiError(400, 'Нет числа файлов: обновите страницу');
+        const r = await api.purgeOrphans(count);
+        ok(`Стёрто файлов без владельца: ${r.count}, освобождено ${formatSize(r.bytes)}${r.skipped ? `, пропущено (появился владелец): ${r.skipped}` : ''}`);
+      } else if ((m = /^\/storage\/files\/(\d{1,18})\/(purge|adopt)$/.exec(path))) {
+        if (m[2] === 'purge') {
+          const r = await api.purge(m[1]);
+          ok(`Стёрто с диска: ${r.bytes} байт`);
+        } else {
+          const login = form.get('login') ?? '';
+          await api.adopt(m[1], login);
+          ok(`Файл отдан: ${login}`);
+        }
+      } else if (path === '/storage/dedupe') {
+        const apply = form.get('apply') === '1';
+        session.dedupe = await api.dedupe(apply);
+        ok(apply ? 'Лишние копии обработаны' : 'Проверка выполнена, ничего не удалено');
+      } else if ((m = /^\/storage\/albums\/(\d{1,18})\/transfer$/.exec(path))) {
+        const login = form.get('login') ?? '';
+        const r = await api.transfer(m[1], login, false);
+        ok(`Альбом скопирован человеку ${login}, файлов: ${r.linked}`);
+      } else if ((m = /^\/storage\/albums\/(\d{1,18})\/delete$/.exec(path))) {
+        await api.deleteAlbum(m[1]);
+        ok('Альбом удалён, файлы остались');
+      } else if ((m = /^\/storage\/requests\/(\d{1,18})\/(grant|resolve)$/.exec(path))) {
+        if (m[2] === 'grant') {
+          const q = parseQuotaGb(form.get('quota'));
+          if (q === undefined || q === null) throw new ApiError(400, 'Квота: число гигабайт, например 500');
+          const login = form.get('login') ?? '';
+          await api.update(login, { quotaBytes: q });
+          await api.resolveRequest(m[1]);
+          ok(`Квота для ${login} обновлена, просьба закрыта`);
+        } else {
+          await api.resolveRequest(m[1]);
+          ok('Просьба закрыта');
+        }
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/storage');
+  }
+
   async function doAction(session, req, res, path, form) {
-    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset)$/.exec(path);
+    if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
+    if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
+    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
     try {
       if (path === '/users') {
         const r = await api.create(form.get('login') ?? '', form.get('displayName') ?? '');
@@ -65,6 +162,17 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       if (action === 'reset') {
         const r = await api.reset(login);
         return html(res, 200, secretPage({ title: 'Пароль сброшен', login, password: r.password }));
+      }
+      if (action === 'reset2fa') {
+        await api.reset2fa(login);
+        session.flash = { kind: 'ok', text: `${login}: второй фактор снят, сессии закрыты. Человек настроит его заново после входа.` };
+        return redirect(res, '/');
+      }
+      if (action === 'delete') {
+        if ((form.get('confirm') ?? '') !== login) throw new ApiError(400, `Для удаления введите логин «${login}» в поле рядом с кнопкой`);
+        const r = await api.deleteUser(login, form.get('force') === '1');
+        session.flash = { kind: 'ok', text: `${login}: аккаунт удалён${r.links ? `, записей файлов убрано: ${r.links} (сами файлы остались на диске без владельца)` : ''}` };
+        return redirect(res, '/');
       }
       if (action === 'quota') {
         const q = parseQuotaGb(form.get('quota'));
@@ -126,6 +234,37 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
       }
       return html(res, 200, usersPage({ users, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/media') {
+      const flash = session.flash;
+      session.flash = null;
+      let media = null;
+      let dates = null;
+      let loadError = null;
+      try {
+        [media, dates] = await Promise.all([api.media(), api.dates()]);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, mediaPage({ media, dates, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/storage') {
+      const flash = session.flash;
+      session.flash = null;
+      const dedupe = session.dedupe ?? null;
+      session.dedupe = null;
+      const data = { stats: null, orphans: [], albums: [], requests: [], users: [] };
+      let loadError = null;
+      try {
+        [data.stats, data.orphans, data.albums, data.requests, data.users] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.requests(), api.list()]);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, storagePage({ ...data, csrf: session.csrf, flash, loadError, dedupe }));
     }
 
     if (req.method !== 'POST') return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');

@@ -14,6 +14,8 @@
     3006  server, внутренний порт для админки (управление людьми)
     5177  web (Vite dev)
     5436  Postgres (docker-compose.dev.yml)
+    3010  DV Auth, публичный порт (необязательно, docs/TWOFACTOR.md)
+    3011  DV Auth, внутренний порт (его адрес задаётся в DVCLOUD_AUTH_URL)
 
 ## Команды
 
