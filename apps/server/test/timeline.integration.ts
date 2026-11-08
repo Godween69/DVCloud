@@ -62,6 +62,32 @@ describe('полоса времени: оглавление по месяцам 
     assert.equal(gap.json.files[0].name, 't4.jpg');
   });
 
+  it('лента вверх: от выбранного месяца можно листать к новым, порядок и границы верные', async () => {
+    // начали с марта (в UTC): сверху t1 (31.03), выше него есть t0 (май), значит prev есть
+    const r = await api('GET', '/api/files?at=2026-03&tz=UTC&limit=10', { cookie: e.anna });
+    assert.deepEqual(r.json.files.map((f: { name: string }) => f.name), ['t1.jpg', 't2.jpg', 't3.jpg', 't4.jpg', 't5.jpg']);
+    assert.ok(r.json.prev);
+    const up = await api('GET', `/api/files?after=${encodeURIComponent(r.json.prev)}&limit=10`, { cookie: e.anna });
+    assert.equal(up.status, 200);
+    assert.deepEqual(up.json.files.map((f: { name: string }) => f.name), ['t0.jpg'], 'новее первого: только майский снимок, в обычном порядке');
+    assert.equal(up.json.prev, null, 'выше ничего нет');
+    // страницами по одному: порядок «новые сверху» сохраняется, prev остаётся, пока есть что догружать
+    const first = await api('GET', '/api/files?at=2015-03&tz=UTC&limit=10', { cookie: e.anna });
+    assert.deepEqual(first.json.files.map((f: { name: string }) => f.name), ['t4.jpg', 't5.jpg']);
+    const p1 = await api('GET', `/api/files?after=${encodeURIComponent(first.json.prev)}&limit=2`, { cookie: e.anna });
+    assert.deepEqual(p1.json.files.map((f: { name: string }) => f.name), ['t2.jpg', 't3.jpg']);
+    assert.ok(p1.json.prev);
+    const p2 = await api('GET', `/api/files?after=${encodeURIComponent(p1.json.prev)}&limit=2`, { cookie: e.anna });
+    assert.deepEqual(p2.json.files.map((f: { name: string }) => f.name), ['t0.jpg', 't1.jpg']);
+    assert.equal(p2.json.prev, null);
+    // обычная первая страница prev не даёт, чужие и плохие значения отвергаются
+    assert.equal((await api('GET', '/api/files?limit=2', { cookie: e.anna })).json.prev, null);
+    assert.equal((await api('GET', '/api/files?after=мусор', { cookie: e.anna })).status, 400);
+    assert.equal((await api('GET', `/api/files?after=${encodeURIComponent(first.json.prev)}&trashed=1`, { cookie: e.anna })).status, 400);
+    const bob = await api('GET', `/api/files?after=${encodeURIComponent(first.json.prev)}`, { cookie: e.boris });
+    assert.ok(bob.json.files.every((f: { name: string }) => f.name === 'b.jpg'), 'у другого человека только его файлы');
+  });
+
   it('лента с месяца: плохие значения отвергаются', async () => {
     for (const q of ['at=2026-13', 'at=26-3', 'at=2026-03&tz=Nope/Nope', 'at=1900-01']) assert.equal((await api('GET', `/api/files?${q}`, { cookie: e.anna })).status, 400, q);
   });

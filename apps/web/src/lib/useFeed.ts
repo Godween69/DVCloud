@@ -14,6 +14,9 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const cursor = useRef<string | null>(null);
   const done = useRef(false); // последняя страница уже получена
   const gen = useRef(0); // номер запуска: ответ устаревшего запуска (другой альбом) отбрасывается
+  const prevRef = useRef<string | null>(null); // ключ для догрузки к новым (после перехода к месяцу), null: выше ничего нет
+  const newerBusy = useRef(false);
+  const [hasNewer, setHasNewer] = useState(false);
   const atRef = useRef<string | null>(null); // лента начата с выбранного месяца ("2015-03"), null: с самых новых
   const [at, setAt] = useState<string | null>(null);
 
@@ -38,6 +41,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
+        if (reset) { prevRef.current = ('prev' in r ? r.prev : null) ?? null; setHasNewer(prevRef.current !== null); }
         setHasMore(r.next !== null);
         setFiles((prev) => {
           if (reset) return r.files;
@@ -57,6 +61,28 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
     [trashed, albumId, kind],
   );
 
+  // Догрузить файлы новее самого верхнего (лента начата с выбранного месяца). Вызывающий сам сохраняет положение прокрутки.
+  const loadNewer = useCallback(async () => {
+    const key = prevRef.current;
+    if (!key || newerBusy.current || trashed || albumId) return;
+    const my = gen.current;
+    newerBusy.current = true;
+    try {
+      const r = await api.list(false, undefined, kind, undefined, key);
+      if (my !== gen.current) return;
+      prevRef.current = r.prev ?? null;
+      setHasNewer(prevRef.current !== null);
+      setFiles((prev) => {
+        const seen = new Set(prev.map((f) => f.id));
+        return [...r.files.filter((f) => !seen.has(f.id)), ...prev];
+      });
+    } catch {
+      /* повторится при следующем появлении верхнего края */
+    } finally {
+      newerBusy.current = false;
+    }
+  }, [trashed, albumId, kind]);
+
   // Перейти к месяцу ("2015-03") или вернуться к самым новым (null). Сайт показывает ленту с этого месяца вниз.
   const jump = useCallback(async (to: string | null) => {
     atRef.current = to;
@@ -64,9 +90,9 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
     await loadMore(true);
   }, [loadMore]);
 
-  // Новый файл попадает наверх ленты; если лента начата с выбранного месяца, его там нет: покажется при возврате к новым.
-  const add = useCallback((f: FileItem) => { if (atRef.current === null) setFiles((prev) => insertSorted(prev, f)); }, []);
+  // Новый файл попадает наверх ленты; пока выше есть ещё не загруженные новые файлы, он покажется при догрузке.
+  const add = useCallback((f: FileItem) => { if (prevRef.current === null) setFiles((prev) => insertSorted(prev, f)); }, []);
   const remove = useCallback((id: string) => setFiles((prev) => prev.filter((f) => f.id !== id)), []);
 
-  return { files, hasMore, loading, loaded, error, loadMore, add, remove, at, jump };
+  return { files, hasMore, loading, loaded, error, loadMore, add, remove, at, jump, hasNewer, loadNewer };
 }

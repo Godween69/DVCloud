@@ -305,7 +305,7 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string }): Promise<{ files: FileRow[]; next: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -315,8 +315,15 @@ export class FilesService {
       params.push(m[1], m[2]);
       where += ` AND (${col}, id) < ($2::timestamptz, $3::bigint)`;
     }
+    // Лента вверх от курсора: файлы новее ключа after (для прокрутки к новым после перехода к месяцу).
+    if (opts.after !== undefined) {
+      const m = CURSOR_RE.exec(opts.after);
+      if (!m || opts.trashed || opts.before !== undefined) throw new BadRequestException('Неверный курсор after');
+      params.push(m[1], m[2]);
+      where += ` AND (taken_at, id) > ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
+    }
     // Лента с выбранного месяца: берём всё, что старше начала следующего месяца (по часовому поясу человека).
-    if (opts.at !== undefined && !opts.trashed) {
+    if (opts.at !== undefined && !opts.trashed && opts.after === undefined) {
       const m = /^(\d{4})-(\d{2})$/.exec(opts.at);
       if (!m || Number(m[2]) < 1 || Number(m[2]) > 12 || Number(m[1]) < 1971) throw new BadRequestException('at: месяц вида 2015-03');
       const tz = opts.tz ?? 'UTC';
@@ -335,12 +342,24 @@ export class FilesService {
       where += opts.kind === 'videos' ? " AND mime LIKE 'video/%'" : opts.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
     }
     params.push(opts.limit + 1);
-    const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} DESC, id DESC LIMIT $${params.length}`, params);
+    const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
+    const dir = up ? 'ASC' : 'DESC';
+    const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
     const more = r.rows.length > opts.limit;
-    const rows = more ? r.rows.slice(0, opts.limit) : r.rows;
+    let rows = more ? r.rows.slice(0, opts.limit) : r.rows;
+    if (up) rows = rows.reverse();
+    const cur = (f: FileRow): string => `${(opts.trashed ? f.trashed_at! : f.taken_at).toISOString()}_${f.id}`;
     const last = rows[rows.length - 1];
-    const next = more && last ? `${(opts.trashed ? last.trashed_at! : last.taken_at).toISOString()}_${last.id}` : null;
-    return { files: rows, next };
+    const first = rows[0];
+    const next = !up && more && last ? cur(last) : null;
+    // prev: есть ли файлы новее верхнего в ответе (нужен для ленты, начатой с месяца, и для самой прокрутки вверх)
+    let prev: string | null = null;
+    if (up) prev = more && first ? cur(first) : null;
+    else if (opts.at !== undefined && opts.before === undefined && first) {
+      const nw = await this.db.query(`SELECT 1 FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND (taken_at, id) > ($2::timestamptz, $3::bigint) LIMIT 1`, [ownerId, first.taken_at.toISOString(), first.id]);
+      prev = nw.rowCount ? cur(first) : null;
+    }
+    return { files: rows, next, prev };
   }
 
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.

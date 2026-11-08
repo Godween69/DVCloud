@@ -1,9 +1,9 @@
 import { motion } from 'framer-motion';
 import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
 import { prefetchThumbs } from '../lib/prefetch';
-import { currentKey, monthKey, bubbleTitle, type Month } from '../lib/timeline';
+import { currentKey, monthKey, type Month } from '../lib/timeline';
 import { TimeRail } from './TimeRail';
 import { countFiles, formatDateTime } from '../lib/format';
 import { groupByMonth } from '../lib/group';
@@ -42,7 +42,7 @@ interface Props {
   chip: { name: string; on: boolean } | null; // выбранный быстрый альбом для переключателя над сеткой
   onQuickOn: (on: boolean) => void; // включить или выключить быстрый альбом
   onPickQuick: () => void; // открыть выбор быстрого альбома
-  rail?: { months: Month[]; at: string | null; onJump: (at: string | null) => Promise<void> } | null; // полоса времени (только в разделах библиотеки)
+  rail?: { months: Month[]; at: string | null; hasNewer: boolean; onJump: (at: string | null) => Promise<void>; onNewer: () => Promise<void> } | null; // полоса времени (только в разделах библиотеки)
 }
 
 export interface QuickView {
@@ -109,6 +109,8 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   const [cur, setCur] = useState<string | null>(null); // месяц на экране (для полосы времени)
   const railMonths = rail && rail.months.length > 1 ? rail.months : null;
   const at = rail?.at ?? null;
+  const topSentinel = useRef<HTMLDivElement>(null);
+  const anchor = useRef<number | null>(null); // высота страницы до догрузки сверху: по ней возвращаем положение прокрутки
   // В режиме выбора нажатие на плитку отмечает её, а не открывает просмотр.
   const tap = (id: string) => (selecting ? onToggle(id) : onOpen(id));
   // Выбрать фото прямо с плитки: режим выбора включается сам.
@@ -122,6 +124,34 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
     io.observe(el);
     return () => io.disconnect();
   }, [hasMore, files.length, onMore]);
+
+  // Файлы догружаются и сверху (после перехода к месяцу): положение прокрутки сохраняем сами, поэтому встроенное выравнивание браузера выключено.
+  useEffect(() => {
+    const el = document.documentElement;
+    const prev = el.style.overflowAnchor;
+    el.style.overflowAnchor = 'none';
+    return () => { el.style.overflowAnchor = prev; };
+  }, []);
+  useLayoutEffect(() => {
+    const h = anchor.current;
+    if (h === null) return;
+    anchor.current = null;
+    const d = document.documentElement.scrollHeight - h;
+    if (d > 0) window.scrollTo(0, window.scrollY + d);
+  }, [files[0]?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hasNewer = !!rail?.hasNewer;
+  const onNewer = rail?.onNewer;
+  useEffect(() => {
+    const el = topSentinel.current;
+    if (!el || !hasNewer || !onNewer) return;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      anchor.current = document.documentElement.scrollHeight;
+      void onNewer().finally(() => setTimeout(() => { anchor.current = null; }, 300));
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasNewer, onNewer, files.length, layout]);
 
   // Какой месяц сейчас на экране: по положению секций месяцев при прокрутке (раз в кадр).
   useEffect(() => {
@@ -197,9 +227,15 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
       {railMonths && (
         <TimeRail months={railMonths} current={cur ?? (at ?? monthKey(railMonths[0].y, railMonths[0].m))} onPick={(i) => {
           const x = railMonths[i];
-          const to = i === 0 ? null : monthKey(x.y, x.m);
-          if (to === at) { window.scrollTo({ top: 0 }); return; }
-          void rail?.onJump(to).then(() => window.scrollTo({ top: 0 }));
+          const key = monthKey(x.y, x.m);
+          // Месяц уже загружен: просто прокручиваем к нему, ничего не перезагружая.
+          const sec = layout === 'months' ? document.querySelector<HTMLElement>(`section[data-month="${key}"]`) : null;
+          if (sec) {
+            const top = sec.getBoundingClientRect().top + window.scrollY - 120;
+            window.scrollTo({ top: Math.max(0, top), behavior: Math.abs(top - window.scrollY) < 4000 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
+            return;
+          }
+          void rail?.onJump(i === 0 ? null : key).then(() => window.scrollTo({ top: 0 }));
         }} />
       )}
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
@@ -236,12 +272,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
           <button type="button" className={seg(layout === 'wall')} aria-pressed={layout === 'wall'} onClick={() => setLayout('wall')}><LayoutGrid className="size-4" aria-hidden /><span className="hidden sm:inline">Сплошная лента</span></button>
         </div>
       </div>
-      {at && rail && (
-        <div role="status" className="mb-3 flex items-center gap-3 rounded-lg bg-violet-600/10 px-3 py-2 text-sm text-violet-900 dark:text-violet-100">
-          <span className="min-w-0 truncate">Показаны файлы, начиная с месяца «{(() => { const [y, m] = at.split('-').map(Number); return bubbleTitle({ y, m, n: 0 }); })()}», и старше</span>
-          <button type="button" onClick={() => { void rail.onJump(null).then(() => window.scrollTo({ top: 0 })); }} className="ml-auto shrink-0 rounded-md bg-violet-600 px-2.5 py-1 font-medium text-white hover:bg-violet-500">К новым</button>
-        </div>
-      )}
+      <div ref={topSentinel} aria-hidden className="h-px" />
       {layout === 'wall' ? (
         <div className={`grid gap-1 ${GRID[density]}`}>
           {files.map((f) => (

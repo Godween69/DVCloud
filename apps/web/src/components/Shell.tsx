@@ -289,7 +289,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   );
 
   const gallery = (feed: typeof library, empty?: ReactNode, timeline = false) => (
-    <Gallery rail={timeline && tl && tl.k === railKind ? { months: tl.months, at: feed.at, onJump: feed.jump } : null} files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
+    <Gallery rail={timeline && tl && tl.k === railKind ? { months: tl.months, at: feed.at, hasNewer: feed.hasNewer, onJump: feed.jump, onNewer: feed.loadNewer } : null} files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
       quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} chip={quick.saved ? { name: quick.saved.name, on: quick.on } : null} onQuickOn={quick.setOn} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
       empty={empty ?? (inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined)} />
