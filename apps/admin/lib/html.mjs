@@ -244,6 +244,23 @@ ${dates.examples.length ? `<table><thead><tr><th>Файл</th><th>Было</th><
 <div>${run(false, 'Проверить')}${run(true, 'Пересчитать', 'primary')}</div></div>${status}</section>`;
 };
 
+// Состояние ML-службы поиска по смыслу простыми словами.
+const mlState = (x) =>
+  !x.configured ? 'не подключена к облаку (нет адреса службы в настройках сервера)'
+  : !x.up ? 'не отвечает (контейнер ml не запущен или ещё стартует)'
+  : !x.modelFiles ? `запущена, но файлов модели нет (${esc(x.model ?? '')}): загрузите их скриптом dvcloud-models.sh`
+  : `работает, модель ${esc(x.model ?? '')}`;
+
+const searchPanel = (x, s, csrf) => {
+  const clear = (what, label, cls, hint) =>
+    `<form class="inline" method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="${what}"><button class="${cls}" type="submit" title="${esc(hint)}">${label}</button></form>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Поиск по смыслу</h2><p class="muted">Служба: ${mlState(x)}.</p></div>
+<div>${x.failed ? clear('index-failed', 'Повторить неудачные', '', 'Файлы, которые не удалось прочитать, попробуются снова') : ''}${clear('index', 'Пересчитать всё', 'danger', 'Стереть все векторы: они посчитаются заново, это займёт часы')}</div></div>
+<p>Готово ${x.ready} из ${x.total}${x.failed ? `, не удалось прочитать: ${x.failed}` : ''}${x.pending ? `, в очереди: ${x.pending}` : ''}. Векторы занимают ${esc(formatSize(x.sizeBytes))} в базе.</p>
+<progress max="${Math.max(x.total, 1)}" value="${x.ready + x.failed}" aria-label="Ход построения векторов"></progress>
+<p class="muted">${s.searchEnabled ? 'Поиск включён: векторы считаются в фоне, когда нет загрузок, и пока вы не выключите.' : 'Поиск выключен: ничего не считается, строка поиска на сайте скрыта.'}</p></section>`;
+};
+
 export function mediaPage({ media, dates, csrf, flash, loadError }) {
   const s = media?.settings;
   const clear = (what, label, hint) =>
@@ -272,6 +289,10 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
 <div class="setting"><div><b>Размер кадра копии</b><p class="muted">Высота по вертикали. Кадр не увеличивается: ролик меньше выбранного остаётся как есть по размеру.</p></div><select name="videoHeight" aria-label="Высота кадра">${[480, 720, 1080].map((h) => `<option value="${h}"${h === s.videoHeight ? ' selected' : ''}>${h}p</option>`).join('')}</select></div>
 <div class="setting"><div><b>Качество копии</b><p class="muted">Выше качество: лучше картинка, больше файл и дольше работа. Если копия получается не меньше оригинала, она не сохраняется.</p></div><select name="videoCrf" aria-label="Качество видео">${crfOptions.map(([v, l]) => `<option value="${v}"${v === s.videoCrf ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
 </section>
+<section class="panel"><h2>Поиск по смыслу</h2>
+<div class="setting"><div><b>Искать фото и видео по описанию</b><p class="muted">Облако в фоне «просматривает» каждое фото (для видео один кадр) нейросетью и запоминает его смысл, поэтому на сайте можно искать словами: «собака на пляже», «скриншот переписки». Работает по-русски. Фото не покидают ваш мини-ПК. Нагружает процессор часами (разово), поэтому по умолчанию выключено.</p></div>${sw('searchEnabled', s.searchEnabled, 'Включить поиск')}</div>
+<div class="setting"><div><b>Строгость выдачи</b><p class="muted">В результатах остаются файлы, которые подходят не хуже этого процента от лучшего совпадения, от 50 до 95. Больше число: короче и точнее выдача. Меньше: больше находок, но и больше лишнего.</p></div><input class="narrow" type="number" name="searchCutoff" min="50" max="95" step="1" value="${s.searchCutoff}" aria-label="Строгость выдачи, проценты"></div>
+</section>
 <section class="panel"><h2>Даты съёмки</h2>
 <div class="setting"><div><b>Часовой пояс</b><p class="muted">В нём записано время в метаданных и в именах файлов (там нет пояса). Для семьи в Москве: Europe/Moscow. Применяется к новым загрузкам и к пересчёту ниже.</p></div><span><input type="text" name="timezone" list="tz" value="${esc(s.timezone)}" maxlength="64" aria-label="Часовой пояс"><datalist id="tz">${TIMEZONES.map((z) => `<option value="${z}">`).join('')}</datalist></span></div>
 </section>
@@ -282,6 +303,7 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
 ${topBar('media', csrf)}
 ${flashHtml(flash, loadError)}
 ${stats}
+${media ? searchPanel(media.search, s, csrf) : ''}
 ${form}
 ${media ? datesPanel(dates, csrf) : ''}`);
 }

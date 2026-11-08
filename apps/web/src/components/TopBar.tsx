@@ -1,11 +1,11 @@
 import { motion } from 'framer-motion';
-import { ChevronDown, Cloud, FilePlus, FolderUp, LogOut, Moon, ShieldCheck, Sun, Upload } from 'lucide-react';
+import { ChevronDown, Cloud, FilePlus, FolderUp, LogOut, Moon, Search, ShieldCheck, Sun, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
 
-export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'similar' | 'trash' | 'security';
+export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'similar' | 'trash' | 'security' | 'search';
 
 interface Props {
   user: User;
@@ -14,6 +14,7 @@ interface Props {
   usage: Usage | null;
   onAdd: () => void;
   onAddFolder: () => void;
+  searchOn: boolean; // поиск по смыслу включён администратором
   theme: Theme;
   onToggleTheme: () => void;
   onLogout: () => void;
@@ -58,7 +59,7 @@ function AddMenu({ onAdd, onAddFolder }: { onAdd: () => void; onAddFolder: () =>
   );
 }
 
-export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, theme, onToggleTheme, onLogout }: Props) {
+export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, theme, onToggleTheme, onLogout }: Props) {
   const pct = usage && usage.quotaBytes ? Math.min(100, (usage.usedBytes / usage.quotaBytes) * 100) : null;
   const tone = pct === null ? 'bg-violet-500' : pct >= 90 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-violet-500';
   const textTone = pct !== null && pct >= 85 ? 'font-medium text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400';
@@ -70,7 +71,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, theme, o
           <span className="flex size-8 items-center justify-center rounded-lg bg-violet-600 text-white">
             <Cloud className="size-4.5" aria-hidden />
           </span>
-          <span className="hidden font-semibold tracking-tight text-gray-900 sm:inline dark:text-white">DV Cloud</span>
+          <span className="hidden whitespace-nowrap font-semibold tracking-tight text-gray-900 2xl:inline dark:text-white">DV Cloud</span>
         </div>
 
         <nav aria-label="Разделы" className="ml-1 flex min-w-0 gap-1 overflow-x-auto sm:ml-4">
@@ -84,12 +85,17 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, theme, o
 
         <div className="ml-auto flex items-center gap-1 sm:gap-3">
           {usage && (
-            <div className="hidden w-44 md:block" title="Сколько места занято, включая корзину">
+            <div className="hidden w-40 md:block" title="Сколько места занято, включая корзину">
               <div className={`mb-1 text-right text-xs ${textTone}`}>{usage.quotaBytes ? `${formatBytes(usage.usedBytes)} из ${formatBytes(usage.quotaBytes)}` : `${formatBytes(usage.usedBytes)} занято`}</div>
               <div className="h-1.5 overflow-hidden rounded-full bg-paper-300 dark:bg-gray-800" role="progressbar" aria-label="Занятое место" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct === null ? undefined : Math.round(pct)}>
                 <motion.div className={`h-full rounded-full ${tone}`} initial={false} animate={{ width: `${pct ?? 100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} style={pct === null ? { opacity: 0.35 } : undefined} />
               </div>
             </div>
+          )}
+          {searchOn && (
+            <button type="button" onClick={() => onView('search')} aria-current={view === 'search' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Поиск" title="Поиск по смыслу">
+              <Search className="size-5" aria-hidden />
+            </button>
           )}
           <AddMenu onAdd={onAdd} onAddFolder={onAddFolder} />
           <button type="button" onClick={() => onView('security')} aria-current={view === 'security' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Безопасность" title="Безопасность">

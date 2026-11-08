@@ -22,6 +22,10 @@ import { ThumbsService } from './files/thumbs.service';
 import { VideoService } from './files/video.service';
 import { MediaSettingsService } from './files/media-settings';
 import { AdminMediaService } from './files/admin-media.service';
+import { MlClient } from './files/ml-client';
+import { EmbedService } from './files/embed.service';
+import { SearchService } from './files/search.service';
+import { SearchController } from './files/search.controller';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
 import { InternalHealthController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
@@ -47,8 +51,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, UploadsController],
-      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, UploadsController],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
     };
   }
 }
@@ -61,7 +65,7 @@ export class InternalModule {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
       controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, AdminMediaService],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, AdminMediaService],
     };
   }
 }

@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { DbService } from '../db/db.service';
 import { MediaSettings, MediaSettingsService, videoParams } from './media-settings';
 import { StorageService } from './storage.service';
+import { MlClient } from './ml-client';
+import { IndexStats, indexStats } from './search-index';
 import { detectTakenAt } from './taken';
 
-export type ClearTarget = 'thumbs' | 'previews' | 'videos';
+export type ClearTarget = 'thumbs' | 'previews' | 'videos' | 'index' | 'index-failed';
 
 export interface DirStat {
   files: number;
@@ -18,6 +20,7 @@ export interface MediaOverview {
   thumbs: DirStat;
   previews: DirStat;
   videos: { copies: DirStat; total: number; totalBytes: number; ready: number; skipped: number; failed: number; pending: number };
+  search: IndexStats & { configured: boolean; up: boolean; modelFiles: boolean; model: string | null; sizeBytes: number };
 }
 
 export interface DatesJob {
@@ -67,6 +70,7 @@ export class AdminMediaService {
     @Inject(DbService) private readonly db: DbService,
     @Inject(StorageService) private readonly storage: StorageService,
     @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
+    @Inject(MlClient) private readonly ml: MlClient,
   ) {}
 
   datesStatus(): DatesJob | null {
@@ -132,6 +136,8 @@ export class AdminMediaService {
       [p],
     );
     const x = r.rows[0];
+    const h = await this.ml.health();
+    const size = Number((await this.db.query<{ n: string }>("SELECT COALESCE(sum(octet_length(vector)), 0) AS n FROM embeddings")).rows[0].n);
     return {
       settings,
       thumbs: await dirStat(this.storage.abs('thumbs')),
@@ -145,6 +151,7 @@ export class AdminMediaService {
         failed: Number(x.failed),
         pending: Number(x.pending),
       },
+      search: { ...(await indexStats(this.db, h?.model ?? null)), configured: this.ml.configured, up: h !== null, modelFiles: h?.ready ?? false, model: h?.model ?? null, sizeBytes: size },
     };
   }
 
@@ -164,7 +171,12 @@ export class AdminMediaService {
   }
 
   async clear(what: string): Promise<DirStat> {
-    if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews или videos');
+    if (what === 'index' || what === 'index-failed') {
+      // Векторы стираются только в базе; пересчитываются в фоне, пока поиск включён. «index-failed» стирает лишь неудачные записи.
+      const r = await this.db.query(what === 'index' ? 'DELETE FROM embeddings' : "DELETE FROM embeddings WHERE status = 'failed'");
+      return { files: r.rowCount ?? 0, bytes: 0 };
+    }
+    if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews, videos, index или index-failed');
     const before = await dirStat(this.storage.abs(what));
     await rm(this.storage.abs(what), { recursive: true, force: true });
     await mkdir(this.storage.abs(what), { recursive: true });

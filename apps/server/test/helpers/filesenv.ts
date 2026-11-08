@@ -66,12 +66,12 @@ export function startEnv() {
     return out;
   };
 
-  async function start(): Promise<void> {
+  async function start(extraEnv: Record<string, string> = {}): Promise<void> {
     const db = await createTestDb(ADMIN_URL);
     drop = db.drop;
     dbUrl = db.url;
     dataDir = await mkdtemp(join(tmpdir(), 'dvcloud-data-'));
-    const cfg = loadConfig({ DVCLOUD_DATABASE_URL: db.url, DVCLOUD_INTERNAL_TOKEN: TOKEN, DVCLOUD_DATA_DIR: dataDir, DVCLOUD_COOKIE_SECURE: 'true' });
+    const cfg = loadConfig({ DVCLOUD_DATABASE_URL: db.url, DVCLOUD_INTERNAL_TOKEN: TOKEN, DVCLOUD_DATA_DIR: dataDir, DVCLOUD_COOKIE_SECURE: 'true', ...extraEnv });
     ({ pub, internal } = await createApps(cfg, true));
     await pub.listen(0, '127.0.0.1');
     await internal.listen(0, '127.0.0.1');

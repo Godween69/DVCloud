@@ -11,6 +11,8 @@ export interface MediaSettings {
   videoHeight: number; // высота копии, px
   videoCrf: number; // качество x264: меньше число, лучше картинка и больше файл (18-35)
   timezone: string; // пояс, в котором записано время без пояса (EXIF, имя файла): так определяется дата съёмки
+  searchEnabled: boolean; // поиск по смыслу: фоновое построение векторов и строка поиска на сайте
+  searchCutoff: number; // в выдаче остаются совпадения не слабее этого процента от лучшего (50-95)
 }
 
 export const DEFAULT_MEDIA: MediaSettings = {
@@ -21,13 +23,16 @@ export const DEFAULT_MEDIA: MediaSettings = {
   videoHeight: 720,
   videoCrf: 28,
   timezone: 'UTC',
+  searchEnabled: false, // нужен ML-сервис и время процессора: включается осознанно
+  searchCutoff: 80,
 };
 
 export const VIDEO_HEIGHTS = [480, 720, 1080];
-const RANGES: Record<'previewMaxSide' | 'previewQuality' | 'videoCrf', [number, number]> = {
+const RANGES: Record<'previewMaxSide' | 'previewQuality' | 'videoCrf' | 'searchCutoff', [number, number]> = {
   previewMaxSide: [600, 4000],
   previewQuality: [30, 95],
   videoCrf: [18, 35],
+  searchCutoff: [50, 95],
 };
 
 // Проверяет частичное изменение настроек; неизвестные поля и значения вне границ дают 400 с понятным текстом.
@@ -36,10 +41,10 @@ export function parseMediaPatch(input: unknown): Partial<MediaSettings> {
   const o = input as Record<string, unknown>;
   const out: Partial<MediaSettings> = {};
   for (const [k, v] of Object.entries(o)) {
-    if (k === 'previewEnabled' || k === 'videoEnabled') {
+    if (k === 'previewEnabled' || k === 'videoEnabled' || k === 'searchEnabled') {
       if (typeof v !== 'boolean') throw new BadRequestException(`${k}: ожидалось да или нет`);
       out[k] = v;
-    } else if (k === 'previewMaxSide' || k === 'previewQuality' || k === 'videoCrf') {
+    } else if (k === 'previewMaxSide' || k === 'previewQuality' || k === 'videoCrf' || k === 'searchCutoff') {
       const [lo, hi] = RANGES[k];
       if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) throw new BadRequestException(`${k}: целое число от ${lo} до ${hi}`);
       out[k] = v;

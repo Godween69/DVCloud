@@ -26,3 +26,12 @@ test('настройки: значения вне границ и чужие п�
 test('настройки: метка параметров видео', () => {
   assert.equal(videoParams({ videoHeight: 720, videoCrf: 28 }), '720-28');
 });
+
+test('настройки: поиск по смыслу по умолчанию выключен, порог 80 процентов', () => {
+  assert.equal(DEFAULT_MEDIA.searchEnabled, false);
+  assert.equal(DEFAULT_MEDIA.searchCutoff, 80);
+  assert.deepEqual(parseMediaPatch({ searchEnabled: true, searchCutoff: 60 }), { searchEnabled: true, searchCutoff: 60 });
+  for (const bad of [{ searchEnabled: 1 }, { searchCutoff: 49 }, { searchCutoff: 96 }, { searchCutoff: 70.5 }, { searchCutoff: '80' }]) {
+    assert.throws(() => parseMediaPatch(bad), /./, JSON.stringify(bad));
+  }
+});

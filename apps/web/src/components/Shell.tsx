@@ -10,7 +10,9 @@ import { filesFromDrop, filesFromInput, uploadable, type PickedFile } from '../l
 import { countFiles } from '../lib/format';
 import { useTheme } from '../lib/theme';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
-import type { Album, AlbumRef, Estimate, FileItem, Usage, User } from '../types';
+import type { Album, AlbumRef, Estimate, FileItem, SearchStatus, Usage, User } from '../types';
+import { useSearch } from '../lib/useSearch';
+import { SearchView } from './SearchView';
 import { QuotaDialog } from './QuotaDialog';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
 import { AlbumHeader, AlbumsView } from './AlbumsView';
@@ -52,9 +54,11 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const shots = useFeed(false, undefined, 'screenshots');
   const trash = useFeed(true);
   const albumFeed = useFeed(false, album?.id);
+  const search = useSearch();
+  const [searchStatus, setSearchStatus] = useState<SearchStatus | null>(null);
   const inAlbum = view === 'albums' && album !== null;
   const foreign = inAlbum && album !== null && !album.mine; // чужой общий альбом: только смотреть, сохранять, скачивать
-  const active = inAlbum ? albumFeed : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
+  const active = inAlbum ? albumFeed : view === 'search' ? search : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
@@ -67,7 +71,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     [addLib, refreshUsage],
   );
 
-  useEffect(() => { library.loadMore(true); refreshUsage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { library.loadMore(true); refreshUsage(); api.searchStatus().then(setSearchStatus).catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { if (view === 'search') api.searchStatus().then(setSearchStatus).catch(() => {}); }, [view]);
   useEffect(() => {
     // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
     if (view === 'photos') photos.loadMore(true);
@@ -167,7 +172,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
     // Соседний файл показываем вместо удалённого; если соседей нет, просмотрщик закроется сам.
     leaveFeed(id);
-    [library, photos, videos, shots].forEach((f) => f.remove(id)); // файл мог лежать в нескольких лентах сразу
+    [library, photos, videos, shots, search].forEach((f) => f.remove(id)); // файл мог лежать в нескольких лентах сразу
     say('Файл в корзине', {
       label: 'Восстановить',
       run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось восстановить файл')); },
@@ -212,7 +217,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = [...selected];
     try {
       const n = await api.bulk('hide', ids);
-      ids.forEach((id) => { library.remove(id); photos.remove(id); videos.remove(id); shots.remove(id); albumFeed.remove(id); });
+      ids.forEach((id) => { library.remove(id); photos.remove(id); videos.remove(id); shots.remove(id); albumFeed.remove(id); search.remove(id); });
       endSelect();
       refreshUsage();
       say(n === 1 ? 'Файл в корзине' : `В корзине файлов: ${n}`, { label: 'Восстановить', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось восстановить')); } });
@@ -286,7 +291,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
@@ -310,6 +315,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             {gallery(albumFeed)}
           </>
         )}
+        {view === 'search' && <SearchView search={search} status={searchStatus} onOpen={(id) => setViewer({ id })} />}
         {view === 'security' && <SecurityView onError={say} />}
         {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (

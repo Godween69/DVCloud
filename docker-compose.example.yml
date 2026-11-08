@@ -34,6 +34,7 @@ services:
       # Каталог с вашими файлами. Хозяин должен быть пользователь 1000 (в контейнере это node):
       # sudo chown 1000:1000 ./data
       - ./data:/data
+    networks: [default, ml]   # ml нужна только для поиска по смыслу (см. ниже), без службы ml она пустая
 
   admin:
     build: { context: ., target: admin }
@@ -46,6 +47,25 @@ services:
     ports:
       - "127.0.0.1:3005:3005"   # админка: только локально, наружу не выводить
 
+  # Поиск по смыслу (необязательно, см. docs/SEARCH.md). Включается профилем: docker compose --profile search up -d
+  # Файлы модели положите в ./models (visual/model.onnx, textual/model.onnx, textual/tokenizer.json) и задайте
+  # серверу DVCLOUD_ML_URL=http://ml:8090. Сеть закрытая: служба не выходит в интернет и снаружи не видна.
+  ml:
+    build: ./apps/ml
+    profiles: ["search"]
+    restart: unless-stopped
+    environment:
+      DVML_MODEL_DIR: /models/model
+      DVML_THREADS: "2"
+    volumes:
+      - ./models:/models:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    mem_limit: 2400m
+    cpus: 2
+    networks: [ml]
+
   web:
     build: { context: ., target: web }
     restart: unless-stopped
@@ -55,3 +75,7 @@ services:
 
 volumes:
   dvcloud-db:
+
+networks:
+  ml:
+    internal: true   # без выхода наружу

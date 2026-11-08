@@ -13,6 +13,7 @@ export interface Config {
   maxUploadBytes: number; // предел размера одного файла
   authUrl: string; // адрес сервиса DV Auth (второй фактор); пусто = второй фактор отключён
   authSecret: string; // секрет этого приложения в DV Auth
+  mlUrl: string; // адрес ML-сервиса (поиск по смыслу); пусто = поиск недоступен
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -43,6 +44,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if ((authUrl === '') !== (authSecret === '')) throw new Error('DVCLOUD_AUTH_URL и DVCLOUD_AUTH_SECRET задаются вместе');
   if (authUrl !== '' && !/^https?:\/\//.test(authUrl)) throw new Error('DVCLOUD_AUTH_URL должен начинаться с http:// или https://');
   if (authSecret !== '' && authSecret.length < 32) throw new Error('DVCLOUD_AUTH_SECRET должен быть не короче 32 символов');
+  const mlUrl = (env.DVCLOUD_ML_URL ?? '').trim().replace(/\/+$/, '');
+  if (mlUrl !== '' && !/^https?:\/\//.test(mlUrl)) throw new Error('DVCLOUD_ML_URL должен начинаться с http:// или https://');
   return {
     port,
     host: env.DVCLOUD_HOST ?? '127.0.0.1',
@@ -57,5 +60,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxUploadBytes: intVar(env, 'DVCLOUD_MAX_UPLOAD_BYTES', 50 * 1024 ** 3, 1, Number.MAX_SAFE_INTEGER),
     authUrl,
     authSecret,
+    mlUrl,
   };
 }

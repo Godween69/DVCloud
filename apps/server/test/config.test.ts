@@ -43,3 +43,9 @@ test('второй фактор: адрес и секрет DV Auth задают
   const c = loadConfig({ ...base, DVCLOUD_AUTH_URL: 'http://127.0.0.1:3011/', DVCLOUD_AUTH_SECRET: 'x'.repeat(32) });
   assert.equal(c.authUrl, 'http://127.0.0.1:3011');
 });
+
+test('адрес ML-службы: по умолчанию пуст, слэш в конце убирается, чужая схема отвергается', () => {
+  assert.equal(loadConfig(base).mlUrl, '');
+  assert.equal(loadConfig({ ...base, DVCLOUD_ML_URL: 'http://ml:8090/' }).mlUrl, 'http://ml:8090');
+  assert.throws(() => loadConfig({ ...base, DVCLOUD_ML_URL: 'ftp://ml' }), /DVCLOUD_ML_URL/);
+});

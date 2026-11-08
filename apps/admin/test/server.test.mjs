@@ -46,7 +46,7 @@ describe('админка', () => {
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
         if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
-        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC' }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 } });
+        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80 }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 } });
         if (req.method === 'PATCH' && req.url === '/internal/media/settings') { const b = JSON.parse(body); return b.previewMaxSide < 600 ? j(400, { message: 'previewMaxSide: целое число от 600 до 4000' }) : j(200, { settings: b, cleared: b.previewMaxSide ? ['previews'] : [] }); }
         if (req.method === 'GET' && req.url === '/internal/media/dates') return j(200, { job: { running: false, apply: false, startedAt: 'x', finishedAt: 'y', total: 100, checked: 100, changed: 3, examples: [{ name: '<i>a</i>.jpg', before: '2025-07-01T09:45:00.000Z', after: '2020-05-25T18:55:28.000Z' }] } });
         if (req.method === 'POST' && req.url === '/internal/media/dates') return j(200, { job: { running: true, apply: JSON.parse(body).apply, total: 100, checked: 0, changed: 0, examples: [] } });
@@ -262,6 +262,26 @@ describe('админка', () => {
     await post('/media/clear', { what: 'videos' });
     assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"videos"')));
     assert.equal((await req('POST', '/media/clear', { cookie, form: { csrf: 'wrong', what: 'videos' } })).status, 403);
+  });
+
+  it('поиск по смыслу: панель с ходом и состоянием службы, настройки и сброс векторов', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.ok(page.text.includes('Поиск по смыслу'));
+    assert.ok(page.text.includes('Готово 40 из 100, не удалось прочитать: 2, в очереди: 58'));
+    assert.ok(page.text.includes('работает, модель xlm-test'));
+    assert.ok(page.text.includes('name="searchEnabled"') && page.text.includes('name="searchCutoff"') && page.text.includes('value="80"'));
+    assert.ok(page.text.includes('Повторить неудачные'), 'есть неудачные: кнопка повтора видна');
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/media/settings', { searchEnabled: '1', searchCutoff: '70' });
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"searchEnabled":true') && sent.includes('"searchCutoff":70'), sent);
+    await post('/media/settings', { previewEnabled: '1' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"searchEnabled":false'), 'снятая галочка выключает поиск');
+    await post('/media/clear', { what: 'index-failed' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"index-failed"')));
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Сброшено записей поиска'));
   });
 
   it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {

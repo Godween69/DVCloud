@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { isSupported, isVideo } from '../src/lib/media.ts';
 import { UploadQueue, type Sender, type UploadJob } from '../src/lib/uploader.ts';
 
+// Ждём условия, а не фиксированное время: на загруженной машине таймеры уходят.
+const until = async (cond: () => boolean, ms = 5000) => {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error('не дождались условия');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+const finished = (jobs: UploadJob[]) => jobs.length > 0 && jobs.every((j) => ['done', 'duplicate', 'error', 'linked'].includes(j.status));
+
 const file = (name: string, size = 10) => ({ name, size, lastModified: 0 });
 const item = (name: string) => ({ id: name, name, mime: 'image/jpeg', size: 1, sha256: name, takenAt: '2026-05-01T00:00:00Z', createdAt: '2026-05-01T00:00:00Z', trashedAt: null });
 
@@ -30,7 +40,7 @@ test('очередь: одновременно не больше двух, вс�
   const uploaded: string[] = [];
   const q = new UploadQueue(send, (j) => (last = j), (fi, dup) => uploaded.push(`${fi.name}:${dup}`), 2);
   q.add([file('a.jpg'), file('b.jpg'), file('dup.jpg'), file('big.jpg'), file('c.png'), file('virus.exe'), file('empty.jpg', 0)]);
-  await new Promise((r) => setTimeout(r, 100));
+  await until(() => finished(last));
   assert.equal(maxRunning, 2);
   const by = Object.fromEntries(last.map((j) => [j.name, j]));
   assert.equal(by['a.jpg'].status, 'done');
@@ -52,7 +62,7 @@ test('сбой сети попадает в статус ошибки, очер�
   let last: UploadJob[] = [];
   const q = new UploadQueue(send, (j) => (last = j), () => {}, 1);
   q.add([file('a.jpg'), file('b.jpg')]);
-  await new Promise((r) => setTimeout(r, 30));
+  await until(() => finished(last));
   assert.deepEqual(last.map((j) => j.status), ['error', 'done']);
 });
 
@@ -73,7 +83,7 @@ test('сверка по хешу: файл, который уже есть в о
   const got: string[] = [];
   const q = new UploadQueue(send, (j) => (last = j), (fi, dup) => got.push(`${fi.name}:${dup}`), 3, claim);
   q.add([file('have.jpg'), file('mine.jpg'), file('full.jpg'), file('new.jpg'), file('broken.jpg')]);
-  await new Promise((r) => setTimeout(r, 60));
+  await until(() => finished(last));
   const by = Object.fromEntries(last.map((j) => [j.name, j.status]));
   assert.deepEqual(by, { 'have.jpg': 'linked', 'mine.jpg': 'duplicate', 'full.jpg': 'error', 'new.jpg': 'done', 'broken.jpg': 'done' });
   assert.equal(sent, 2, 'по сети ушли только новый файл и тот, у которого сверка не удалась');
@@ -91,11 +101,11 @@ test('отмена ожидающих и повтор неудавшихся', a
   const q = new UploadQueue(send, (j) => (last = j), () => {}, 1);
   q.add([file('a.jpg'), file('b.jpg'), file('c.jpg'), file('d.jpg')]);
   q.cancelWaiting(); // a уже запущен, остальные ждали
-  await new Promise((r) => setTimeout(r, 40));
+  await until(() => finished(last));
   assert.deepEqual(last.map((j) => j.status), ['error', 'error', 'error', 'error']);
   assert.equal(last[1].error, 'Отменено');
   fail = false;
   q.retryFailed(); // «Отменено» не повторяется, a повторяется
-  await new Promise((r) => setTimeout(r, 40));
+  await until(() => last[0].status === 'done');
   assert.deepEqual(last.map((j) => j.status), ['done', 'error', 'error', 'error']);
 });

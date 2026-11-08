@@ -66,6 +66,8 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
           videoHeight: num('videoHeight'),
           videoCrf: num('videoCrf'),
           timezone: (form.get('timezone') ?? '').trim() || undefined,
+          searchEnabled: form.get('searchEnabled') === '1',
+          searchCutoff: num('searchCutoff'),
         };
         for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
         const r = await api.saveMedia(patch);
@@ -78,7 +80,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       } else if (path === '/media/clear') {
         const what = form.get('what') ?? '';
         const r = await api.clearMedia(what);
-        session.flash = { kind: 'ok', text: `Очищено: ${r.files} файлов` };
+        session.flash = { kind: 'ok', text: what.startsWith('index') ? `Сброшено записей поиска: ${r.files}. Они посчитаются заново в фоне` : `Очищено: ${r.files} файлов` };
       } else {
         return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
       }

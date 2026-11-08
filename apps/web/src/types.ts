@@ -105,3 +105,16 @@ export interface FactorStatus {
   totpEnabled?: boolean;
   recoveryLeft?: number;
 }
+
+// Поиск по смыслу (см. docs/SEARCH.md)
+export interface SearchStatus {
+  enabled: boolean; // включён администратором
+  available: boolean; // и служба поиска отвечает
+  total: number; // файлов в библиотеке, которые должны попасть в поиск
+  indexed: number; // из них уже готовых к поиску
+}
+export interface SearchResult {
+  files: FileItem[]; // от самого подходящего к менее подходящим
+  indexed: number;
+  total: number;
+}

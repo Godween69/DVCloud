@@ -14,7 +14,7 @@ const LAYOUTS = ['months', 'wall'] as const;
 const DENSITIES = ['s', 'm', 'l'] as const;
 
 // Размер плиток: на телефоне 4, 3 или 2 в ряд, на широком экране фиксированная сторона плитки.
-const GRID: Record<Density, string> = {
+export const GRID: Record<Density, string> = {
   s: 'grid-cols-4 sm:grid-cols-[repeat(auto-fill,minmax(5.5rem,6.5rem))]',
   m: 'grid-cols-3 sm:grid-cols-[repeat(auto-fill,minmax(8rem,9.5rem))]',
   l: 'grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(12rem,15rem))]',
@@ -47,7 +47,7 @@ export interface QuickView {
   toggle: (id: string) => void;
 }
 
-function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
+export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
   const [broken, setBroken] = useState(false);
   // Долгое нажатие пальцем включает выбор (как в Google Фото); следующий за ним «клик» не открывает просмотр.
   const hold = useRef<{ t: ReturnType<typeof setTimeout> | null; fired: boolean }>({ t: null, fired: false });
