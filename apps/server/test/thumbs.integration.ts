@@ -40,14 +40,15 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     assert.ok((await stat(files[0])).size > 0);
   });
 
-  it('чужая миниатюра, без входа, неизвестный id и корзина дают 404 или 401', async () => {
+  it('чужая миниатюра, без входа и неизвестный id дают 404 или 401, а у скрытого своего файла миниатюра остаётся', async () => {
     const up = await upload(e.anna, 'mine.jpg', await photo('#cc3366'));
     const id = up.json.file.id;
     assert.equal((await api('GET', `/api/files/${id}/thumb`)).status, 401);
     assert.equal((await api('GET', `/api/files/${id}/thumb`, { cookie: e.boris })).status, 404);
     assert.equal((await api('GET', '/api/files/999999/thumb', { cookie: e.anna })).status, 404);
     await api('DELETE', `/api/files/${id}`, { cookie: e.anna });
-    assert.equal((await api('GET', `/api/files/${id}/thumb`, { cookie: e.anna })).status, 404);
+    assert.equal((await api('GET', `/api/files/${id}/thumb`, { cookie: e.anna })).status, 200, 'раздел «Скрытые» показывает миниатюры');
+    assert.equal((await api('GET', `/api/files/${id}`, { cookie: e.anna })).status, 404, 'оригинал скрытого не отдаётся');
   });
 
   it('битая картинка и видео дают 404, а оригинал при этом отдаётся', async () => {

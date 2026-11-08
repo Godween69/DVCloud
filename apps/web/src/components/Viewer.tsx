@@ -6,15 +6,16 @@ import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
 import type { AlbumRef, FileItem } from '../types';
-import { AlbumPicker } from './AlbumPicker';
+import { AlbumPicker, type PickResult } from './AlbumPicker';
 
 interface Props {
   files: FileItem[];
   index: number;
   onIndex: (i: number) => void;
   onClose: () => void;
-  onTrash: (f: FileItem) => void;
-  onAlbumChanged: (f: FileItem, album: AlbumRef | null, count: number) => void;
+  onTrash?: (f: FileItem) => void; // нет у файлов чужого общего альбома
+  readOnly?: boolean;
+  onAlbumChanged: (f: FileItem, r: PickResult) => void;
   onError: (message: string) => void;
   quick: { id: string; name: string; has: (id: string) => boolean } | null; // «быстрый альбом»
   onQuick: (f: FileItem) => Promise<'added' | 'moved' | null>; // 'moved': Shell уже сам перешёл к соседнему
@@ -26,7 +27,7 @@ const FADE = { duration: 0.15 }; // уход старой кнопки 0,15 с +
 const AlbumButton = memo(function AlbumButton({ name, label, onOpen }: { name: string | null; label: string; onOpen: () => void }) {
   const inAlbum = name !== null;
   return (
-    <button type="button" onClick={onOpen} className="flex h-10 items-center justify-center gap-2 rounded-full bg-white/10 px-3.5 text-white transition-colors hover:bg-white/20 sm:w-44" aria-label={inAlbum ? `Сменить альбом (сейчас: ${name})` : 'В альбом'} title={inAlbum ? `Сейчас в альбоме «${name}»` : 'Добавить в альбом'}>
+    <button type="button" onClick={onOpen} className="flex h-10 items-center justify-center gap-2 rounded-full bg-white/10 px-3.5 text-white transition-colors hover:bg-white/20 sm:w-44" aria-label={inAlbum ? `Альбомы фото (сейчас: ${name})` : 'В альбом'} title={inAlbum ? `Сейчас: ${name}` : 'Добавить в альбом'}>
       {inAlbum ? <FolderOpen className="size-5 shrink-0" aria-hidden /> : <FolderPlus className="size-5 shrink-0" aria-hidden />}
       <span className="hidden min-w-0 flex-1 sm:inline">
         <AnimatePresence mode="wait" initial={false}>
@@ -57,7 +58,7 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged, onError, quick, onQuick }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAlbumChanged, onError, quick, onQuick }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
@@ -69,11 +70,11 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
   const [view, setView] = useState<View>(NO_ZOOM);
   const [dragging, setDragging] = useState(false);
   // Альбом каждого файла запоминается (и подгружается для соседних фото заранее), поэтому при листании кнопки не мигают.
-  const albums = useRef(new Map<string, AlbumRef | null>());
+  const albums = useRef(new Map<string, AlbumRef[]>());
   const [, bump] = useState(0);
   const lastLabel = useRef('В альбом');
-  const remember = (id: string, a: AlbumRef | null) => { albums.current.set(id, a); bump((n) => n + 1); };
-  const load = (id: string) => { if (!albums.current.has(id)) api.albumOf(id).then((a) => remember(id, a)).catch(() => remember(id, null)); };
+  const remember = (id: string, a: AlbumRef[]) => { albums.current.set(id, a); bump((n) => n + 1); };
+  const load = (id: string) => { if (!albums.current.has(id)) api.albumOf(id).then((a) => remember(id, a)).catch(() => remember(id, [])); };
   const [picking, setPicking] = useState(false);
   const drag = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
@@ -90,8 +91,10 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id]);
   // Известный альбом файла: быстрый альбом знаем сразу, остальное из запомненного; undefined = ещё не узнали.
-  const album: AlbumRef | null | undefined = file ? (quick?.has(file.id) ? { id: quick.id, name: quick.name } : albums.current.get(file.id)) : undefined;
-  const albumLabel = album === undefined ? lastLabel.current : album ? 'Сменить альбом' : 'В альбом';
+  const known = file ? albums.current.get(file.id) : undefined;
+  const list: AlbumRef[] | undefined = known && file && quick?.has(file.id) && !known.some((a) => a.id === quick.id) ? [...known, { id: quick.id, name: quick.name }] : known ?? (file && quick?.has(file.id) ? [{ id: quick.id, name: quick.name }] : undefined);
+  const albumName = list && list.length ? (list.length === 1 ? list[0].name : `${list[0].name} и ещё ${list.length - 1}`) : null;
+  const albumLabel = list === undefined ? lastLabel.current : list.length ? 'Альбомы' : 'В альбом';
   lastLabel.current = albumLabel;
   const openPicker = useCallback(() => setPicking(true), []);
 
@@ -103,7 +106,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
     try {
       const r = await onQuick(file);
       if (cur.current !== id || r === null) return;
-      remember(id, { id: quick.id, name: quick.name });
+      remember(id, [...(albums.current.get(id) ?? []).filter((a) => a.id !== quick.id), { id: quick.id, name: quick.name }]);
       if (r === 'added' && index < files.length - 1) onIndex(index + 1);
     } finally {
       busy.current = false;
@@ -172,7 +175,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
       if (picking) return; // пока открыто окно выбора альбома, листать и закрывать просмотр нельзя
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
+      if (e.code === 'KeyA' && !readOnly && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
       else if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
       else if (e.key === 'ArrowRight' && index < files.length - 1) onIndex(index + 1);
@@ -203,12 +206,12 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
         <button type="button" className={btn} onClick={onClose} aria-label="Закрыть"><X className="size-5" aria-hidden /></button>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{file.name}</p>
-          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{album ? ` · альбом «${album.name}»` : ''}</p>
+          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{albumName ? ` · ${albumName}` : ''}</p>
         </div>
-        {quick && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
-        <AlbumButton name={album ? album.name : null} label={albumLabel} onOpen={openPicker} />
+        {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
+        {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину"><Trash2 className="size-5" aria-hidden /></button>
+        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="Скрыть" title="Скрыть (файл останется в разделе «Скрытые»)"><Trash2 className="size-5" aria-hidden /></button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">
@@ -237,8 +240,8 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onAlbumChanged
         </p>
       </div>
       {picking && (
-        <AlbumPicker ids={[file.id]} current={album ?? null} onClose={() => setPicking(false)} onError={onError}
-          onDone={(a, n) => { setPicking(false); remember(file.id, a); onAlbumChanged(file, a, n); }} />
+        <AlbumPicker ids={[file.id]} current={list ?? []} onClose={() => setPicking(false)} onError={onError}
+          onDone={(r: PickResult) => { setPicking(false); remember(file.id, r.now); onAlbumChanged(file, r); }} />
       )}
     </motion.div>
   );

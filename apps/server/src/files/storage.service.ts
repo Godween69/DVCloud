@@ -1,7 +1,7 @@
 import { Inject, Injectable, OnModuleInit, PayloadTooLargeException } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { link, mkdir, readdir, rm, unlink } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { link, mkdir, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -25,7 +25,7 @@ export class StorageService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    for (const d of ['library', 'trash', 'tmp', 'thumbs']) await mkdir(join(this.root, d), { recursive: true });
+    for (const d of ['library', 'trash', 'tmp', 'thumbs', 'uploads']) await mkdir(join(this.root, d), { recursive: true });
     // Недогруженные куски после падения или обрыва не нужны.
     for (const f of await readdir(join(this.root, 'tmp'))) await rm(join(this.root, 'tmp', f), { force: true });
   }
@@ -88,5 +88,43 @@ export class StorageService implements OnModuleInit {
 
   async remove(rel: string): Promise<void> {
     await rm(this.abs(rel), { force: true });
+  }
+
+  // SHA-256 файла, читая его потоком (для докачанных загрузок и проверки лишних копий).
+  async sha256Of(rel: string): Promise<string> {
+    return this.sha256OfAbs(this.abs(rel));
+  }
+
+  async sha256OfAbs(abs: string): Promise<string> {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(abs)) hash.update(chunk as Buffer);
+    return hash.digest('hex');
+  }
+
+  // Загрузки по частям лежат в uploads/<id> и переживают перезапуск сервера.
+  uploadPath(id: string): string {
+    return join(this.root, 'uploads', id);
+  }
+
+  async uploadSize(id: string): Promise<number> {
+    try {
+      return (await stat(this.uploadPath(id))).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  // Дописывает кусок в конец файла загрузки. Размер сверяется с лимитом, память не растёт.
+  async appendChunk(id: string, input: Readable, maxBytes: number): Promise<number> {
+    let size = 0;
+    const meter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        size += chunk.length;
+        if (size > maxBytes) return cb(new TooLargeError());
+        cb(null, chunk);
+      },
+    });
+    await pipeline(input, meter, createWriteStream(this.uploadPath(id), { flags: 'a', mode: 0o600 }));
+    return size;
   }
 }

@@ -1,9 +1,10 @@
 import { BadRequestException, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, Res, UnsupportedMediaTypeException, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { SessionGuard } from '../auth/session.guard';
-import { requireJson } from '../http';
+import { asObject, requireJson } from '../http';
 import { UserRow } from '../users/users.service';
-import { FilesService, PublicFile, toPublicFile } from './files.service';
+import { parseIds } from './albums.service';
+import { ClaimResult, Estimate, FilesService, MAX_CLAIM, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
@@ -61,12 +62,64 @@ export class FilesController {
     return { ...u, quotaBytes: req.user.quota_bytes === null ? null : Number(req.user.quota_bytes) };
   }
 
+  // Заявка по хешу: «такой файл уже есть в облаке?». Если есть, запись создаётся сразу и загружать нечего.
+  @Post('claim')
+  @HttpCode(200)
+  async claim(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ results: ClaimResult[] }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const items = asObject(req.body).items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > MAX_CLAIM) throw new BadRequestException(`items: список от 1 до ${MAX_CLAIM} файлов`);
+    return { results: await this.files.claim(req.user, items.map((x) => asObject(x))) };
+  }
+
+  // Оценка перед загрузкой папки: сколько байт нужно и влезет ли в остаток квоты.
+  @Post('estimate')
+  @HttpCode(200)
+  async estimate(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<Estimate> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const n = asObject(req.body).bytes;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) throw new BadRequestException('Поле bytes: число байт');
+    return this.files.estimate(req.user, n);
+  }
+
+  // Просьба к администратору добавить место.
+  @Post('quota-request')
+  @HttpCode(200)
+  async quotaRequest(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ ok: true }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (typeof o.needBytes !== 'number' || !Number.isSafeInteger(o.needBytes) || o.needBytes < 1) throw new BadRequestException('Поле needBytes: число байт');
+    await this.files.requestQuota(req.user, o.needBytes, typeof o.note === 'string' ? o.note : '');
+    return { ok: true };
+  }
+
+  // Действие над многими файлами: hide (в корзину), restore (вернуть), remove (убрать из корзины насовсем у себя).
+  @Post('bulk')
+  @HttpCode(200)
+  async bulk(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ changed: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (o.action !== 'hide' && o.action !== 'restore' && o.action !== 'remove') throw new BadRequestException('action: hide, restore или remove');
+    return { changed: await this.files.bulk(req.user, o.action, parseIds(o.ids)) };
+  }
+
+  // Очистить корзину: записи человека исчезают, файлы на диске остаются до решения администратора.
+  @Delete('trash')
+  async emptyTrash(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ removed: number }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return { removed: await this.files.emptyTrash(req.user) };
+  }
+
   // Миниатюра фото (маленький WebP). id неизменен и содержимое тоже, поэтому браузер может хранить её год.
   // Если миниатюру сделать нельзя (видео, HEIC, битый файл), отвечаем 404, и сайт показывает значок.
   @Get(':id/thumb')
   async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
-    const f = await this.files.getOwned(req.user.id, id);
-    const rel = f.trashed_at ? null : await this.thumbs.ensure(f);
+    const f = await this.files.getReadable(req.user.id, id);
+    const rel = await this.thumbs.ensure(f); // скрытые файлы тоже: они остаются на месте
     if (!rel) {
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.status(404).json({ message: 'Миниатюры нет' });
@@ -89,7 +142,7 @@ export class FilesController {
   // Отдача оригинала. sendFile сам умеет Range (докачка и перемотка видео) и не выходит за каталог данных.
   @Get(':id')
   async download(@Req() req: Req_, @Res() res: Response, @Param('id') id: string, @Query('download') dl?: string): Promise<void> {
-    const f = await this.files.getOwned(req.user.id, id);
+    const f = await this.files.getReadable(req.user.id, id);
     if (f.trashed_at) {
       res.status(404).json({ message: 'Файл не найден' });
       return;

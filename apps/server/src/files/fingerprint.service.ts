@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { DbService } from '../db/db.service';
 import { Fingerprint, SIZE, fingerprintFromRgb } from './similar';
 import { FileRow } from './files.service';
+import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
 
@@ -18,6 +19,7 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(DbService) private readonly db: DbService,
     @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(ActivityService) private readonly activity: ActivityService,
   ) {}
 
   // Каждые 20 секунд берём небольшую пачку файлов без отпечатка (старые файлы и то, что не успели при загрузке).
@@ -57,12 +59,12 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
   }
 
   warm(f: FileRow): void {
-    void this.ensure(f).catch(() => {});
+    this.activity.defer(() => this.ensure(f));
   }
 
   // Пачка файлов без отпечатка. Один за другим, чтобы не нагружать мини-ПК.
   async backfill(limit = 20): Promise<number> {
-    if (this.busy) return 0;
+    if (this.busy || this.activity.busy()) return 0; // во время загрузок отпечатки ждут
     this.busy = true;
     try {
       const skip = [...this.failed];

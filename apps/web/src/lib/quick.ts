@@ -94,9 +94,9 @@ export function useQuickAlbum(say: (m: string) => void) {
   }, [target, say]);
 
   // Файлы переехали другим способом (окно выбора альбома): подправить галочки.
-  const note = useCallback((list: string[], albumId: string | null) => {
-    if (!target) return;
-    setIds((s) => { const n = new Set(s); for (const id of list) { if (albumId === target.id) n.add(id); else n.delete(id); } return n; });
+  const note = useCallback((list: string[], albumId: string | null, removed = false) => {
+    if (!target || albumId !== target.id) return;
+    setIds((s) => { const n = new Set(s); for (const id of list) { if (removed) n.delete(id); else n.add(id); } return n; });
   }, [target]);
 
   return { target, saved, on, set, setOn, has, toggle, addMany, note };

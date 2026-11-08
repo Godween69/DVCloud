@@ -12,14 +12,20 @@ export interface PublicAlbum {
   count: number;
   coverFileId: string | null;
   createdAt: string;
+  mine: boolean; // false: альбом чужой, им поделились
+  ownerName: string | null; // у чужого альбома: кто поделился
+  sharedWith: number; // у своего альбома: со сколькими людьми он общий
 }
 
 interface AlbumRow {
   id: string;
+  owner_id: string;
   name: string;
   created_at: Date;
   n: string;
   cover: string | null;
+  owner_name: string;
+  shared_with: string;
 }
 
 export const MAX_IDS = 2000;
@@ -48,12 +54,33 @@ export function parseIds(list: unknown): string[] {
   return [...out];
 }
 
-const toPublic = (r: AlbumRow): PublicAlbum => ({ id: r.id, name: r.name, count: Number(r.n), coverFileId: r.cover, createdAt: r.created_at.toISOString() });
+const toPublic = (r: AlbumRow, viewerId: string): PublicAlbum => {
+  const mine = r.owner_id === viewerId;
+  return {
+    id: r.id,
+    name: r.name,
+    count: Number(r.n),
+    coverFileId: r.cover,
+    createdAt: r.created_at.toISOString(),
+    mine,
+    ownerName: mine ? null : r.owner_name,
+    sharedWith: mine ? Number(r.shared_with) : 0,
+  };
+};
 
-const ALBUM_SELECT = `SELECT a.id, a.name, a.created_at,
-  (SELECT count(*) FROM album_files af JOIN files f ON f.id = af.file_id WHERE af.album_id = a.id AND f.trashed_at IS NULL) AS n,
-  (SELECT f.id FROM album_files af JOIN files f ON f.id = af.file_id WHERE af.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1) AS cover
-  FROM albums a`;
+const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name,
+  (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
+  (SELECT f.id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1) AS cover,
+  (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared_with
+  FROM albums a JOIN users u ON u.id = a.owner_id`;
+
+// Альбом виден хозяину и тем, с кем поделились.
+const VISIBLE = `(a.owner_id = $1 OR EXISTS (SELECT 1 FROM album_shares s WHERE s.album_id = a.id AND s.user_id = $1))`;
+
+export interface PublicPerson {
+  login: string;
+  displayName: string;
+}
 
 @Injectable()
 export class AlbumsService {
@@ -62,17 +89,26 @@ export class AlbumsService {
     private readonly storage: StorageService,
   ) {}
 
-  async list(ownerId: string): Promise<PublicAlbum[]> {
-    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE a.owner_id = $1 ORDER BY lower(a.name), a.id`, [ownerId]);
-    return r.rows.map(toPublic);
+  // Свои альбомы и те, которыми поделились. Свои сначала.
+  async list(userId: string): Promise<PublicAlbum[]> {
+    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE ${VISIBLE} ORDER BY (a.owner_id = $1) DESC, lower(a.name), a.id`, [userId]);
+    return r.rows.map((x) => toPublic(x, userId));
   }
 
-  // Чужой и несуществующий альбом неотличимы.
+  // Свой альбом (для изменений). Чужой и несуществующий неотличимы.
   async get(ownerId: string, id: string): Promise<PublicAlbum> {
     if (!ID_RE.test(id)) throw new NotFoundException('Альбом не найден');
-    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE a.id = $1 AND a.owner_id = $2`, [id, ownerId]);
+    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE a.id = $2 AND a.owner_id = $1`, [ownerId, id]);
     if (!r.rows[0]) throw new NotFoundException('Альбом не найден');
-    return toPublic(r.rows[0]);
+    return toPublic(r.rows[0], ownerId);
+  }
+
+  // Альбом для чтения: свой или тот, которым поделились. Возвращает и номер хозяина (его файлы показываем).
+  async getVisible(userId: string, id: string): Promise<{ album: PublicAlbum; ownerId: string }> {
+    if (!ID_RE.test(id)) throw new NotFoundException('Альбом не найден');
+    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE a.id = $2 AND ${VISIBLE}`, [userId, id]);
+    if (!r.rows[0]) throw new NotFoundException('Альбом не найден');
+    return { album: toPublic(r.rows[0], userId), ownerId: r.rows[0].owner_id };
   }
 
   async create(ownerId: string, rawName: unknown): Promise<PublicAlbum> {
@@ -104,13 +140,13 @@ export class AlbumsService {
     await this.db.query('DELETE FROM albums WHERE id = $1 AND owner_id = $2', [id, ownerId]);
   }
 
-  // Добавить фото в альбом. Если фото уже лежало в другом альбоме, оно переезжает (это и есть «Сменить альбом»).
+  // Добавить фото в альбом. Одно фото может лежать в нескольких альбомах; повторное добавление ничего не меняет.
   async addFiles(ownerId: string, albumId: string, ids: string[]): Promise<number> {
     await this.get(ownerId, albumId);
     const r = await this.db.query(
-      `INSERT INTO album_files (file_id, album_id)
+      `INSERT INTO album_items (file_id, album_id)
        SELECT f.id, $2 FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($3::bigint[])
-       ON CONFLICT (file_id) DO UPDATE SET album_id = EXCLUDED.album_id, added_at = now()`,
+       ON CONFLICT (album_id, file_id) DO NOTHING`,
       [ownerId, albumId, ids],
     );
     return r.rowCount ?? 0;
@@ -118,46 +154,83 @@ export class AlbumsService {
 
   async removeFiles(ownerId: string, albumId: string, ids: string[]): Promise<number> {
     await this.get(ownerId, albumId);
-    const r = await this.db.query('DELETE FROM album_files WHERE album_id = $1 AND file_id = ANY($2::bigint[])', [albumId, ids]);
+    const r = await this.db.query('DELETE FROM album_items WHERE album_id = $1 AND file_id = ANY($2::bigint[])', [albumId, ids]);
     return r.rowCount ?? 0;
   }
 
   // Номера всех файлов альбома (без корзины): сайт по ним отмечает, что уже добавлено в «быстрый альбом».
-  async fileIds(ownerId: string, albumId: string): Promise<string[]> {
-    await this.get(ownerId, albumId);
+  async fileIds(userId: string, albumId: string): Promise<string[]> {
+    const { ownerId } = await this.getVisible(userId, albumId);
     const r = await this.db.query<{ id: string }>(
-      `SELECT f.id FROM files f JOIN album_files af ON af.file_id = f.id
-       WHERE af.album_id = $1 AND f.owner_id = $2 AND f.trashed_at IS NULL`,
+      `SELECT f.id FROM files f JOIN album_items ai ON ai.file_id = f.id
+       WHERE ai.album_id = $1 AND f.owner_id = $2 AND f.trashed_at IS NULL`,
       [albumId, ownerId],
     );
     return r.rows.map((x) => x.id);
   }
 
-  async albumOfFile(ownerId: string, fileId: string): Promise<{ id: string; name: string } | null> {
+  // Во всех ли альбомах человека лежит файл (свои альбомы; пустой список = ни в каком).
+  async albumsOfFile(ownerId: string, fileId: string): Promise<{ id: string; name: string }[]> {
     if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
+    const own = await this.db.query('SELECT 1 FROM files WHERE id = $1 AND owner_id = $2', [fileId, ownerId]);
+    if (!own.rows[0]) throw new NotFoundException('Файл не найден');
     const r = await this.db.query<{ id: string; name: string }>(
-      `SELECT a.id, a.name FROM files f LEFT JOIN album_files af ON af.file_id = f.id LEFT JOIN albums a ON a.id = af.album_id
-       WHERE f.id = $1 AND f.owner_id = $2`,
+      `SELECT a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = $1 AND a.owner_id = $2 ORDER BY lower(a.name), a.id`,
       [fileId, ownerId],
     );
-    if (!r.rows[0]) throw new NotFoundException('Файл не найден');
-    return r.rows[0].id ? { id: r.rows[0].id, name: r.rows[0].name } : null;
+    return r.rows;
   }
 
-  // Файлы альбома для архива (без корзины), старые сверху.
-  async albumRows(ownerId: string, albumId: string): Promise<{ title: string; rows: FileRow[] }> {
-    const a = await this.get(ownerId, albumId);
+  // Файлы альбома для архива (без корзины), старые сверху. Работает и для чужого альбома, которым поделились.
+  async albumRows(userId: string, albumId: string): Promise<{ title: string; rows: FileRow[] }> {
+    const { album, ownerId } = await this.getVisible(userId, albumId);
     const r = await this.db.query<FileRow>(
-      `SELECT f.* FROM files f JOIN album_files af ON af.file_id = f.id
-       WHERE af.album_id = $1 AND f.owner_id = $2 AND f.trashed_at IS NULL ORDER BY f.taken_at, f.id`,
+      `SELECT f.* FROM files f JOIN album_items ai ON ai.file_id = f.id
+       WHERE ai.album_id = $1 AND f.owner_id = $2 AND f.trashed_at IS NULL ORDER BY f.taken_at, f.id`,
       [albumId, ownerId],
     );
-    return { title: a.name, rows: r.rows };
+    return { title: album.name, rows: r.rows };
+  }
+
+  // ---- Общий доступ ----
+
+  // Все остальные люди облака: с ними можно делиться (семья видит друг друга).
+  async people(userId: string): Promise<PublicPerson[]> {
+    const r = await this.db.query<{ login: string; display_name: string }>('SELECT login, display_name FROM users WHERE id <> $1 AND NOT disabled ORDER BY lower(display_name), login', [userId]);
+    return r.rows.map((x) => ({ login: x.login, displayName: x.display_name }));
+  }
+
+  async shares(ownerId: string, albumId: string): Promise<PublicPerson[]> {
+    await this.get(ownerId, albumId);
+    const r = await this.db.query<{ login: string; display_name: string }>(
+      'SELECT u.login, u.display_name FROM album_shares s JOIN users u ON u.id = s.user_id WHERE s.album_id = $1 ORDER BY lower(u.display_name), u.login',
+      [albumId],
+    );
+    return r.rows.map((x) => ({ login: x.login, displayName: x.display_name }));
+  }
+
+  async share(ownerId: string, albumId: string, login: string): Promise<void> {
+    await this.get(ownerId, albumId);
+    const u = await this.db.query<{ id: string }>('SELECT id FROM users WHERE login = $1 AND id <> $2 AND NOT disabled', [login, ownerId]);
+    if (!u.rows[0]) throw new NotFoundException('Нет такого человека');
+    await this.db.query('INSERT INTO album_shares (album_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [albumId, u.rows[0].id]);
+  }
+
+  async unshare(ownerId: string, albumId: string, login: string): Promise<void> {
+    await this.get(ownerId, albumId);
+    await this.db.query('DELETE FROM album_shares WHERE album_id = $1 AND user_id = (SELECT id FROM users WHERE login = $2)', [albumId, login]);
+  }
+
+  // Человек убирает чужой альбом из своего списка (общий доступ закрывается только для него).
+  async leave(userId: string, albumId: string): Promise<void> {
+    await this.db.query('DELETE FROM album_shares WHERE album_id = $1 AND user_id = $2', [albumId, userId]);
   }
 
   async selectionRows(ownerId: string, ids: string[]): Promise<FileRow[]> {
     const r = await this.db.query<FileRow>(
-      'SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND id = ANY($2::bigint[]) ORDER BY taken_at, id',
+      `SELECT f.* FROM files f WHERE f.trashed_at IS NULL AND f.id = ANY($2::bigint[]) AND (f.owner_id = $1 OR EXISTS (
+         SELECT 1 FROM album_items ai JOIN album_shares s ON s.album_id = ai.album_id WHERE ai.file_id = f.id AND s.user_id = $1))
+       ORDER BY f.taken_at, f.id`,
       [ownerId, ids],
     );
     return r.rows;

@@ -5,14 +5,19 @@ import { api, sendFile } from '../api';
 import { useFeed } from '../lib/useFeed';
 import { useQuickAlbum } from '../lib/quick';
 import { UploadQueue, type UploadJob } from '../lib/uploader';
+import { claimFile } from '../lib/claim';
+import { filesFromDrop, filesFromInput, uploadable, type PickedFile } from '../lib/folders';
+import { countFiles } from '../lib/format';
 import { useTheme } from '../lib/theme';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
-import type { Album, AlbumRef, FileItem, Usage, User } from '../types';
-import { AlbumPicker } from './AlbumPicker';
+import type { Album, AlbumRef, Estimate, FileItem, Usage, User } from '../types';
+import { QuotaDialog } from './QuotaDialog';
+import { AlbumPicker, type PickResult } from './AlbumPicker';
 import { AlbumHeader, AlbumsView } from './AlbumsView';
 import { Gallery } from './Gallery';
 import { SecurityView } from './SecurityView';
 import { SelectionBar } from './SelectionBar';
+import { ShareDialog } from './ShareDialog';
 import { Toast, type ToastData } from './Toast';
 import { TopBar, type View } from './TopBar';
 import { SimilarView } from './SimilarView';
@@ -29,6 +34,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [viewer, setViewer] = useState<{ id: string } | null>(null);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const [overQuota, setOverQuota] = useState<{ est: Estimate; files: File[] } | null>(null);
   const toastId = useRef(0);
 
   const [album, setAlbum] = useState<Album | null>(null); // открытый альбом (внутри вкладки «Альбомы»)
@@ -36,12 +43,14 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
+  const [sharing, setSharing] = useState(false); // окно «Поделиться альбомом»
   const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
 
   const library = useFeed(false);
   const trash = useFeed(true);
   const albumFeed = useFeed(false, album?.id);
   const inAlbum = view === 'albums' && album !== null;
+  const foreign = inAlbum && album !== null && !album.mine; // чужой общий альбом: только смотреть, сохранять, скачивать
   const active = inAlbum ? albumFeed : library; // из какой ленты листает просмотрщик
 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
@@ -51,7 +60,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const addLib = library.add;
   const queue = useMemo(
-    () => new UploadQueue<File>(sendFile, setJobs, (f, dup) => { if (!dup) addLib(f); refreshUsage(); }),
+    () => new UploadQueue<File & { path?: string }>(sendFile, setJobs, (f, dup) => { if (!dup) addLib(f); refreshUsage(); }, 3, claimFile),
     [addLib, refreshUsage],
   );
 
@@ -68,6 +77,42 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     endSelect();
   }
 
+  function enqueue(files: File[]) {
+    queue.add(files);
+  }
+
+  // Общий вход для кнопок и перетаскивания: папки раскрыты, лишнее отброшено, перед большой загрузкой сверяемся с квотой.
+  async function startUpload(picked: PickedFile[]) {
+    if (picked.length === 0) return;
+    const many = picked.length > 5;
+    const chosen = many ? uploadable(picked) : picked;
+    if (many && chosen.length < picked.length) say(`Пропущено не фото и не видео: ${picked.length - chosen.length}`);
+    if (chosen.length === 0) return;
+    const files = chosen.map((p) => Object.assign(p.file, { path: p.path }) as File);
+    const bytes = files.reduce((n, f) => n + f.size, 0);
+    if (many) {
+      try {
+        const est = await api.estimate(bytes);
+        if (!est.fits) { setOverQuota({ est, files }); return; }
+      } catch { /* оценка не получилась: грузим, квоту всё равно проверит сервер */ }
+    }
+    enqueue(files);
+  }
+  const startRef = useRef(startUpload);
+  startRef.current = startUpload;
+
+  async function askMore() {
+    const o = overQuota;
+    setOverQuota(null);
+    if (!o) return;
+    try {
+      await api.quotaRequest(Math.max(1, o.est.needBytes - (o.est.freeBytes ?? 0)), `Нужно загрузить ${countFiles(o.files.length)}`);
+      say('Просьба отправлена администратору');
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось отправить просьбу');
+    }
+  }
+
   // Перетаскивание файлов в окно: счётчик нужен, потому что dragenter/leave срабатывают на вложенных элементах.
   useEffect(() => {
     let depth = 0;
@@ -80,7 +125,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       e.preventDefault();
       depth = 0;
       setDragging(false);
-      queue.add(Array.from(e.dataTransfer?.files ?? []));
+      const dt = e.dataTransfer;
+      if (dt) void filesFromDrop(dt).then((p) => startRef.current(p));
     };
     window.addEventListener('dragenter', enter);
     window.addEventListener('dragleave', leave);
@@ -106,13 +152,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     try {
       await api.trash(id);
     } catch (e) {
-      say(e instanceof Error ? e.message : 'Не получилось удалить');
+      say(e instanceof Error ? e.message : 'Не получилось скрыть');
       return;
     }
     // Соседний файл показываем вместо удалённого; если соседей нет, просмотрщик закроется сам.
     leaveFeed(id);
     if (inAlbum) library.remove(id);
-    say('Файл в корзине', {
+    say('Файл скрыт', {
       label: 'Вернуть',
       run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось вернуть файл')); },
     });
@@ -125,7 +171,6 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     if (!t || quick.has(f.id)) return null;
     const r = await quick.toggle(f.id);
     if (r !== true) return null;
-    if (inAlbum && album && album.id !== t.id) { leaveFeed(f.id); return 'moved'; }
     return 'added';
   }
 
@@ -133,7 +178,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const t = quick.target;
     if (!t) return;
     const r = await quick.toggle(id);
-    if (r !== null && inAlbum && album && (r ? album.id !== t.id : album.id === t.id)) albumFeed.remove(id);
+    if (r === false && inAlbum && album && album.id === t.id) albumFeed.remove(id);
   }
 
   async function quickSelected() {
@@ -143,14 +188,46 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const n = await quick.addMany(ids);
     if (n === null) return;
     say(`В «${t.name}»: ${n}`);
-    if (inAlbum && album && album.id !== t.id) ids.forEach((id) => albumFeed.remove(id));
     endSelect();
   }
 
-  function albumChanged(file: FileItem, a: AlbumRef | null, n: number) {
-    quick.note([file.id], a?.id ?? null);
-    say(a ? `В альбоме «${a.name}»` : n ? 'Убрано из альбома' : 'Ничего не изменилось');
-    if (inAlbum && album && a?.id !== album.id) leaveFeed(file.id);
+  function albumChanged(file: FileItem, r: PickResult) {
+    const a = r.album;
+    if (a) quick.note([file.id], a.id, r.removed);
+    say(!a ? 'Ничего не изменилось' : r.removed ? `Убрано из альбома «${a.name}»` : `В альбоме «${a.name}»`);
+    if (r.removed && a && inAlbum && album && a.id === album.id) leaveFeed(file.id);
+  }
+
+  async function hideSelected() {
+    const ids = [...selected];
+    try {
+      const n = await api.bulk('hide', ids);
+      ids.forEach((id) => { library.remove(id); albumFeed.remove(id); });
+      endSelect();
+      refreshUsage();
+      say(n === 1 ? 'Файл скрыт' : `Скрыто файлов: ${n}`, { label: 'Вернуть', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось вернуть')); } });
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось скрыть');
+    }
+  }
+
+  async function saveSelected() {
+    if (!album) return;
+    const ids = [...selected];
+    try {
+      const r = await api.saveAlbum(album.id, ids);
+      savedToast(r);
+      endSelect();
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось сохранить');
+    }
+  }
+  function savedToast(r: { added: number; skipped: number; quota: boolean }) {
+    library.loadMore(true);
+    refreshUsage();
+    if (r.quota) say(`Сохранено: ${r.added}. Остальное не влезло в вашу квоту`);
+    else if (r.added === 0) say('Эти фото уже в вашей библиотеке');
+    else say(`Сохранено в библиотеку: ${r.added}${r.skipped ? `, уже были: ${r.skipped}` : ''}`);
   }
 
   async function removeSelectedFromAlbum() {
@@ -167,13 +244,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
   }
 
-  function selectionPicked(a: AlbumRef | null, n: number) {
+  function selectionPicked(r: PickResult) {
     const ids = picker ?? [];
+    const a = r.album;
     setPicker(null);
     if (!a) return;
     quick.note(ids, a.id);
-    say(`В альбом «${a.name}»: ${n}`);
-    if (inAlbum && album && a.id !== album.id) ids.forEach((id) => albumFeed.remove(id));
+    say(`В альбом «${a.name}»: ${r.n}`);
     endSelect();
   }
 
@@ -191,8 +268,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
-      <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { queue.add(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
+      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
+      <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
         {view === 'library' && gallery(library)}
         {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
@@ -200,35 +278,40 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         {view === 'albums' && album && (
           <>
             <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
+              onShare={() => setSharing(true)} onSaved={savedToast} onLeft={() => { say('Альбом убран из вашего списка'); changeView('albums'); }}
               isQuick={quick.target?.id === album.id} onQuick={() => { const on = quick.target?.id !== album.id; quick.set(on ? { id: album.id, name: album.name } : null); say(on ? `Быстрый альбом: «${album.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />
             {gallery(albumFeed)}
           </>
         )}
         {view === 'security' && <SecurityView onError={say} />}
-        {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
+        {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл скрыт' : `Скрыто файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}
             onRestored={(f) => { trash.remove(f.id); library.add(f); refreshUsage(); say('Файл возвращён в библиотеку'); }}
-            onPurged={(id) => { trash.remove(id); refreshUsage(); say('Файл удалён навсегда'); }} onError={say} />
+            onPurged={(id) => { trash.remove(id); refreshUsage(); say('Файл убран, место освобождено'); }}
+            onEmptied={(n) => { trash.loadMore(true); refreshUsage(); say(`Убрано файлов: ${n}`); }}
+            onRestoredMany={() => { trash.loadMore(true); library.loadMore(true); refreshUsage(); }} onError={say} />
         )}
       </main>
       <AnimatePresence>
         {selecting && (view === 'library' || inAlbum) && (
-          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum}
+          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
         )}
       </AnimatePresence>
-      {picker && <AlbumPicker ids={picker} current={null} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
-      {targetPicker && <AlbumPicker target ids={[]} current={quick.saved} onClose={() => setTargetPicker(false)} onError={say}
-        onDone={(a) => { setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
+      {sharing && album && album.mine && <ShareDialog album={album} onClose={() => setSharing(false)} onError={say} onChanged={(n) => setAlbum((a) => (a ? { ...a, sharedWith: n } : a))} />}
+      {picker && <AlbumPicker ids={picker} current={[]} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
+      {targetPicker && <AlbumPicker target ids={[]} current={quick.saved ? [quick.saved] : []} onClose={() => setTargetPicker(false)} onError={say}
+        onDone={(r) => { const a = r.album; setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={(f) => toTrash(f.id)} onAlbumChanged={albumChanged} onError={say}
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={foreign ? undefined : (f) => toTrash(f.id)} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
             quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile} />
         )}
       </AnimatePresence>
-      <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} />
+      <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} onCancel={() => queue.cancelWaiting()} onRetry={() => queue.retryFailed()} />
+      {overQuota && <QuotaDialog est={overQuota.est} count={overQuota.files.length} onFit={() => { const f = overQuota.files; setOverQuota(null); enqueue(f); }} onAsk={() => { void askMore(); }} onCancel={() => setOverQuota(null)} />}
       <Toast toast={toast} onDone={doneToast} />
       <AnimatePresence>
         {dragging && (

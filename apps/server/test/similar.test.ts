@@ -44,7 +44,7 @@ const png = (raw: Buffer, w: number, h: number) => sharp(raw, { raw: { width: w,
 describe('поиск похожих фото', () => {
   let dir = '';
   const items: Record<string, Item> = {};
-  const svc = new FingerprintService(null as never, null as never);
+  const svc = new FingerprintService(null as never, null as never, null as never);
   let n = 0;
   async function add(name: string, img: ReturnType<typeof sharp>, takenAt: number, size?: number) {
     const path = join(dir, `${name}.jpg`);

@@ -1,11 +1,11 @@
-import { BadRequestException, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { pipeline } from 'node:stream';
 import { Readable } from 'node:stream';
 import { SessionGuard } from '../auth/session.guard';
 import { asObject, requireJson } from '../http';
 import { UserRow } from '../users/users.service';
-import { AlbumsService, parseIds, PublicAlbum, zipFileName } from './albums.service';
+import { AlbumsService, parseIds, PublicAlbum, PublicPerson, zipFileName } from './albums.service';
 import { FilesService, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { zipSize, zipStream } from './zip';
@@ -50,11 +50,19 @@ export class AlbumsController {
     return { album: await this.albums.create(req.user.id, asObject(req.body).name) };
   }
 
-  // В каком альбоме лежит файл (null = ни в каком). Путь из двух частей, поэтому не пересекается с ':id/...'.
+  // В каких альбомах лежит файл. album — первый из них (для старых клиентов), albums — все.
   @Get('of-file/:fileId')
-  async ofFile(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('fileId') fileId: string): Promise<{ album: { id: string; name: string } | null }> {
+  async ofFile(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('fileId') fileId: string): Promise<{ album: { id: string; name: string } | null; albums: { id: string; name: string }[] }> {
     res.setHeader('Cache-Control', 'no-store');
-    return { album: await this.albums.albumOfFile(req.user.id, fileId) };
+    const albums = await this.albums.albumsOfFile(req.user.id, fileId);
+    return { album: albums[0] ?? null, albums };
+  }
+
+  // Люди, с которыми можно делиться.
+  @Get('people')
+  async people(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ people: PublicPerson[] }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return { people: await this.albums.people(req.user.id) };
   }
 
   @Patch(':id')
@@ -75,8 +83,8 @@ export class AlbumsController {
   async feed(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Query('limit') limit?: string, @Query('before') before?: string): Promise<{ album: PublicAlbum; files: PublicFile[]; next: string | null }> {
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const album = await this.albums.get(req.user.id, id);
-    const r = await this.files.list(req.user.id, { trashed: false, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id });
+    const { album, ownerId } = await this.albums.getVisible(req.user.id, id);
+    const r = await this.files.list(ownerId, { trashed: false, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id });
     res.setHeader('Cache-Control', 'no-store');
     return { album, files: r.files.map(toPublicFile), next: r.next };
   }
@@ -93,6 +101,49 @@ export class AlbumsController {
     requireJson(req);
     res.setHeader('Cache-Control', 'no-store');
     return { added: await this.albums.addFiles(req.user.id, id, parseIds(asObject(req.body).ids)) };
+  }
+
+  @Get(':id/shares')
+  async shares(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ people: PublicPerson[] }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return { people: await this.albums.shares(req.user.id, id) };
+  }
+
+  @Put(':id/shares/:login')
+  async share(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Param('login') login: string): Promise<{ ok: true }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    await this.albums.share(req.user.id, id, login);
+    return { ok: true };
+  }
+
+  @Delete(':id/shares/:login')
+  async unshare(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Param('login') login: string): Promise<{ ok: true }> {
+    res.setHeader('Cache-Control', 'no-store');
+    await this.albums.unshare(req.user.id, id, login);
+    return { ok: true };
+  }
+
+  // Убрать чужой альбом из своего списка.
+  @Post(':id/leave')
+  @HttpCode(200)
+  async leave(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ ok: true }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    await this.albums.leave(req.user.id, id);
+    return { ok: true };
+  }
+
+  // Сохранить файлы общего альбома в свою библиотеку (без выбранных ids — весь альбом).
+  @Post(':id/save')
+  @HttpCode(200)
+  async save(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ added: number; skipped: number; quota: boolean }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const { ownerId } = await this.albums.getVisible(req.user.id, id);
+    const ids = asObject(req.body).ids === undefined ? await this.albums.fileIds(req.user.id, id) : parseIds(asObject(req.body).ids);
+    if (ownerId === req.user.id) return { added: 0, skipped: ids.length, quota: false };
+    return this.files.saveShared(req.user, ids);
   }
 
   @Post(':id/remove')

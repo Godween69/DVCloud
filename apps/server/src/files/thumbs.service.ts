@@ -3,6 +3,7 @@ import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
 import { FileRow } from './files.service';
+import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 
 // Сторона квадратной миниатюры в пикселях. Самая крупная плитка: 240 px на ПК и около 185 px на телефоне;
@@ -19,7 +20,10 @@ export class ThumbsService {
   private readonly inflight = new Map<string, Promise<string | null>>();
   private readonly failed = new Set<string>(); // id, по которым разобрать не вышло: повторно не пробуем до перезапуска
 
-  constructor(@Inject(StorageService) private readonly storage: StorageService) {
+  constructor(
+    @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(ActivityService) private readonly activity: ActivityService,
+  ) {
     sharp.cache(false); // кэш libvips не нужен, память на мини-ПК дороже
     sharp.concurrency(1);
   }
@@ -51,8 +55,11 @@ export class ThumbsService {
   }
 
   // Построить заранее, не ожидая результата (после загрузки).
+  // Миниатюра «про запас» строится, когда загрузки простаивают (см. ActivityService).
   warm(f: FileRow): void {
-    void this.ensure(f).catch(() => {});
+    this.activity.defer(async () => {
+      await this.ensure(f);
+    });
   }
 
   async remove(f: Pick<FileRow, 'owner_id' | 'id'>): Promise<void> {

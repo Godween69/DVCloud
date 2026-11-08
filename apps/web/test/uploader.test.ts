@@ -55,3 +55,47 @@ test('сбой сети попадает в статус ошибки, очер�
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual(last.map((j) => j.status), ['error', 'done']);
 });
+
+test('сверка по хешу: файл, который уже есть в облаке, не отправляется, а своё и квота учитываются', async () => {
+  let sent = 0;
+  const send: Sender<ReturnType<typeof file>> = async (f) => {
+    sent++;
+    return { status: 201, json: { file: item(f.name) } };
+  };
+  const claim = async (f: ReturnType<typeof file>) => {
+    if (f.name === 'have.jpg') return { sha256: 'x', state: 'linked' as const, file: item(f.name) };
+    if (f.name === 'mine.jpg') return { sha256: 'x', state: 'mine' as const, file: item(f.name) };
+    if (f.name === 'full.jpg') return { sha256: 'x', state: 'quota' as const };
+    if (f.name === 'broken.jpg') throw new Error('сеть');
+    return { sha256: 'x', state: 'unknown' as const };
+  };
+  let last: UploadJob[] = [];
+  const got: string[] = [];
+  const q = new UploadQueue(send, (j) => (last = j), (fi, dup) => got.push(`${fi.name}:${dup}`), 3, claim);
+  q.add([file('have.jpg'), file('mine.jpg'), file('full.jpg'), file('new.jpg'), file('broken.jpg')]);
+  await new Promise((r) => setTimeout(r, 60));
+  const by = Object.fromEntries(last.map((j) => [j.name, j.status]));
+  assert.deepEqual(by, { 'have.jpg': 'linked', 'mine.jpg': 'duplicate', 'full.jpg': 'error', 'new.jpg': 'done', 'broken.jpg': 'done' });
+  assert.equal(sent, 2, 'по сети ушли только новый файл и тот, у которого сверка не удалась');
+  assert.deepEqual(got.sort(), ['broken.jpg:false', 'have.jpg:false', 'mine.jpg:true', 'new.jpg:false']);
+});
+
+test('отмена ожидающих и повтор неудавшихся', async () => {
+  let fail = true;
+  const send: Sender<ReturnType<typeof file>> = async (f) => {
+    await new Promise((r) => setTimeout(r, 5));
+    if (f.name === 'a.jpg' && fail) return { status: 500, json: null };
+    return { status: 201, json: { file: item(f.name) } };
+  };
+  let last: UploadJob[] = [];
+  const q = new UploadQueue(send, (j) => (last = j), () => {}, 1);
+  q.add([file('a.jpg'), file('b.jpg'), file('c.jpg'), file('d.jpg')]);
+  q.cancelWaiting(); // a уже запущен, остальные ждали
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(last.map((j) => j.status), ['error', 'error', 'error', 'error']);
+  assert.equal(last[1].error, 'Отменено');
+  fail = false;
+  q.retryFailed(); // «Отменено» не повторяется, a повторяется
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(last.map((j) => j.status), ['done', 'error', 'error', 'error']);
+});

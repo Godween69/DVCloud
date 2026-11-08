@@ -47,6 +47,36 @@ export interface Album {
   count: number;
   coverFileId: string | null;
   createdAt: string;
+  mine: boolean; // false: альбом чужой, им поделились
+  ownerName: string | null;
+  sharedWith: number;
+}
+
+export interface Person {
+  login: string;
+  displayName: string;
+}
+
+export type ClaimState = 'linked' | 'restored' | 'mine' | 'unknown' | 'quota' | 'bad';
+export interface ClaimResult {
+  sha256: string;
+  state: ClaimState;
+  file?: FileItem;
+}
+
+export interface Estimate {
+  usedBytes: number;
+  quotaBytes: number | null;
+  freeBytes: number | null;
+  needBytes: number;
+  fits: boolean;
+}
+
+export interface UploadSession {
+  id: string;
+  offset: number;
+  size: number;
+  chunk: number;
 }
 
 export interface AlbumRef {

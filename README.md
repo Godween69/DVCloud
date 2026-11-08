@@ -28,7 +28,7 @@
 - apps/server: сервер на NestJS.
 - apps/web: сайт на React и Vite.
 - apps/admin: локальная админка.
-- apps/android: приложение на Flutter.
+- apps/android: приложение на Kotlin (после веб-версии).
 - docs: документация. tools: служебные скрипты.
 
 ## Лицензия

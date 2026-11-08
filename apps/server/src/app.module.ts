@@ -9,6 +9,9 @@ import { AuditService } from './db/audit.service';
 import { DbService } from './db/db.service';
 import { AlbumsController, ZipController } from './files/albums.controller';
 import { AlbumsService } from './files/albums.service';
+import { ActivityService } from './files/activity.service';
+import { UploadsController } from './files/uploads.controller';
+import { UploadsService } from './files/uploads.service';
 import { FilesController } from './files/files.controller';
 import { FingerprintService } from './files/fingerprint.service';
 import { SimilarController } from './files/similar.controller';
@@ -18,7 +21,9 @@ import { StorageService } from './files/storage.service';
 import { ThumbsService } from './files/thumbs.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
-import { InternalHealthController, InternalUsersController } from './internal/internal.controller';
+import { InternalHealthController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
+import { AdminStorageService } from './files/admin-storage.service';
+import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
 import { UsersService } from './users/users.service';
 
@@ -39,8 +44,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController],
-      providers: [SessionGuard, StorageService, ThumbsService, FilesService, AlbumsService, FingerprintService, SimilarService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, UploadsController],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
     };
   }
 }
@@ -52,8 +57,8 @@ export class InternalModule {
     return {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [InternalHealthController, InternalUsersController],
-      providers: [InternalTokenGuard],
+      controllers: [InternalHealthController, InternalUsersController, InternalStorageController],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService],
     };
   }
 }

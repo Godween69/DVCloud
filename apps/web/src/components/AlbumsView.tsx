@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { ArrowLeft, Download, FolderPlus, Folders, Images, Loader2, Pencil, Trash2, Zap } from 'lucide-react';
+import { ArrowLeft, Download, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Trash2, Users, Zap } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, thumbUrl } from '../api';
 import { albumZipHref } from '../lib/albums';
@@ -56,7 +56,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
         <div className="mx-auto flex max-w-md flex-col items-center px-4 py-20 text-center">
           <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-violet-600/10 text-violet-600 dark:text-violet-400"><Folders className="size-8" aria-hidden /></span>
           <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Альбомов пока нет</h3>
-          <p className="mt-2 text-gray-600 dark:text-gray-400">Создайте альбом, затем добавляйте в него фото из просмотра кнопкой «В альбом» или выбирайте сразу много в библиотеке.</p>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">Создайте альбом, затем добавляйте в него фото из просмотра кнопкой «В альбом» или выбирайте сразу много в библиотеке. Одно фото может лежать в нескольких альбомах. Альбомом можно поделиться с другими людьми облака.</p>
         </div>
       ) : (
         <ul className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(13rem,16rem))]">
@@ -69,12 +69,14 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-3.5 pb-3 pt-14 text-white">
                     <p className="truncate text-base font-semibold drop-shadow">{a.name}</p>
                     <p className="text-sm text-white/80">{countFiles(a.count)}</p>
+                    {!a.mine && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><Users className="size-3.5 shrink-0" aria-hidden />Поделился: {a.ownerName}</p>}
+                    {a.mine && a.sharedWith > 0 && <p className="mt-0.5 flex items-center gap-1 text-xs text-white/80"><Share2 className="size-3.5 shrink-0" aria-hidden />Общий, людей: {a.sharedWith}</p>}
                   </div>
                 </button>
-                <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
+                {a.mine && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
                   className={`absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full py-1.5 text-xs font-medium text-white shadow-md backdrop-blur transition-all ${quick ? 'bg-violet-600 pl-2.5 pr-3 opacity-100' : 'bg-black/45 px-2 opacity-0 hover:bg-violet-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
                   <Zap className="size-3.5" aria-hidden />{quick && 'Быстрый'}
-                </button>
+                </button>}
               </li>
             );
           })}
@@ -93,10 +95,13 @@ interface HeaderProps {
   onError: (m: string) => void;
   isQuick: boolean;
   onQuick: () => void;
+  onShare: () => void;
+  onSaved: (r: { added: number; skipped: number; quota: boolean }) => void;
+  onLeft: () => void;
 }
 
 // Шапка открытого альбома: назад, название (можно переименовать), скачать целиком, удалить альбом.
-export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick }: HeaderProps) {
+export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick, onShare, onSaved, onLeft }: HeaderProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(album.name);
   const [confirm, setConfirm] = useState(false);
@@ -128,11 +133,27 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
     }
   }
 
+  async function saveAll() {
+    try {
+      onSaved(await api.saveAlbum(album.id));
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось сохранить');
+    }
+  }
+  async function leave() {
+    try {
+      await api.leave(album.id);
+      onLeft();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось');
+    }
+  }
+
   const ghost = 'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-paper-200 dark:text-gray-300 dark:hover:bg-gray-800';
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-2 px-3 pt-4 sm:px-6">
       <button type="button" onClick={onBack} className={ghost}><ArrowLeft className="size-4" aria-hidden />Альбомы</button>
-      {editing ? (
+      {editing && album.mine ? (
         <form onSubmit={rename} className="flex gap-2">
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setEditing(false)} maxLength={100} aria-label="Название альбома" className="w-56 rounded-lg border border-paper-300 bg-white px-3 py-1.5 text-lg font-semibold outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
           <button type="submit" className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-500">Сохранить</button>
@@ -140,8 +161,16 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
       ) : (
         <h2 className="min-w-0 truncate text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">{album.name}</h2>
       )}
-      <span className="text-sm text-gray-500">{countFiles(count)}</span>
+      <span className="text-sm text-gray-500">{countFiles(count)}{!album.mine && album.ownerName ? ` · поделился ${album.ownerName}` : ''}</span>
+      {!album.mine ? (
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {count > 0 && <button type="button" onClick={saveAll} className={`${ghost} text-violet-700 dark:text-violet-300`} title="Копии появятся в вашей библиотеке, место на диске почти не тратится"><Save className="size-4" aria-hidden /><span className="hidden sm:inline">Сохранить себе</span></button>}
+          {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
+          <button type="button" onClick={leave} className={ghost} title="Альбом исчезнет из вашего списка, у владельца он останется"><LogOut className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из списка</span></button>
+        </div>
+      ) : (
       <div className="ml-auto flex flex-wrap items-center gap-1">
+        <button type="button" onClick={onShare} className={ghost}><Share2 className="size-4" aria-hidden /><span className="hidden sm:inline">{album.sharedWith > 0 ? `Общий (${album.sharedWith})` : 'Поделиться'}</span></button>
         <button type="button" onClick={onQuick} aria-pressed={isQuick} title={isQuick ? 'Фото из библиотеки кладутся сюда одним нажатием «+». Нажмите, чтобы выключить' : 'Фото из библиотеки будут кладываться сюда одним нажатием «+»'} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isQuick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'text-violet-700 hover:bg-violet-600/10 dark:text-violet-300'}`}><Zap className="size-4" aria-hidden /><span className="hidden sm:inline">{isQuick ? 'Быстрый альбом' : 'Набирать сюда'}</span></button>
         {!editing && <button type="button" onClick={() => setEditing(true)} className={ghost}><Pencil className="size-4" aria-hidden /><span className="hidden sm:inline">Переименовать</span></button>}
         {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
@@ -149,6 +178,7 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
           <Trash2 className="size-4" aria-hidden />{confirm ? 'Удалить альбом? Фото останутся' : <span className="hidden sm:inline">Удалить альбом</span>}
         </button>
       </div>
+      )}
     </motion.div>
   );
 }

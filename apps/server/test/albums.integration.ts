@@ -95,19 +95,21 @@ describe('альбомы (настоящий Postgres и диск)', () => {
     assert.equal((await api('GET', `/api/albums/of-file/${a3}`, { cookie: e.anna })).json.album, null);
   });
 
-  it('«Сменить альбом»: файл переезжает, в двух альбомах не лежит', async () => {
+  it('одно фото лежит в нескольких альбомах, убрать можно из одного', async () => {
     const c = await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Дача' }), ...J });
     const dacha = c.json.album.id;
     await api('POST', `/api/albums/${dacha}/add`, { cookie: e.anna, body: body({ ids: [a1] }), ...J });
-    assert.equal((await api('GET', `/api/albums/of-file/${a1}`, { cookie: e.anna })).json.album.name, 'Дача');
+    assert.deepEqual((await api('GET', `/api/albums/of-file/${a1}`, { cookie: e.anna })).json.albums.map((x: any) => x.name), ['Дача', 'Отпуск 2026']);
     const l = await api('GET', '/api/albums', { cookie: e.anna });
     const by = Object.fromEntries(l.json.albums.map((x: any) => [x.name, x.count]));
-    assert.deepEqual(by, { 'Дача': 1, 'Отпуск 2026': 1 });
-    // убрать из альбома
+    assert.deepEqual(by, { 'Дача': 1, 'Отпуск 2026': 2 });
+    // повторное добавление ничего не меняет
+    const again = await api('POST', `/api/albums/${dacha}/add`, { cookie: e.anna, body: body({ ids: [a1] }), ...J });
+    assert.equal(again.json.added, 0);
+    // убрать из «Дачи»: в основном альбоме фото остаётся
     const rm = await api('POST', `/api/albums/${dacha}/remove`, { cookie: e.anna, body: body({ ids: [a1, a2] }), ...J });
     assert.equal(rm.json.removed, 1);
-    assert.equal((await api('GET', `/api/albums/of-file/${a1}`, { cookie: e.anna })).json.album, null);
-    await api('POST', `/api/albums/${album}/add`, { cookie: e.anna, body: body({ ids: [a1] }), ...J });
+    assert.deepEqual((await api('GET', `/api/albums/of-file/${a1}`, { cookie: e.anna })).json.albums.map((x: any) => x.name), ['Отпуск 2026']);
   });
 
   it('переименование и конфликт имён', async () => {

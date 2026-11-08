@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, loginPage, parseQuotaGb, secretPage, usersPage } from './lib/html.mjs';
+import { CSS, loginPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -53,8 +53,52 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
   const cookie = (value, maxAge) =>
     `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.cookieSecure ? '; Secure' : ''}`;
 
+  async function storageAction(session, res, path, form) {
+    const ok = (text) => { session.flash = { kind: 'ok', text }; };
+    try {
+      let m;
+      if ((m = /^\/storage\/files\/(\d{1,18})\/(purge|adopt)$/.exec(path))) {
+        if (m[2] === 'purge') {
+          const r = await api.purge(m[1]);
+          ok(`Стёрто с диска: ${r.bytes} байт`);
+        } else {
+          const login = form.get('login') ?? '';
+          await api.adopt(m[1], login);
+          ok(`Файл отдан: ${login}`);
+        }
+      } else if (path === '/storage/dedupe') {
+        const apply = form.get('apply') === '1';
+        session.dedupe = await api.dedupe(apply);
+        ok(apply ? 'Лишние копии обработаны' : 'Проверка выполнена, ничего не удалено');
+      } else if ((m = /^\/storage\/albums\/(\d{1,18})\/transfer$/.exec(path))) {
+        const login = form.get('login') ?? '';
+        const r = await api.transfer(m[1], login, false);
+        ok(`Альбом скопирован человеку ${login}, файлов: ${r.linked}`);
+      } else if ((m = /^\/storage\/requests\/(\d{1,18})\/(grant|resolve)$/.exec(path))) {
+        if (m[2] === 'grant') {
+          const q = parseQuotaGb(form.get('quota'));
+          if (q === undefined || q === null) throw new ApiError(400, 'Квота: число гигабайт, например 500');
+          const login = form.get('login') ?? '';
+          await api.update(login, { quotaBytes: q });
+          await api.resolveRequest(m[1]);
+          ok(`Квота для ${login} обновлена, просьба закрыта`);
+        } else {
+          await api.resolveRequest(m[1]);
+          ok('Просьба закрыта');
+        }
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/storage');
+  }
+
   async function doAction(session, req, res, path, form) {
-    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa)$/.exec(path);
+    if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
+    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
     try {
       if (path === '/users') {
         const r = await api.create(form.get('login') ?? '', form.get('displayName') ?? '');
@@ -69,6 +113,12 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       if (action === 'reset2fa') {
         await api.reset2fa(login);
         session.flash = { kind: 'ok', text: `${login}: второй фактор снят, сессии закрыты. Человек настроит его заново после входа.` };
+        return redirect(res, '/');
+      }
+      if (action === 'delete') {
+        if ((form.get('confirm') ?? '') !== login) throw new ApiError(400, `Для удаления введите логин «${login}» в поле рядом с кнопкой`);
+        const r = await api.deleteUser(login, form.get('force') === '1');
+        session.flash = { kind: 'ok', text: `${login}: аккаунт удалён${r.links ? `, записей файлов убрано: ${r.links} (сами файлы остались на диске без владельца)` : ''}` };
         return redirect(res, '/');
       }
       if (action === 'quota') {
@@ -131,6 +181,22 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
       }
       return html(res, 200, usersPage({ users, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/storage') {
+      const flash = session.flash;
+      session.flash = null;
+      const dedupe = session.dedupe ?? null;
+      session.dedupe = null;
+      const data = { stats: null, orphans: [], albums: [], requests: [], users: [] };
+      let loadError = null;
+      try {
+        [data.stats, data.orphans, data.albums, data.requests, data.users] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.requests(), api.list()]);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, storagePage({ ...data, csrf: session.csrf, flash, loadError, dedupe }));
     }
 
     if (req.method !== 'POST') return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');

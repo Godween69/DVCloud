@@ -42,5 +42,15 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     update: (login, patch) => call('PATCH', u(login), patch),
     reset: (login) => call('POST', `${u(login)}/reset-password`, {}),
     reset2fa: (login) => call('POST', `${u(login)}/reset-2fa`, {}),
+    deleteUser: (login, force) => call('DELETE', `${u(login)}${force ? '?force=1' : ''}`),
+    stats: () => call('GET', '/internal/stats'),
+    orphans: async () => (await call('GET', '/internal/files/orphans?limit=200')).orphans,
+    purge: (id) => call('POST', `/internal/files/${encodeURIComponent(id)}/purge`, {}),
+    adopt: (id, login) => call('POST', `/internal/files/${encodeURIComponent(id)}/adopt`, { login }),
+    dedupe: (apply) => call('POST', '/internal/files/dedupe', { limit: 100, apply }),
+    albums: async () => (await call('GET', '/internal/albums')).albums,
+    transfer: (id, login, move) => call('POST', `/internal/albums/${encodeURIComponent(id)}/transfer`, { login, move }),
+    requests: async () => (await call('GET', '/internal/quota-requests')).requests,
+    resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };
 }
