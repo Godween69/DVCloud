@@ -125,7 +125,7 @@ class Models:
         o = ort.SessionOptions()
         o.intra_op_num_threads = self.cfg.threads
         o.inter_op_num_threads = 1
-        o.enable_cpu_mem_arena = False  # меньше «про запас»: память на мини-ПК дорогая
+        o.enable_cpu_mem_arena = False  # меньше «про запас»: память на небольшом сервере дорогая
         o.enable_mem_pattern = False
         try:
             return ort.InferenceSession(path, o, providers=["CPUExecutionProvider"])
@@ -271,7 +271,7 @@ def serve(cfg=None):
 
 
 def selftest(cfg):
-    """Проверка настоящей модели на мини-ПК: файлы на месте, векторы разумные, русский текст совпадает с английским."""
+    """Проверка настоящей модели на сервере: файлы на месте, векторы разумные, русский текст совпадает с английским."""
     import resource
 
     m = Models(cfg)

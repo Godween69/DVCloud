@@ -86,7 +86,7 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
     return r.rows.length;
   }
 
-  // Пачка файлов без отпечатка. Один за другим, чтобы не нагружать мини-ПК.
+  // Пачка файлов без отпечатка. Один за другим, чтобы не нагружать сервер.
   async backfill(limit = 40): Promise<number> {
     if (this.busy || this.activity.busy()) return 0; // во время загрузок отпечатки ждут
     this.busy = true;

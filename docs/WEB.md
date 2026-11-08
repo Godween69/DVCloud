@@ -1,7 +1,7 @@
 # Веб-интерфейс
 
-React 19, Vite, Tailwind CSS 3, Framer Motion, lucide-react. Тот же набор, что на лендинге
-dvbstudio.ru: тёмная тема по умолчанию (переключается, выбор хранится в localStorage),
+React 19, Vite, Tailwind CSS 3, Framer Motion, lucide-react. Тот же набор, что на сайте-визитке
+автора: тёмная тема по умолчанию (переключается, выбор хранится в localStorage),
 фиолетовый акцент.
 
 ## Запуск для разработки

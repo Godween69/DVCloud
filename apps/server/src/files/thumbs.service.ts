@@ -47,7 +47,7 @@ export class ThumbsService {
     @Inject(ActivityService) private readonly activity: ActivityService,
     @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
   ) {
-    sharp.cache(false); // кэш libvips не нужен, память на мини-ПК дороже
+    sharp.cache(false); // кэш libvips не нужен, память на небольшом сервере дороже
     sharp.concurrency(1);
   }
 
