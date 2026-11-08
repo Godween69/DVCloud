@@ -6,6 +6,7 @@ import { FileRow } from './files.service';
 import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
+import { looksLikeScreenshot } from './screenshot';
 
 // Отпечатки фото для поиска похожих. Считаются в фоне: сразу после загрузки и пачками для старых файлов.
 // Оригинал открывается один раз, уменьшается до 256 px и дальше всё считается по маленькой копии.
@@ -47,11 +48,14 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
   async ensure(f: FileRow): Promise<void> {
     if (!ThumbsService.supports(f.mime) || this.failed.has(f.id)) return;
     try {
-      const fp = await this.compute(this.storage.abs(f.path));
+      const abs = this.storage.abs(f.path);
+      const fp = await this.compute(abs);
+      const meta = await sharp(abs, { limitInputPixels: 300_000_000 }).metadata();
+      const shot = looksLikeScreenshot({ format: meta.format, hasExif: !!meta.exif, width: fp.width, height: fp.height });
       await this.db.query(
-        `INSERT INTO file_fingerprints (file_id, dhash, tiny, width, height, sharpness) VALUES ($1,$2,$3,$4,$5,$6)
+        `INSERT INTO file_fingerprints (file_id, dhash, tiny, width, height, sharpness, screenshot) VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (file_id) DO NOTHING`,
-        [f.id, fp.dhash, fp.tiny, fp.width, fp.height, fp.sharpness],
+        [f.id, fp.dhash, fp.tiny, fp.width, fp.height, fp.sharpness, shot],
       );
     } catch {
       this.failed.add(f.id);

@@ -60,18 +60,18 @@ function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileIt
       onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
       onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
       aria-label={selecting ? `${picked ? 'Снять выбор' : 'Выбрать'}: ${file.name}` : `Открыть: ${file.name}`} aria-pressed={selecting ? picked : undefined} title={`${file.name}, ${formatDateTime(file.takenAt)}`} className="absolute inset-0 block size-full overflow-hidden">
-      {video || broken ? (
+      {broken ? (
         <div className="flex size-full flex-col items-center justify-center gap-2 p-2 text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-500 dark:group-hover:text-gray-300">
           {video ? <Film className="size-7" aria-hidden /> : <ImageOff className="size-7" aria-hidden />}
           <span className="line-clamp-2 w-full break-all text-center text-xs">{file.name}</span>
-          {video && (
-            <span className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-black/50 text-white">
-              <Play className="size-3 fill-current" aria-hidden />
-            </span>
-          )}
         </div>
       ) : (
         <img src={thumbUrl(file.id)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} className="size-full object-cover transition-transform duration-300 group-hover:scale-[1.04]" />
+      )}
+      {video && (
+        <span className="pointer-events-none absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-black/50 text-white">
+          <Play className="size-3 fill-current" aria-hidden />
+        </span>
       )}
       {selecting && (
         <>

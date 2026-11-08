@@ -49,6 +49,7 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     adopt: (id, login) => call('POST', `/internal/files/${encodeURIComponent(id)}/adopt`, { login }),
     dedupe: (apply) => call('POST', '/internal/files/dedupe', { limit: 100, apply }),
     albums: async () => (await call('GET', '/internal/albums')).albums,
+    deleteAlbum: (id) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}`),
     transfer: (id, login, move) => call('POST', `/internal/albums/${encodeURIComponent(id)}/transfer`, { login, move }),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),

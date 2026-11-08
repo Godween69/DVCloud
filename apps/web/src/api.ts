@@ -58,10 +58,11 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string) => {
+  list: (trashed: boolean, before?: string, kind?: 'photos' | 'screenshots') => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
+    if (kind && !trashed) q.set('kind', kind);
     return request<{ files: FileItem[]; next: string | null }>('GET', `/api/files?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
@@ -97,6 +98,9 @@ export const api = {
 
 // Миниатюра для плиток: маленький WebP, который сервер строит сам (для видео и неразбираемых форматов её нет).
 export const thumbUrl = (id: string): string => `/api/files/${id}/thumb`;
+
+// Превью для просмотра (WebP до 2000 px): грузится в разы быстрее оригинала.
+export const previewUrl = (id: string): string => `/api/files/${id}/preview`;
 
 export const fileUrl = (id: string, download = false): string => `/api/files/${id}${download ? '?download=1' : ''}`;
 

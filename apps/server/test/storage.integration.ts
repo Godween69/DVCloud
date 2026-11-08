@@ -248,6 +248,18 @@ describe('единое хранение и общий доступ (настоя
     assert.ok((await api('GET', '/api/albums', { cookie: e.anna })).json.albums.some((a: any) => a.id === album));
   });
 
+  it('админ удаляет альбом: файлы людей остаются', async () => {
+    const f = (await upload(e.anna, 'ad1.jpg', jpeg('admin-del-1'), '2026-10-02T10:00:00Z')).json.file.id;
+    const album = (await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Лишний' }), ...J })).json.album.id;
+    await api('POST', `/api/albums/${album}/add`, { cookie: e.anna, body: body({ ids: [f] }), ...J });
+    const del = await fetch(`${e.intBase}/internal/albums/${album}`, { method: 'DELETE', headers: { authorization: `Bearer ${e.token}` } });
+    assert.equal(del.status, 200);
+    assert.ok(!(await api('GET', '/api/albums', { cookie: e.anna })).json.albums.some((a: any) => a.id === album));
+    assert.ok((await api('GET', '/api/files', { cookie: e.anna })).json.files.some((x: any) => x.id === f));
+    const again = await fetch(`${e.intBase}/internal/albums/${album}`, { method: 'DELETE', headers: { authorization: `Bearer ${e.token}` } });
+    assert.equal(again.status, 404);
+  });
+
   it('удаление аккаунта: с файлами только по force, файлы на диске остаются без владельца', async () => {
     const tmp = await e.loginAs('temp');
     await upload(tmp, 'temp.jpg', jpeg('temp-user-file', 4000));
@@ -258,5 +270,23 @@ describe('единое хранение и общий доступ (настоя
     assert.equal(ok.status, 200);
     assert.equal((await libraryFiles()).length, disk);
     assert.ok((await intCall('GET', '/internal/files/orphans')).orphans.some((o: any) => o.name === 'temp.jpg' || o.size > 0));
+  });
+
+  it('скриншоты: PNG размером с экран уходит из библиотеки в «скриншоты», обычное фото остаётся', async () => {
+    const sharp = (await import('sharp')).default;
+    const shot = await sharp({ create: { width: 1080, height: 2400, channels: 3, background: '#223344' } }).png().toBuffer();
+    const photo = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#aa5522' } }).jpeg().withExif({ IFD0: { Make: 'TestCam' } }).toBuffer();
+    const s1 = (await upload(e.anna, 'Screenshot_1.png', shot)).json.file.id;
+    const p1 = (await upload(e.anna, 'IMG_9.jpg', photo)).json.file.id;
+    let shots: string[] = [];
+    for (let i = 0; i < 40 && shots.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      shots = (await api('GET', '/api/files?kind=screenshots', { cookie: e.anna })).json.files.map((f: any) => f.id);
+    }
+    assert.deepEqual(shots, [s1]);
+    const lib = (await api('GET', '/api/files?kind=photos', { cookie: e.anna })).json.files.map((f: any) => f.id);
+    assert.ok(lib.includes(p1) && !lib.includes(s1));
+    assert.ok((await api('GET', '/api/files', { cookie: e.anna })).json.files.some((f: any) => f.id === s1), 'без kind видно всё');
+    assert.equal((await api('GET', '/api/files?kind=x', { cookie: e.anna })).status, 400);
   });
 });

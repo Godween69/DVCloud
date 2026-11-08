@@ -74,6 +74,9 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         const login = form.get('login') ?? '';
         const r = await api.transfer(m[1], login, false);
         ok(`Альбом скопирован человеку ${login}, файлов: ${r.linked}`);
+      } else if ((m = /^\/storage\/albums\/(\d{1,18})\/delete$/.exec(path))) {
+        await api.deleteAlbum(m[1]);
+        ok('Альбом удалён, файлы остались');
       } else if ((m = /^\/storage\/requests\/(\d{1,18})\/(grant|resolve)$/.exec(path))) {
         if (m[2] === 'grant') {
           const q = parseQuotaGb(form.get('quota'));

@@ -130,6 +130,13 @@ export class AdminStorageService {
     return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared) }));
   }
 
+  // Удалить альбом целиком (только сам альбом, его состав и общий доступ; файлы людей остаются).
+  async deleteAlbum(albumId: string): Promise<void> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const r = await this.db.query('DELETE FROM albums WHERE id = $1', [albumId]);
+    if (!r.rowCount) throw new NotFoundException('Альбом не найден');
+  }
+
   // Перенос альбома другому человеку без копирования файлов: у получателя появляются свои записи на те же файлы.
   // move=false: у прежнего хозяина альбом остаётся; move=true: альбом (но не его фото) у него исчезает.
   async transferAlbum(albumId: string, toLogin: string, move: boolean): Promise<{ albumId: string; linked: number }> {

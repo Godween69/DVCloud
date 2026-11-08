@@ -47,10 +47,11 @@ export class FilesController {
   }
 
   @Get()
-  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string): Promise<{ files: PublicFile[]; next: string | null }> {
+  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string): Promise<{ files: PublicFile[]; next: string | null }> {
+    if (kind !== undefined && kind !== 'photos' && kind !== 'screenshots') throw new BadRequestException('kind: photos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, screenshots: kind === undefined ? undefined : kind === 'screenshots' });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next };
   }
@@ -136,6 +137,26 @@ export class FilesController {
       },
     }, (err) => {
       if (err && !res.headersSent) res.status(404).json({ message: 'Миниатюры нет' });
+    });
+  }
+
+  // Превью для просмотра (WebP до 2000 px). Если сделать нельзя (видео, HEIC), 404, и сайт открывает оригинал.
+  @Get(':id/preview')
+  async preview(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
+    const f = await this.files.getReadable(req.user.id, id);
+    const rel = f.trashed_at ? null : await this.thumbs.ensurePreview(f);
+    if (!rel) {
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.status(404).json({ message: 'Превью нет' });
+      return;
+    }
+    res.setHeader('Content-Type', 'image/webp');
+    res.sendFile(rel, {
+      root: this.storage.root,
+      dotfiles: 'deny',
+      headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=31536000, immutable' },
+    }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Превью нет' });
     });
   }
 

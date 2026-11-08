@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
-import { api, fileUrl } from '../api';
+import { api, fileUrl, previewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
@@ -64,6 +64,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   cur.current = file?.id;
   const busy = useRef(false);
   const [broken, setBroken] = useState(false);
+  const [noPreview, setNoPreview] = useState(false); // превью нет или не открылось: показываем оригинал
   const touch = useRef<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
@@ -80,7 +81,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
 
   // Новое фото: масштаб сбрасывается.
-  useEffect(() => { setBroken(false); setView(NO_ZOOM); }, [file?.id]);
+  useEffect(() => { setBroken(false); setNoPreview(false); setView(NO_ZOOM); }, [file?.id]);
 
   // В каком альбоме лежит открытый файл (для подписи кнопки «В альбом» / «Сменить альбом»).
   useEffect(() => {
@@ -228,7 +229,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
                 <a className="rounded-lg bg-violet-600 px-4 py-2 text-white hover:bg-violet-500" href={fileUrl(file.id, true)} download={file.name}>Скачать файл</a>
               </div>
             ) : (
-              <img ref={img} src={fileUrl(file.id)} alt={file.name} onError={() => setBroken(true)} draggable={false}
+              <img ref={img} src={noPreview ? fileUrl(file.id) : previewUrl(file.id)} alt={file.name} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} draggable={false}
                 onClick={onImgClick} onContextMenu={onImgContext} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
                 style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transition: dragging ? 'none' : 'transform 90ms ease-out', touchAction: 'none' }}
                 className={`max-h-full max-w-full select-none rounded-lg object-contain ${view.scale > 1 ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`} />

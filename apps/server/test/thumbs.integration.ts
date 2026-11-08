@@ -1,7 +1,9 @@
 // Миниатюры на настоящем Postgres и диске: размер, поворот, чужие файлы, корзина, удаление. Запуск: npm run test:db
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { stat } from 'node:fs/promises';
+import { stat, readFile, mkdtemp, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { startEnv } from './helpers/filesenv';
@@ -60,6 +62,24 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     assert.equal((await api('GET', `/api/files/${vid.json.file.id}/thumb`, { cookie: e.anna })).status, 404);
   });
 
+  const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+  it('у настоящего видео есть миниатюра-кадр', { skip: !hasFfmpeg && 'нет ffmpeg' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dvc-vid-'));
+    try {
+      const f = join(dir, 'c.mp4');
+      execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10:duration=2', '-pix_fmt', 'yuv420p', f]);
+      const up = await upload(e.anna, 'real.mp4', await readFile(f));
+      assert.equal(up.status, 201);
+      const t = await api('GET', `/api/files/${up.json.file.id}/thumb`, { cookie: e.anna });
+      assert.equal(t.status, 200);
+      const meta = await sharp(t.buf).metadata();
+      assert.equal(meta.format, 'webp');
+      assert.equal((await api('GET', `/api/files/${up.json.file.id}/preview`, { cookie: e.anna })).status, 404);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('окончательное удаление убирает и миниатюру', async () => {
     const up = await upload(e.boris, 'gone.jpg', await photo('#33cc66'));
     const id = up.json.file.id;
@@ -68,5 +88,18 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     await api('DELETE', `/api/files/${id}`, { cookie: e.boris });
     await api('DELETE', `/api/files/${id}?permanent=1`, { cookie: e.boris });
     assert.equal((await e.walk(join(e.dataDir, 'thumbs'))).length, before - 1);
+  });
+
+  it('превью для просмотра: WebP не больше 2000 px, у видео и чужих 404', async () => {
+    const big = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#3366cc' } }).jpeg().toBuffer();
+    const up = await upload(e.anna, 'wide.jpg', big);
+    const id = up.json.file.id;
+    const r = await api('GET', `/api/files/${id}/preview`, { cookie: e.anna });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'image/webp');
+    const m = await sharp(r.buf).metadata();
+    assert.equal(Math.max(m.width ?? 0, m.height ?? 0), 2000);
+    assert.equal((await api('GET', `/api/files/${id}/preview`, { cookie: e.boris })).status, 404);
+    assert.equal((await api('GET', `/api/files/${id}/preview`)).status, 401);
   });
 });

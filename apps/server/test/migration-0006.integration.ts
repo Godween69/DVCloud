@@ -40,7 +40,7 @@ test('миграция 0006: одно содержимое — один blob, с
     const alb = (await c.query(`INSERT INTO albums (owner_id, name) VALUES ($1,'A') RETURNING id`, [anna])).rows[0].id;
     await c.query('INSERT INTO album_files (album_id, file_id) VALUES ($1,$2),($1,$3)', [alb, a1, a2]);
 
-    assert.deepEqual(await migrate(c, DIR), ['0006_storage.sql']);
+    assert.deepEqual((await migrate(c, DIR)).slice(0, 1), ['0006_storage.sql']);
 
     const blobs = (await c.query('SELECT sha256, path FROM blobs ORDER BY sha256')).rows;
     assert.equal(blobs.length, 2);

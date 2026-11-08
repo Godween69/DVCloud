@@ -155,6 +155,13 @@ export class InternalStorageController {
     return r;
   }
 
+  @Delete('albums/:id')
+  async deleteAlbum(@Param('id') id: string): Promise<{ ok: true }> {
+    await this.admin.deleteAlbum(id);
+    await this.audit.write('album.delete', id, {});
+    return { ok: true };
+  }
+
   @Delete('users/:login')
   async deleteUser(@Param('login') login: string, @Query('force') force?: string): Promise<{ links: number }> {
     const r = await this.admin.deleteUser(login, force === '1');

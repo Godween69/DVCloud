@@ -2,13 +2,36 @@ import { Inject, Injectable } from '@nestjs/common';
 import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { FileRow } from './files.service';
 import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 
+const run = promisify(execFile);
+
+// Кадр видео как PNG в памяти (ffmpeg отдельным процессом). Если ffmpeg нет или видео не читается, бросает ошибку.
+async function videoFrame(path: string): Promise<Buffer> {
+  for (const at of ['1', '0']) {
+    try {
+      const { stdout } = await run(
+        'ffmpeg',
+        ['-v', 'error', '-ss', at, '-i', path, '-frames:v', '1', '-vf', 'scale=1280:-2', '-f', 'image2pipe', '-c:v', 'png', '-'],
+        { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000 },
+      );
+      if (stdout.length > 0) return stdout;
+    } catch {
+      /* короткое видео: пробуем с нулевой секунды */
+    }
+  }
+  throw new Error('кадр не получен');
+}
+
 // Сторона квадратной миниатюры в пикселях. Самая крупная плитка: 240 px на ПК и около 185 px на телефоне;
 // 560 хватает с запасом для экранов с плотностью 2-3 и весит десятки килобайт.
 export const THUMB_SIZE = 560;
+// Превью для просмотра: длинная сторона не больше 2000 px (на телефоне и ноутбуке этого хватает, весит в 10-20 раз меньше оригинала).
+export const PREVIEW_SIZE = 2000;
 
 // Превью (миниатюры) фото: маленькие WebP, лежат в thumbs/<id человека>/<id файла>.webp.
 // Строятся при первом запросе и сразу после загрузки; оригиналы не трогаются. Если картинку не разобрать
@@ -32,13 +55,23 @@ export class ThumbsService {
     return `thumbs/${f.owner_id}/${f.id}.webp`;
   }
 
+  previewRel(f: Pick<FileRow, 'owner_id' | 'id'>): string {
+    return `previews/${f.owner_id}/${f.id}.webp`;
+  }
+
+  // Картинки (для отпечатка и превью просмотра).
   static supports(mime: string): boolean {
     return mime.startsWith('image/');
   }
 
+  // Миниатюра есть у картинок и у видео (кадр-постер).
+  static supportsThumb(mime: string): boolean {
+    return mime.startsWith('image/') || mime.startsWith('video/');
+  }
+
   // Путь внутри данных к готовой миниатюре или null, если сделать её нельзя.
   async ensure(f: FileRow): Promise<string | null> {
-    if (!ThumbsService.supports(f.mime) || this.failed.has(f.id)) return null;
+    if (!ThumbsService.supportsThumb(f.mime) || this.failed.has(f.id)) return null;
     const rel = this.rel(f);
     try {
       await stat(this.storage.abs(rel));
@@ -54,6 +87,25 @@ export class ThumbsService {
     return p;
   }
 
+  // Превью для просмотра: строится при первом открытии, потом берётся с диска. null: сделать нельзя, сайт откроет оригинал.
+  async ensurePreview(f: FileRow): Promise<string | null> {
+    const key = `p${f.id}`;
+    if (!ThumbsService.supports(f.mime) || this.failed.has(key)) return null;
+    const rel = this.previewRel(f);
+    try {
+      await stat(this.storage.abs(rel));
+      return rel;
+    } catch {
+      /* ещё нет */
+    }
+    let p = this.inflight.get(key);
+    if (!p) {
+      p = this.build(f, rel, 'preview').finally(() => this.inflight.delete(key));
+      this.inflight.set(key, p);
+    }
+    return p;
+  }
+
   // Построить заранее, не ожидая результата (после загрузки).
   // Миниатюра «про запас» строится, когда загрузки простаивают (см. ActivityService).
   warm(f: FileRow): void {
@@ -64,6 +116,7 @@ export class ThumbsService {
 
   async remove(f: Pick<FileRow, 'owner_id' | 'id'>): Promise<void> {
     await this.storage.remove(this.rel(f));
+    await this.storage.remove(this.previewRel(f));
   }
 
   private async slot<T>(run: () => Promise<T>): Promise<T> {
@@ -77,22 +130,23 @@ export class ThumbsService {
     }
   }
 
-  private build(f: FileRow, rel: string): Promise<string | null> {
+  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' = 'thumb'): Promise<string | null> {
     return this.slot(async () => {
       const out = this.storage.abs(rel);
       const tmp = `${out}.${process.pid}.tmp`;
       try {
         await mkdir(dirname(out), { recursive: true });
-        await sharp(this.storage.abs(f.path), { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: true })
-          .rotate() // поворот по метке камеры (EXIF)
-          .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover', position: 'centre' })
-          .webp({ quality: 70, effort: 2 })
-          .toFile(tmp);
+        const src = f.mime.startsWith('video/') ? await videoFrame(this.storage.abs(f.path)) : this.storage.abs(f.path);
+        const img = sharp(src, { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: typeof src === 'string' }).rotate(); // поворот по метке камеры (EXIF)
+        await (kind === 'thumb'
+          ? img.resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover', position: 'centre' }).webp({ quality: 70, effort: 2 })
+          : img.resize(PREVIEW_SIZE, PREVIEW_SIZE, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80, effort: 3 })
+        ).toFile(tmp);
         await rename(tmp, out);
         return rel;
       } catch {
         await rm(tmp, { force: true });
-        this.failed.add(f.id);
+        this.failed.add(kind === 'thumb' ? f.id : `p${f.id}`);
         return null;
       }
     });

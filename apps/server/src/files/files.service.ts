@@ -294,7 +294,7 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string }): Promise<{ files: FileRow[]; next: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; screenshots?: boolean }): Promise<{ files: FileRow[]; next: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -307,6 +307,10 @@ export class FilesService {
     if (opts.albumId !== undefined) {
       params.push(opts.albumId);
       where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
+    }
+    // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
+    if (opts.albumId === undefined && !opts.trashed && opts.screenshots !== undefined) {
+      where += ` AND ${opts.screenshots ? '' : 'NOT '}EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)`;
     }
     params.push(opts.limit + 1);
     const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} DESC, id DESC LIMIT $${params.length}`, params);

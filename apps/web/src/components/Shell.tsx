@@ -46,12 +46,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [sharing, setSharing] = useState(false); // окно «Поделиться альбомом»
   const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
 
-  const library = useFeed(false);
+  const library = useFeed(false, undefined, 'photos');
+  const shots = useFeed(false, undefined, 'screenshots');
   const trash = useFeed(true);
   const albumFeed = useFeed(false, album?.id);
   const inAlbum = view === 'albums' && album !== null;
   const foreign = inAlbum && album !== null && !album.mine; // чужой общий альбом: только смотреть, сохранять, скачивать
-  const active = inAlbum ? albumFeed : library; // из какой ленты листает просмотрщик
+  const active = inAlbum ? albumFeed : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
@@ -65,6 +66,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   );
 
   useEffect(() => { library.loadMore(true); refreshUsage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { if (view === 'screenshots') shots.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
   useEffect(() => { if (view === 'trash') trash.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
   const refreshAlbums = useCallback(() => { api.albums().then(setAlbums).catch(() => {}); }, []);
   useEffect(() => { if (view === 'albums' && !album) refreshAlbums(); }, [view, album, refreshAlbums]);
@@ -202,7 +204,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = [...selected];
     try {
       const n = await api.bulk('hide', ids);
-      ids.forEach((id) => { library.remove(id); albumFeed.remove(id); });
+      ids.forEach((id) => { library.remove(id); shots.remove(id); albumFeed.remove(id); });
       endSelect();
       refreshUsage();
       say(n === 1 ? 'Файл скрыт' : `Скрыто файлов: ${n}`, { label: 'Вернуть', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось вернуть')); } });
@@ -273,6 +275,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
         {view === 'library' && gallery(library)}
+        {view === 'screenshots' && gallery(shots)}
         {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
           quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (
@@ -294,7 +297,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </main>
       <AnimatePresence>
-        {selecting && (view === 'library' || inAlbum) && (
+        {selecting && (view === 'library' || view === 'screenshots' || inAlbum) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />

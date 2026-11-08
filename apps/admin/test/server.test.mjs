@@ -45,6 +45,7 @@ describe('админка', () => {
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/purge$/.test(req.url)) return j(200, { links: 0, bytes: 2048 });
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
+        if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
         if (req.method === 'POST' && /^\/internal\/quota-requests\/\d+\/resolve$/.test(req.url)) return j(200, { ok: true });
         if (req.method === 'DELETE' && /^\/internal\/users\/[a-z0-9_]+/.test(req.url)) return j(200, { links: 3 });
         j(404, { message: 'нет' });
@@ -195,6 +196,8 @@ describe('админка', () => {
     assert.ok(calls.some((c) => c.startsWith('POST /internal/files/7/adopt') && c.includes('"login":"anna"')));
     await post('/storage/albums/3/transfer', { login: 'boris' });
     assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/transfer') && c.includes('"move":false')));
+    await post('/storage/albums/3/delete', {});
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums/3')));
     const before = calls.length;
     await post('/storage/requests/9/grant', { login: 'anna', quota: 'много' });
     assert.equal(calls.length, before, 'плохая квота не уходит на сервер');

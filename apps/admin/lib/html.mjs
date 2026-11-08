@@ -30,7 +30,7 @@ table { width:100%; border-collapse:collapse; } th,td { text-align:left; padding
 th { font-weight:600; font-size:13px; opacity:.75; }
 form.inline { display:inline-flex; gap:6px; align-items:center; margin:2px 6px 2px 0; }
 input[type=text], input[type=password] { padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
-input.narrow { width:90px; } select { padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; } nav a { color:var(--acc); } nav a[aria-current] { font-weight:600; }
+input.narrow { width:90px; } select { padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; } nav.tabs { display:flex; gap:6px; margin:12px 0 4px; } nav.tabs a { padding:8px 18px; border:1px solid var(--line); border-radius:999px; color:var(--fg); text-decoration:none; opacity:.8; } nav.tabs a:hover { border-color:var(--acc); opacity:1; } nav.tabs a[aria-current] { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; opacity:1; } nav.tabs a:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
 button { padding:7px 12px; border:1px solid var(--acc); border-radius:6px; background:transparent; color:var(--acc); font:inherit; cursor:pointer; }
 button.primary { background:var(--acc); color:#fff; } button.danger { border-color:var(--bad); color:var(--bad); }
 .secret { font:20px/1.3 ui-monospace, monospace; padding:12px; border:1px dashed var(--acc); border-radius:8px; user-select:all; word-break:break-all; }
@@ -69,7 +69,7 @@ ${u.twoFactor ? act('reset2fa', 'Сбросить 2FA', 'danger') : ''}
 ${act('delete', 'Удалить', 'danger', `<input class="narrow" type="text" name="confirm" placeholder="логин" aria-label="Для удаления введите логин ${login}" autocomplete="off"><label class="muted"><input type="checkbox" name="force" value="1"> с файлами</label>`)}</td></tr>`;
 }
 
-const nav = (current) => `<nav class="muted"><a href="/"${current === 'users' ? ' aria-current="page"' : ''}>Люди</a> · <a href="/storage"${current === 'storage' ? ' aria-current="page"' : ''}>Хранилище</a></nav>`;
+const nav = (current) => `<nav class="tabs" aria-label="Разделы"><a href="/"${current === 'users' ? ' aria-current="page"' : ''}>Люди</a><a href="/storage"${current === 'storage' ? ' aria-current="page"' : ''}>Хранилище</a></nav>`;
 
 export function formatSize(bytes) {
   const n = Number(bytes);
@@ -97,7 +97,8 @@ ${post(csrf, `/storage/requests/${encodeURIComponent(r.id)}/resolve`, {}, 'За�
 <td>${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/adopt`, {}, 'Отдать', '', pick('login'))}
 ${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/purge`, {}, 'Стереть с диска', 'danger')}</td></tr>`).join('');
   const albumRows = albums.map((a) => `<tr><td>${esc(a.name)}</td><td>${esc(a.owner)}</td><td>${a.count}</td><td>${a.sharedWith || '—'}</td>
-<td>${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/transfer`, {}, 'Скопировать', '', pick('login'))}</td></tr>`).join('');
+<td>${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/transfer`, {}, 'Скопировать', '', pick('login'))}
+${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/delete`, {}, 'Удалить', 'danger')}</td></tr>`).join('');
   return layout('DV Cloud: хранилище', `
 <header><div><h1>DV Cloud: хранилище</h1>${nav('storage')}</div>
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit">Выйти</button></form></header>
@@ -120,7 +121,7 @@ ${dedupe ? `<div class="msg ok">Проверено: ${dedupe.checked}, удал�
 <p>${post(csrf, '/storage/dedupe', { apply: '0' }, 'Только проверить')} ${post(csrf, '/storage/dedupe', { apply: '1' }, 'Удалить лишние копии', 'danger')}</p>
 
 <h2>Альбомы</h2>
-<p class="muted">«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту.</p>
+<p class="muted">«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту. «Удалить» убирает только сам альбом (и общий доступ к нему), файлы людей остаются.</p>
 <table><thead><tr><th>Альбом</th><th>Владелец</th><th>Файлов</th><th>Общий</th><th>Действия</th></tr></thead>
 <tbody>${albumRows || '<tr><td colspan="5" class="muted">Альбомов нет.</td></tr>'}</tbody></table>`);
 }

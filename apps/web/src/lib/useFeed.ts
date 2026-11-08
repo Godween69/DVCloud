@@ -4,7 +4,7 @@ import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
 // Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
-export function useFeed(trashed: boolean, albumId?: string) {
+export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'screenshots') {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -32,7 +32,7 @@ export function useFeed(trashed: boolean, albumId?: string) {
       setError(null);
       try {
         const before = reset ? undefined : (cursor.current ?? undefined);
-        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before);
+        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before, kind);
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
@@ -52,7 +52,7 @@ export function useFeed(trashed: boolean, albumId?: string) {
         }
       }
     },
-    [trashed, albumId],
+    [trashed, albumId, kind],
   );
 
   const add = useCallback((f: FileItem) => setFiles((prev) => insertSorted(prev, f)), []);
