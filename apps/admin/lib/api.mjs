@@ -51,6 +51,11 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     albums: async () => (await call('GET', '/internal/albums')).albums,
     deleteAlbum: (id) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}`),
     transfer: (id, login, move) => call('POST', `/internal/albums/${encodeURIComponent(id)}/transfer`, { login, move }),
+    media: () => call('GET', '/internal/media'),
+    dates: async () => (await call('GET', '/internal/media/dates')).job,
+    startDates: (apply) => call('POST', '/internal/media/dates', { apply }),
+    saveMedia: (patch) => call('PATCH', '/internal/media/settings', patch),
+    clearMedia: (what) => call('POST', '/internal/media/clear', { what }),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };

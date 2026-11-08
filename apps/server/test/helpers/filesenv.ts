@@ -17,6 +17,7 @@ export function startEnv() {
   let dataDir = '';
   let pub: Awaited<ReturnType<typeof createApps>>['pub'];
   let internal: Awaited<ReturnType<typeof createApps>>['internal'];
+  let dbUrl = '';
   let base = '';
   let intBase = '';
   let anna = '';
@@ -68,6 +69,7 @@ export function startEnv() {
   async function start(): Promise<void> {
     const db = await createTestDb(ADMIN_URL);
     drop = db.drop;
+    dbUrl = db.url;
     dataDir = await mkdtemp(join(tmpdir(), 'dvcloud-data-'));
     const cfg = loadConfig({ DVCLOUD_DATABASE_URL: db.url, DVCLOUD_INTERNAL_TOKEN: TOKEN, DVCLOUD_DATA_DIR: dataDir, DVCLOUD_COOKIE_SECURE: 'true' });
     ({ pub, internal } = await createApps(cfg, true));
@@ -84,5 +86,5 @@ export function startEnv() {
     await drop?.();
     if (dataDir) await rm(dataDir, { recursive: true, force: true });
   }
-  return { start, stop, api, upload, intCall, loginAs, jpeg, walk, get dataDir() { return dataDir; }, get base() { return base; }, get intBase() { return intBase; }, get token() { return TOKEN; }, get anna() { return anna; }, get boris() { return boris; } };
+  return { start, stop, api, upload, intCall, loginAs, jpeg, walk, get dataDir() { return dataDir; }, get dbUrl() { return dbUrl; }, get base() { return base; }, get intBase() { return intBase; }, get token() { return TOKEN; }, get anna() { return anna; }, get boris() { return boris; } };
 }

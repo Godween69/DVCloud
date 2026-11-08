@@ -4,7 +4,7 @@ import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
 // Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
-export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'screenshots') {
+export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'videos' | 'screenshots') {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);

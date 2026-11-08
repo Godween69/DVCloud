@@ -63,6 +63,7 @@ export class AdminStorageService {
     await this.db.query('DELETE FROM files WHERE blob_id = $1', [id]);
     await this.db.query('DELETE FROM blobs WHERE id = $1', [id]);
     for (const p of paths) await this.storage.remove(p);
+    await this.storage.remove(`videos/${id}.mp4`); // копия для просмотра (строка video_copies ушла вместе с blobs)
     for (const l of links) await this.storage.remove(`thumbs/${l.owner_id}/${l.id}.webp`);
     return { links: links.length, bytes: Number(b.size_bytes) };
   }

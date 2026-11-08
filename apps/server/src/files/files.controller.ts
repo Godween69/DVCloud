@@ -8,6 +8,7 @@ import { ClaimResult, Estimate, FilesService, MAX_CLAIM, PublicFile, toPublicFil
 import { contentDisposition } from './names';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
+import { VideoService } from './video.service';
 
 type Req_ = Request & { user: UserRow };
 
@@ -19,6 +20,7 @@ export class FilesController {
     private readonly files: FilesService,
     private readonly storage: StorageService,
     private readonly thumbs: ThumbsService,
+    private readonly video: VideoService,
   ) {}
 
   // Загрузка одного файла потоком: тело запроса это сам файл. Имя в ?name=, дата снимка в заголовке X-File-Modified.
@@ -48,10 +50,10 @@ export class FilesController {
 
   @Get()
   async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string): Promise<{ files: PublicFile[]; next: string | null }> {
-    if (kind !== undefined && kind !== 'photos' && kind !== 'screenshots') throw new BadRequestException('kind: photos или screenshots');
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, screenshots: kind === undefined ? undefined : kind === 'screenshots' });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next };
   }
@@ -154,9 +156,29 @@ export class FilesController {
     res.sendFile(rel, {
       root: this.storage.root,
       dotfiles: 'deny',
-      headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=31536000, immutable' },
+      headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' }, // настройки превью можно менять: час, не год
     }, (err) => {
       if (err && !res.headersSent) res.status(404).json({ message: 'Превью нет' });
+    });
+  }
+
+  // Видео для просмотра: уменьшенная копия (H.264), если она готова и включена в админке. Иначе 404, и сайт играет оригинал.
+  @Get(':id/view')
+  async view(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
+    const f = await this.files.getReadable(req.user.id, id);
+    const rel = f.trashed_at ? null : await this.video.copyFor(f);
+    if (!rel) {
+      res.setHeader('Cache-Control', 'private, max-age=30');
+      res.status(404).json({ message: 'Копии для просмотра нет' });
+      return;
+    }
+    res.setHeader('Content-Type', 'video/mp4');
+    res.sendFile(rel, {
+      root: this.storage.root,
+      dotfiles: 'deny',
+      headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, no-cache' },
+    }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Копии для просмотра нет' });
     });
   }
 

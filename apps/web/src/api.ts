@@ -58,7 +58,7 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string, kind?: 'photos' | 'screenshots') => {
+  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots') => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
@@ -102,6 +102,8 @@ export const thumbUrl = (id: string): string => `/api/files/${id}/thumb`;
 // Превью для просмотра (WebP до 2000 px): грузится в разы быстрее оригинала.
 export const previewUrl = (id: string): string => `/api/files/${id}/preview`;
 
+// Видео для просмотра: уменьшенная копия, если её сделал сервер; иначе 404 и плеер берёт оригинал.
+export const videoViewUrl = (id: string): string => `/api/files/${id}/view`;
 export const fileUrl = (id: string, download = false): string => `/api/files/${id}${download ? '?download=1' : ''}`;
 
 // Один запрос с телом и прогрессом. Возвращает HTTP-статус и разобранный JSON.

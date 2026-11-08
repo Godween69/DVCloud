@@ -1,4 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnsupportedMediaTypeException } from '@nestjs/common';
+import { MediaSettingsService } from './media-settings';
+import { detectTakenAt } from './taken';
 import { rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { Config } from '../config';
@@ -92,6 +94,7 @@ export class FilesService {
     private readonly fingerprints: FingerprintService,
     private readonly activity: ActivityService,
     @Inject(CONFIG) private readonly cfg: Config,
+    @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
   ) {}
 
   async usage(ownerId: string): Promise<{ usedBytes: number; count: number }> {
@@ -174,6 +177,12 @@ export class FilesService {
     }
   }
 
+  // Дата съёмки: метаданные файла, затем имя файла, и только потом дата изменения из браузера.
+  private async takenAt(abs: string, mime: string, name: string, fallback: Date): Promise<Date> {
+    const tz = (await this.settings.get()).timezone;
+    return (await detectTakenAt({ abs, mime, name, tz })).date ?? fallback;
+  }
+
   private async checkRoom(user: UserRow, add: number): Promise<void> {
     if (user.quota_bytes === null) return;
     const { usedBytes } = await this.usage(user.id);
@@ -187,13 +196,14 @@ export class FilesService {
     size: number,
     sha256: string,
     clean: NonNullable<ReturnType<typeof cleanFileName>>,
-    takenAt: Date,
+    modifiedAt: Date,
   ): Promise<{ file: FileRow; duplicate: boolean }> {
     const live = await this.findLiveBySha(user.id, sha256);
     if (live) return { file: live, duplicate: true };
     const hidden = await this.findHiddenBySha(user.id, sha256);
     if (hidden) return { file: await this.unhide(hidden), duplicate: false };
     await this.checkRoom(user, size);
+    const takenAt = await this.takenAt(tmp, clean.mime, clean.name, modifiedAt);
 
     let blob = await this.blobBySha(sha256);
     let created = false;
@@ -281,7 +291,8 @@ export class FilesService {
         out.push({ sha256: sha, state: 'quota' });
         continue;
       }
-      const takenAt = parseTakenAt(typeof it.modified === 'string' || typeof it.modified === 'number' ? String(it.modified) : undefined, Date.now());
+      const modified = parseTakenAt(typeof it.modified === 'string' || typeof it.modified === 'number' ? String(it.modified) : undefined, Date.now());
+      const takenAt = await this.takenAt(this.storage.abs(blob.path), blob.mime, clean.name, modified);
       const { file, created } = await this.linkBlob(user, blob, clean.name, takenAt);
       if (created) {
         this.thumbs.warm(file);
@@ -294,7 +305,7 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; screenshots?: boolean }): Promise<{ files: FileRow[]; next: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots' }): Promise<{ files: FileRow[]; next: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -309,8 +320,10 @@ export class FilesService {
       where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
     }
     // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
-    if (opts.albumId === undefined && !opts.trashed && opts.screenshots !== undefined) {
-      where += ` AND ${opts.screenshots ? '' : 'NOT '}EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)`;
+    // Разделы ленты: фото (картинки кроме скриншотов), видео, скриншоты; без kind всё вместе.
+    if (opts.albumId === undefined && !opts.trashed && opts.kind !== undefined) {
+      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
+      where += opts.kind === 'videos' ? " AND mime LIKE 'video/%'" : opts.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
     }
     params.push(opts.limit + 1);
     const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} DESC, id DESC LIMIT $${params.length}`, params);

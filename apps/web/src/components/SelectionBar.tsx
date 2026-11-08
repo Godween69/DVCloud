@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { CheckCheck, Download, EyeOff, FolderMinus, FolderPlus, Save, X, Zap } from 'lucide-react';
+import { CheckCheck, Download, Trash2, FolderMinus, FolderPlus, Save, X, Zap } from 'lucide-react';
 import { MAX_ZIP_IDS, zipHref } from '../lib/albums';
 
 interface Props {
@@ -34,7 +34,7 @@ export function SelectionBar({ ids, total, zipName, inAlbum, shared, onSave, onH
         {!shared && quickName && <button type="button" onClick={onQuick} disabled={none} className={`${btn} bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40`}><Zap className="size-4" aria-hidden /><span className="max-w-[9rem] truncate">В «{quickName}»</span></button>}
         {!shared && <button type="button" onClick={onAlbum} disabled={none} className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><FolderPlus className="size-4" aria-hidden /><span className="hidden sm:inline">{quickName ? 'Другой альбом' : 'В альбом'}</span></button>}
         {inAlbum && !shared && <button type="button" onClick={onRemoveFromAlbum} disabled={none} className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><FolderMinus className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из альбома</span></button>}
-        {!shared && <button type="button" onClick={onHide} disabled={none} title="Скрыть: файлы уйдут в раздел «Скрытые», их можно вернуть" className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><EyeOff className="size-4" aria-hidden /><span className="hidden sm:inline">Скрыть</span></button>}
+        {!shared && <button type="button" onClick={onHide} disabled={none} title="В корзину: файлы можно восстановить" className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><Trash2 className="size-4" aria-hidden /><span className="hidden sm:inline">В корзину</span></button>}
         {tooMany ? (
           <button type="button" onClick={onTooMany} className={`${btn} hover:bg-white/10 dark:hover:bg-black/10`}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать ZIP</span></button>
         ) : (

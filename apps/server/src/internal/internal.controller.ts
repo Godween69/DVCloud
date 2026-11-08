@@ -6,6 +6,8 @@ import { asObject, optStrField, requireJson, strField } from '../http';
 import { PublicUser, toPublic, UsersService } from '../users/users.service';
 import { AdminAlbum, AdminStorageService, QuotaRequest } from '../files/admin-storage.service';
 import { InternalTokenGuard } from './internal-token.guard';
+import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
+import { MediaSettings, parseMediaPatch } from '../files/media-settings';
 
 @Controller('internal/health')
 export class InternalHealthController {
@@ -26,9 +28,10 @@ export class InternalUsersController {
   ) {}
 
   @Get()
-  async list(): Promise<{ users: (PublicUser & { twoFactor: boolean })[] }> {
+  async list(): Promise<{ users: (PublicUser & { twoFactor: boolean; usedBytes: number })[] }> {
     const on = new Set(this.dvauth.enabled ? (await this.dvauth.call<{ subjects: string[] }>('GET', '/v1/subjects')).subjects : []);
-    return { users: (await this.users.list()).map((u) => ({ ...toPublic(u), twoFactor: on.has(u.id) })) };
+    const used = await this.users.usedByOwner();
+    return { users: (await this.users.list()).map((u) => ({ ...toPublic(u), twoFactor: on.has(u.id), usedBytes: used.get(u.id) ?? 0 })) };
   }
 
   @Post()
@@ -179,5 +182,57 @@ export class InternalStorageController {
   async resolve(@Param('id') id: string): Promise<{ ok: true }> {
     await this.admin.resolveQuotaRequest(id);
     return { ok: true };
+  }
+}
+
+// Настройки превью и видео, счётчики и очистка производных файлов.
+@Controller('internal/media')
+@UseGuards(InternalTokenGuard)
+export class InternalMediaController {
+  constructor(
+    private readonly media: AdminMediaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  @Get()
+  overview(): Promise<MediaOverview> {
+    return this.media.overview();
+  }
+
+  @Get('dates')
+  dates(): { job: DatesJob | null } {
+    return { job: this.media.datesStatus() };
+  }
+
+  // Пересчёт дат съёмки у загруженных файлов. apply=false только проверяет.
+  @Post('dates')
+  @HttpCode(200)
+  async startDates(@Body() body: unknown, @Req() req: Request): Promise<{ job: DatesJob }> {
+    requireJson(req);
+    const o = asObject(body);
+    if (typeof o.apply !== 'boolean') throw new BadRequestException('apply: да или нет');
+    const job = await this.media.startDates(o.apply);
+    await this.audit.write('media.dates', o.apply ? 'apply' : 'check', { total: job.total });
+    return { job };
+  }
+
+  @Patch('settings')
+  async save(@Body() body: unknown, @Req() req: Request): Promise<{ settings: MediaSettings; cleared: ClearTarget[] }> {
+    requireJson(req);
+    const patch = parseMediaPatch(body);
+    if (Object.keys(patch).length === 0) throw new BadRequestException('Нечего менять');
+    const r = await this.media.save(patch);
+    await this.audit.write('media.settings', 'media', { patch, cleared: r.cleared });
+    return r;
+  }
+
+  @Post('clear')
+  @HttpCode(200)
+  async clear(@Body() body: unknown, @Req() req: Request): Promise<DirStat> {
+    requireJson(req);
+    const what = strField(asObject(body), 'what', 1, 16);
+    const r = await this.media.clear(what);
+    await this.audit.write('media.clear', what, { files: r.files, bytes: r.bytes });
+    return r;
   }
 }

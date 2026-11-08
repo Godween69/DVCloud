@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { FileRow } from './files.service';
 import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
+import { MediaSettings, MediaSettingsService } from './media-settings';
 
 const run = promisify(execFile);
 
@@ -30,8 +31,6 @@ async function videoFrame(path: string): Promise<Buffer> {
 // Сторона квадратной миниатюры в пикселях. Самая крупная плитка: 240 px на ПК и около 185 px на телефоне;
 // 560 хватает с запасом для экранов с плотностью 2-3 и весит десятки килобайт.
 export const THUMB_SIZE = 560;
-// Превью для просмотра: длинная сторона не больше 2000 px (на телефоне и ноутбуке этого хватает, весит в 10-20 раз меньше оригинала).
-export const PREVIEW_SIZE = 2000;
 
 // Превью (миниатюры) фото: маленькие WebP, лежат в thumbs/<id человека>/<id файла>.webp.
 // Строятся при первом запросе и сразу после загрузки; оригиналы не трогаются. Если картинку не разобрать
@@ -46,6 +45,7 @@ export class ThumbsService {
   constructor(
     @Inject(StorageService) private readonly storage: StorageService,
     @Inject(ActivityService) private readonly activity: ActivityService,
+    @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
   ) {
     sharp.cache(false); // кэш libvips не нужен, память на мини-ПК дороже
     sharp.concurrency(1);
@@ -91,6 +91,8 @@ export class ThumbsService {
   async ensurePreview(f: FileRow): Promise<string | null> {
     const key = `p${f.id}`;
     if (!ThumbsService.supports(f.mime) || this.failed.has(key)) return null;
+    const st = await this.settings.get();
+    if (!st.previewEnabled) return null; // выключено в админке: сайт открывает оригинал
     const rel = this.previewRel(f);
     try {
       await stat(this.storage.abs(rel));
@@ -100,7 +102,7 @@ export class ThumbsService {
     }
     let p = this.inflight.get(key);
     if (!p) {
-      p = this.build(f, rel, 'preview').finally(() => this.inflight.delete(key));
+      p = this.build(f, rel, 'preview', st).finally(() => this.inflight.delete(key));
       this.inflight.set(key, p);
     }
     return p;
@@ -130,7 +132,7 @@ export class ThumbsService {
     }
   }
 
-  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' = 'thumb'): Promise<string | null> {
+  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' = 'thumb', st?: MediaSettings): Promise<string | null> {
     return this.slot(async () => {
       const out = this.storage.abs(rel);
       const tmp = `${out}.${process.pid}.tmp`;
@@ -140,7 +142,7 @@ export class ThumbsService {
         const img = sharp(src, { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: typeof src === 'string' }).rotate(); // поворот по метке камеры (EXIF)
         await (kind === 'thumb'
           ? img.resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover', position: 'centre' }).webp({ quality: 70, effort: 2 })
-          : img.resize(PREVIEW_SIZE, PREVIEW_SIZE, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80, effort: 3 })
+          : img.resize(st!.previewMaxSide, st!.previewMaxSide, { fit: 'inside', withoutEnlargement: true }).webp({ quality: st!.previewQuality, effort: 3 })
         ).toFile(tmp);
         await rename(tmp, out);
         return rel;

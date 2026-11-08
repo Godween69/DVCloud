@@ -25,7 +25,7 @@ export class StorageService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    for (const d of ['library', 'trash', 'tmp', 'thumbs', 'previews', 'uploads']) await mkdir(join(this.root, d), { recursive: true });
+    for (const d of ['library', 'trash', 'tmp', 'thumbs', 'previews', 'videos', 'uploads']) await mkdir(join(this.root, d), { recursive: true });
     // Недогруженные куски после падения или обрыва не нужны.
     for (const f of await readdir(join(this.root, 'tmp'))) await rm(join(this.root, 'tmp', f), { force: true });
   }

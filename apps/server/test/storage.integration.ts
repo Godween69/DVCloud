@@ -289,4 +289,19 @@ describe('единое хранение и общий доступ (настоя
     assert.ok((await api('GET', '/api/files', { cookie: e.anna })).json.files.some((f: any) => f.id === s1), 'без kind видно всё');
     assert.equal((await api('GET', '/api/files?kind=x', { cookie: e.anna })).status, 400);
   });
+
+  it('разделы ленты: фото, видео и скриншоты не пересекаются, без kind видно всё', async () => {
+    const sharp = (await import('sharp')).default;
+    const pic = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#778899' } }).jpeg().withExif({ IFD0: { Make: 'TestCam' } }).toBuffer();
+    const p = (await upload(e.boris, 'kind-photo.jpg', pic)).json.file.id;
+    const v = (await upload(e.boris, 'kind-video.mp4', Buffer.from('0000ftypmp42' + 'k'.repeat(400)))).json.file.id;
+    const ids = async (q: string) => (await api('GET', `/api/files${q}`, { cookie: e.boris })).json.files.map((f: any) => f.id);
+    const all = await ids('');
+    assert.ok(all.includes(p) && all.includes(v));
+    const photos = await ids('?kind=photos');
+    assert.ok(photos.includes(p) && !photos.includes(v), 'в фото нет видео');
+    const videos = await ids('?kind=videos');
+    assert.ok(videos.includes(v) && !videos.includes(p), 'в видео только видео');
+    assert.ok(!(await ids('?kind=screenshots')).includes(v));
+  });
 });

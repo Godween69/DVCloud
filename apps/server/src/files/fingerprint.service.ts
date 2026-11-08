@@ -25,7 +25,8 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
 
   // Каждые 20 секунд берём небольшую пачку файлов без отпечатка (старые файлы и то, что не успели при загрузке).
   onModuleInit(): void {
-    this.timer = setInterval(() => void this.backfill(), 20_000);
+    const ms = Number(process.env.DVCLOUD_FP_TICK_MS ?? 20_000);
+    this.timer = setInterval(() => void this.backfill(), Number.isFinite(ms) && ms >= 100 ? ms : 20_000);
     this.timer.unref();
   }
 
@@ -53,7 +54,7 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
       const meta = await sharp(abs, { limitInputPixels: 300_000_000 }).metadata();
       const shot = looksLikeScreenshot({ format: meta.format, hasExif: !!meta.exif, width: fp.width, height: fp.height });
       await this.db.query(
-        `INSERT INTO file_fingerprints (file_id, dhash, tiny, width, height, sharpness, screenshot) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO file_fingerprints (file_id, dhash, tiny, width, height, sharpness, screenshot, shot_checked) VALUES ($1,$2,$3,$4,$5,$6,$7,true)
          ON CONFLICT (file_id) DO NOTHING`,
         [f.id, fp.dhash, fp.tiny, fp.width, fp.height, fp.sharpness, shot],
       );
@@ -66,11 +67,31 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
     this.activity.defer(() => this.ensure(f));
   }
 
+  // Отметка «скриншот» для отпечатков, посчитанных раньше: читается только заголовок файла, быстро.
+  async checkScreenshots(limit = 300): Promise<number> {
+    const r = await this.db.query<{ file_id: string; path: string; width: number; height: number }>(
+      `SELECT p.file_id, f.path, p.width, p.height FROM file_fingerprints p JOIN files f ON f.id = p.file_id WHERE NOT p.shot_checked ORDER BY p.file_id DESC LIMIT $1`,
+      [limit],
+    );
+    for (const x of r.rows) {
+      let shot = false;
+      try {
+        const meta = await sharp(this.storage.abs(x.path), { limitInputPixels: 300_000_000 }).metadata();
+        shot = looksLikeScreenshot({ format: meta.format, hasExif: !!meta.exif, width: x.width, height: x.height });
+      } catch {
+        /* файл не читается: считаем обычным, чтобы не проверять его снова и снова */
+      }
+      await this.db.query('UPDATE file_fingerprints SET screenshot = $2, shot_checked = true WHERE file_id = $1', [x.file_id, shot]);
+    }
+    return r.rows.length;
+  }
+
   // Пачка файлов без отпечатка. Один за другим, чтобы не нагружать мини-ПК.
-  async backfill(limit = 20): Promise<number> {
+  async backfill(limit = 40): Promise<number> {
     if (this.busy || this.activity.busy()) return 0; // во время загрузок отпечатки ждут
     this.busy = true;
     try {
+      await this.checkScreenshots();
       const skip = [...this.failed];
       const r = await this.db.query<FileRow>(
         `SELECT f.* FROM files f LEFT JOIN file_fingerprints p ON p.file_id = f.id

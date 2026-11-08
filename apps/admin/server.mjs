@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, loginPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
+import { CSS, loginPage, mediaPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -53,6 +53,42 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
   const cookie = (value, maxAge) =>
     `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.cookieSecure ? '; Secure' : ''}`;
 
+  // Настройки превью и видео. Числа из формы проверяет сервер DVCloud, его текст ошибки показывается как есть.
+  async function mediaAction(session, res, path, form) {
+    try {
+      if (path === '/media/settings') {
+        const num = (k) => (form.get(k) === null || form.get(k) === '' ? undefined : Number(form.get(k)));
+        const patch = {
+          previewEnabled: form.get('previewEnabled') === '1',
+          previewMaxSide: num('previewMaxSide'),
+          previewQuality: num('previewQuality'),
+          videoEnabled: form.get('videoEnabled') === '1',
+          videoHeight: num('videoHeight'),
+          videoCrf: num('videoCrf'),
+          timezone: (form.get('timezone') ?? '').trim() || undefined,
+        };
+        for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
+        const r = await api.saveMedia(patch);
+        const names = { previews: 'превью', videos: 'копии видео' };
+        session.flash = { kind: 'ok', text: `Настройки сохранены${r.cleared.length ? `. Стёрты и построятся заново: ${r.cleared.map((c) => names[c] ?? c).join(', ')}` : ''}` };
+      } else if (path === '/media/dates') {
+        const apply = form.get('apply') === '1';
+        const r = await api.startDates(apply);
+        session.flash = { kind: 'ok', text: `${apply ? 'Пересчёт дат запущен' : 'Проверка дат запущена'}: файлов ${r.job.total}. Обновите страницу, чтобы увидеть ход.` };
+      } else if (path === '/media/clear') {
+        const what = form.get('what') ?? '';
+        const r = await api.clearMedia(what);
+        session.flash = { kind: 'ok', text: `Очищено: ${r.files} файлов` };
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/media');
+  }
+
   async function storageAction(session, res, path, form) {
     const ok = (text) => { session.flash = { kind: 'ok', text }; };
     try {
@@ -101,6 +137,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
 
   async function doAction(session, req, res, path, form) {
     if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
+    if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
     const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
     try {
       if (path === '/users') {
@@ -184,6 +221,21 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
       }
       return html(res, 200, usersPage({ users, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/media') {
+      const flash = session.flash;
+      session.flash = null;
+      let media = null;
+      let dates = null;
+      let loadError = null;
+      try {
+        [media, dates] = await Promise.all([api.media(), api.dates()]);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, mediaPage({ media, dates, csrf: session.csrf, flash, loadError }));
     }
 
     if (req.method === 'GET' && path === '/storage') {

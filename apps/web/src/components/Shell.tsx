@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Upload } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Film, Images, Smartphone, Upload } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, sendFile } from '../api';
 import { useFeed } from '../lib/useFeed';
 import { useQuickAlbum } from '../lib/quick';
@@ -46,13 +46,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [sharing, setSharing] = useState(false); // окно «Поделиться альбомом»
   const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
 
-  const library = useFeed(false, undefined, 'photos');
+  const library = useFeed(false); // всё вместе
+  const photos = useFeed(false, undefined, 'photos'); // картинки без скриншотов
+  const videos = useFeed(false, undefined, 'videos');
   const shots = useFeed(false, undefined, 'screenshots');
   const trash = useFeed(true);
   const albumFeed = useFeed(false, album?.id);
   const inAlbum = view === 'albums' && album !== null;
   const foreign = inAlbum && album !== null && !album.mine; // чужой общий альбом: только смотреть, сохранять, скачивать
-  const active = inAlbum ? albumFeed : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
+  const active = inAlbum ? albumFeed : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
@@ -66,7 +68,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   );
 
   useEffect(() => { library.loadMore(true); refreshUsage(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
-  useEffect(() => { if (view === 'screenshots') shots.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
+  useEffect(() => {
+    // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
+    if (view === 'photos') photos.loadMore(true);
+    if (view === 'videos') videos.loadMore(true);
+    if (view === 'screenshots') shots.loadMore(true);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [view]);
   useEffect(() => { if (view === 'trash') trash.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
   const refreshAlbums = useCallback(() => { api.albums().then(setAlbums).catch(() => {}); }, []);
   useEffect(() => { if (view === 'albums' && !album) refreshAlbums(); }, [view, album, refreshAlbums]);
@@ -154,15 +162,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     try {
       await api.trash(id);
     } catch (e) {
-      say(e instanceof Error ? e.message : 'Не получилось скрыть');
+      say(e instanceof Error ? e.message : 'Не получилось убрать в корзину');
       return;
     }
     // Соседний файл показываем вместо удалённого; если соседей нет, просмотрщик закроется сам.
     leaveFeed(id);
-    if (inAlbum) library.remove(id);
-    say('Файл скрыт', {
-      label: 'Вернуть',
-      run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось вернуть файл')); },
+    [library, photos, videos, shots].forEach((f) => f.remove(id)); // файл мог лежать в нескольких лентах сразу
+    say('Файл в корзине', {
+      label: 'Восстановить',
+      run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось восстановить файл')); },
     });
     refreshUsage();
   }
@@ -204,12 +212,12 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = [...selected];
     try {
       const n = await api.bulk('hide', ids);
-      ids.forEach((id) => { library.remove(id); shots.remove(id); albumFeed.remove(id); });
+      ids.forEach((id) => { library.remove(id); photos.remove(id); videos.remove(id); shots.remove(id); albumFeed.remove(id); });
       endSelect();
       refreshUsage();
-      say(n === 1 ? 'Файл скрыт' : `Скрыто файлов: ${n}`, { label: 'Вернуть', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось вернуть')); } });
+      say(n === 1 ? 'Файл в корзине' : `В корзине файлов: ${n}`, { label: 'Восстановить', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось восстановить')); } });
     } catch (e) {
-      say(e instanceof Error ? e.message : 'Не получилось скрыть');
+      say(e instanceof Error ? e.message : 'Не получилось убрать в корзину');
     }
   }
 
@@ -256,11 +264,19 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     endSelect();
   }
 
-  const gallery = (feed: typeof library) => (
+  const emptyNote = (icon: ReactNode, title: string, text: string) => (
+    <div className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
+      <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-paper-200 text-gray-500 dark:bg-gray-900">{icon}</span>
+      <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{title}</h2>
+      <p className="mt-2 text-gray-600 dark:text-gray-400">{text}</p>
+    </div>
+  );
+
+  const gallery = (feed: typeof library, empty?: ReactNode) => (
     <Gallery files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
       quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} chip={quick.saved ? { name: quick.saved.name, on: quick.on } : null} onQuickOn={quick.setOn} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
-      empty={inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined} />
+      empty={empty ?? (inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined)} />
   );
 
   async function logout() {
@@ -275,7 +291,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
         {view === 'library' && gallery(library)}
-        {view === 'screenshots' && gallery(shots)}
+        {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'))}
+        {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'))}
+        {view === 'screenshots' && gallery(shots, (
+          <div className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
+            <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-paper-200 text-gray-500 dark:bg-gray-900"><Smartphone className="size-8" aria-hidden /></span>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Скриншотов пока нет</h2>
+            <p className="mt-2 text-gray-600 dark:text-gray-400">Облако само находит снимки экрана среди ваших файлов. Для уже загруженных это занимает время: поиск идёт в фоне, когда нет загрузок. Новые скриншоты появятся здесь сразу после обработки.</p>
+          </div>
+        ))}
         {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
           quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (
@@ -287,7 +311,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
           </>
         )}
         {view === 'security' && <SecurityView onError={say} />}
-        {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл скрыт' : `Скрыто файлов: ${ids.length}`); }} onError={say} />}
+        {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}
             onRestored={(f) => { trash.remove(f.id); library.add(f); refreshUsage(); say('Файл возвращён в библиотеку'); }}
@@ -297,7 +321,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </main>
       <AnimatePresence>
-        {selecting && (view === 'library' || view === 'screenshots' || inAlbum) && (
+        {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />

@@ -19,9 +19,12 @@ import { SimilarService } from './files/similar.service';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
 import { ThumbsService } from './files/thumbs.service';
+import { VideoService } from './files/video.service';
+import { MediaSettingsService } from './files/media-settings';
+import { AdminMediaService } from './files/admin-media.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
-import { InternalHealthController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
+import { InternalHealthController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
 import { AdminStorageService } from './files/admin-storage.service';
 import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
@@ -45,7 +48,7 @@ export class AppModule {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
       controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, UploadsController],
-      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
     };
   }
 }
@@ -57,8 +60,8 @@ export class InternalModule {
     return {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [InternalHealthController, InternalUsersController, InternalStorageController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService],
+      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, AdminMediaService],
     };
   }
 }

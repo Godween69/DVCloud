@@ -46,6 +46,11 @@ describe('админка', () => {
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
         if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
+        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC' }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 } });
+        if (req.method === 'PATCH' && req.url === '/internal/media/settings') { const b = JSON.parse(body); return b.previewMaxSide < 600 ? j(400, { message: 'previewMaxSide: целое число от 600 до 4000' }) : j(200, { settings: b, cleared: b.previewMaxSide ? ['previews'] : [] }); }
+        if (req.method === 'GET' && req.url === '/internal/media/dates') return j(200, { job: { running: false, apply: false, startedAt: 'x', finishedAt: 'y', total: 100, checked: 100, changed: 3, examples: [{ name: '<i>a</i>.jpg', before: '2025-07-01T09:45:00.000Z', after: '2020-05-25T18:55:28.000Z' }] } });
+        if (req.method === 'POST' && req.url === '/internal/media/dates') return j(200, { job: { running: true, apply: JSON.parse(body).apply, total: 100, checked: 0, changed: 0, examples: [] } });
+        if (req.method === 'POST' && req.url === '/internal/media/clear') return j(200, { files: 7, bytes: 100 });
         if (req.method === 'POST' && /^\/internal\/quota-requests\/\d+\/resolve$/.test(req.url)) return j(200, { ok: true });
         if (req.method === 'DELETE' && /^\/internal\/users\/[a-z0-9_]+/.test(req.url)) return j(200, { links: 3 });
         j(404, { message: 'нет' });
@@ -208,6 +213,55 @@ describe('админка', () => {
     const after = await req('GET', '/storage', { cookie });
     assert.ok(after.text.includes('удалено: 2'));
     assert.equal((await req('POST', '/storage/files/7/purge', { cookie, form: { csrf: 'wrong' } })).status, 403);
+  });
+
+  it('страница «Люди»: аватар, полоса квоты и меню действий на раскрывающемся блоке, без скриптов', async () => {
+    users[0].quotaBytes = 10 * 1024 ** 3;
+    users[0].usedBytes = 4 * 1024 ** 3;
+    try {
+      const cookie = await login();
+      const page = await req('GET', '/', { cookie });
+      assert.ok(page.text.includes('class="menu"'), 'меню действий');
+      assert.ok(page.text.includes('<meter'), 'полоса квоты');
+      assert.ok(page.text.includes('4,0 ГБ из 10 ГБ'));
+      assert.ok(page.text.includes('Добавить человека'));
+      assert.ok(!page.text.includes('<script'));
+      assert.ok(page.text.includes('href="/media"'), 'вкладка про превью и видео');
+    } finally {
+      users[0].quotaBytes = null;
+      delete users[0].usedBytes;
+    }
+  });
+
+  it('страница «Превью и видео»: счётчики, настройки, очистка, ошибка сервера показывается', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Копии видео'));
+    assert.ok(page.text.includes('готово 1 из 4'));
+    assert.ok(page.text.includes('name="previewMaxSide"'));
+    assert.ok(page.text.includes('value="2000"'));
+    assert.equal((await req('GET', '/media')).status, 303, 'без входа не открывается');
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    const ok = await post('/media/settings', { previewEnabled: '1', previewMaxSide: '1600', previewQuality: '75', videoHeight: '480', videoCrf: '31' });
+    assert.equal(ok.status, 303);
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"previewMaxSide":1600') && sent.includes('"videoEnabled":false') && sent.includes('"previewEnabled":true') && sent.includes('"videoCrf":31'));
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Стёрты и построятся заново: превью'));
+    await post('/media/settings', { previewMaxSide: '100' });
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('целое число от 600 до 4000'));
+    assert.ok(page.text.includes('name="timezone"') && page.text.includes('Даты у загруженных файлов'));
+    assert.ok(page.text.includes('2020-05-25 18:55') && !page.text.includes('<i>a</i>'), 'пример: дата показана, имя экранировано');
+    await post('/media/dates', { apply: '0' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/dates') && c.includes('"apply":false')));
+    await post('/media/dates', { apply: '1' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/dates') && c.includes('"apply":true')));
+    await post('/media/settings', { previewEnabled: '1', timezone: 'Europe/Moscow' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"timezone":"Europe/Moscow"'));
+    await post('/media/clear', { what: 'videos' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"videos"')));
+    assert.equal((await req('POST', '/media/clear', { cookie, form: { csrf: 'wrong', what: 'videos' } })).status, 403);
   });
 
   it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {

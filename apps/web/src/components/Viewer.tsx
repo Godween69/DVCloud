@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
-import { api, fileUrl, previewUrl } from '../api';
+import { api, fileUrl, previewUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
@@ -212,7 +212,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="Скрыть" title="Скрыть (файл останется в разделе «Скрытые»)"><Trash2 className="size-5" aria-hidden /></button>}
+        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">
@@ -221,7 +221,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         <AnimatePresence mode="wait" initial={false}>
           <motion.div key={file.id} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex size-full items-center justify-center">
             {video ? (
-              <video src={fileUrl(file.id)} controls autoPlay playsInline className="max-h-full max-w-full rounded-lg" />
+              <video key={`${file.id}${noPreview ? 'o' : 'v'}`} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} controls autoPlay playsInline className="max-h-full max-w-full rounded-lg" />
             ) : broken ? (
               <div className="flex flex-col items-center gap-3 text-center text-white/70">
                 <FileQuestion className="size-12" aria-hidden />
