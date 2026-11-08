@@ -49,13 +49,21 @@ export class FilesController {
   }
 
   @Get()
-  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string): Promise<{ files: PublicFile[]; next: string | null }> {
+  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string, @Query('at') at?: string, @Query('tz') tz?: string): Promise<{ files: PublicFile[]; next: string | null }> {
     if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next };
+  }
+
+  // Оглавление по месяцам для полосы времени (до маршрутов с :id).
+  @Get('timeline')
+  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
+    res.setHeader('Cache-Control', 'no-store');
+    return { months: await this.files.timeline(req.user.id, kind as 'photos' | 'videos' | 'screenshots' | undefined, typeof tz === 'string' ? tz : 'UTC') };
   }
 
   @Get('usage')

@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnsupportedMediaTypeException } from '@nestjs/common';
 import { MediaSettingsService } from './media-settings';
-import { detectTakenAt } from './taken';
+import { detectTakenAt, validTimezone } from './taken';
 import { rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { Config } from '../config';
@@ -305,7 +305,7 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots' }): Promise<{ files: FileRow[]; next: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string }): Promise<{ files: FileRow[]; next: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -314,6 +314,15 @@ export class FilesService {
       if (!m) throw new BadRequestException('Неверный курсор before');
       params.push(m[1], m[2]);
       where += ` AND (${col}, id) < ($2::timestamptz, $3::bigint)`;
+    }
+    // Лента с выбранного месяца: берём всё, что старше начала следующего месяца (по часовому поясу человека).
+    if (opts.at !== undefined && !opts.trashed) {
+      const m = /^(\d{4})-(\d{2})$/.exec(opts.at);
+      if (!m || Number(m[2]) < 1 || Number(m[2]) > 12 || Number(m[1]) < 1971) throw new BadRequestException('at: месяц вида 2015-03');
+      const tz = opts.tz ?? 'UTC';
+      if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
+      params.push(`${m[1]}-${m[2]}-01`, tz);
+      where += ` AND taken_at < ((($${params.length - 1}::date + interval '1 month')::timestamp) AT TIME ZONE $${params.length})`;
     }
     if (opts.albumId !== undefined) {
       params.push(opts.albumId);
@@ -332,6 +341,20 @@ export class FilesService {
     const last = rows[rows.length - 1];
     const next = more && last ? `${(opts.trashed ? last.trashed_at! : last.taken_at).toISOString()}_${last.id}` : null;
     return { files: rows, next };
+  }
+
+  // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.
+  async timeline(ownerId: string, kind: 'photos' | 'videos' | 'screenshots' | undefined, tz: string): Promise<{ y: number; m: number; n: number }[]> {
+    if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
+    let where = 'owner_id = $1 AND trashed_at IS NULL';
+    if (kind !== undefined) {
+      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
+      where += kind === 'videos' ? " AND mime LIKE 'video/%'" : kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
+    }
+    const r = await this.db.query<{ y: number; m: number; n: string }>(
+      `SELECT EXTRACT(YEAR FROM taken_at AT TIME ZONE $2)::int AS y, EXTRACT(MONTH FROM taken_at AT TIME ZONE $2)::int AS m, count(*) AS n
+       FROM files WHERE ${where} GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`, [ownerId, tz]);
+    return r.rows.map((x) => ({ y: x.y, m: x.m, n: Number(x.n) }));
   }
 
   // Скрыть: файл пропадает из ленты человека, на диске ничего не двигается и не удаляется.

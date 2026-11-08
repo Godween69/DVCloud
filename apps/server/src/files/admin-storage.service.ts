@@ -31,20 +31,44 @@ export class AdminStorageService {
     @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
-  async stats(): Promise<{ files: number; blobs: number; orphans: number; bytes: number; extraCopies: number }> {
-    const r = await this.db.query<{ files: string; blobs: string; orphans: string; bytes: string; extra: string }>(
+  async stats(): Promise<{ files: number; blobs: number; orphans: number; orphanBytes: number; bytes: number; extraCopies: number }> {
+    const r = await this.db.query<{ files: string; blobs: string; orphans: string; orphan_bytes: string; bytes: string; extra: string }>(
       `SELECT (SELECT count(*) FROM files) AS files, (SELECT count(*) FROM blobs) AS blobs,
               (SELECT count(*) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)) AS orphans,
+              (SELECT COALESCE(sum(size_bytes), 0) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)) AS orphan_bytes,
               (SELECT COALESCE(sum(size_bytes), 0) FROM blobs) AS bytes, (SELECT count(*) FROM blob_extra_paths) AS extra`,
     );
     const x = r.rows[0];
-    return { files: Number(x.files), blobs: Number(x.blobs), orphans: Number(x.orphans), bytes: Number(x.bytes), extraCopies: Number(x.extra) };
+    return { files: Number(x.files), blobs: Number(x.blobs), orphans: Number(x.orphans), orphanBytes: Number(x.orphan_bytes), bytes: Number(x.bytes), extraCopies: Number(x.extra) };
   }
 
   // Файлы на диске, на которые не ссылается ничей список (человек убрал у себя насовсем или удалён аккаунт).
   async orphans(limit = 200): Promise<{ id: string; name: string; size: number; createdAt: string }[]> {
     const r = await this.db.query<BlobRow>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) ORDER BY b.id LIMIT $1', [limit]);
     return r.rows.map((b) => ({ id: b.id, name: b.path.split('/').pop() ?? b.path, size: Number(b.size_bytes), createdAt: b.created_at.toISOString() }));
+  }
+
+  // Стирает с диска сразу все файлы без владельца. confirm = число, которое человек видел на экране: если файлов стало
+  // другое число (кто-то загрузил или отдал файл), ничего не стирается. Файл, у которого за это время появился владелец, пропускается.
+  async purgeOrphans(confirm: number): Promise<{ count: number; bytes: number; skipped: number }> {
+    const now = (await this.stats()).orphans;
+    if (now !== confirm) throw new ConflictException(`Файлов без владельца сейчас ${now}, а подтверждено ${confirm}. Обновите страницу и проверьте число.`);
+    let count = 0, bytes = 0, skipped = 0, last = '0';
+    for (;;) {
+      const batch = (await this.db.query<BlobRow>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND b.id > $1 ORDER BY b.id LIMIT 100', [last])).rows;
+      if (batch.length === 0) break;
+      for (const b of batch) {
+        last = b.id;
+        const extra = (await this.db.query<{ path: string }>('SELECT path FROM blob_extra_paths WHERE blob_id = $1', [b.id])).rows.map((x) => x.path);
+        const del = await this.db.query('DELETE FROM blobs b WHERE b.id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)', [b.id]);
+        if (!del.rowCount) { skipped++; continue; }
+        for (const p of new Set<string>([b.path, ...extra])) await this.storage.remove(p);
+        await this.storage.remove(`videos/${b.id}.mp4`);
+        count++;
+        bytes += Number(b.size_bytes);
+      }
+    }
+    return { count, bytes, skipped };
   }
 
   private async blob(id: string): Promise<BlobRow> {

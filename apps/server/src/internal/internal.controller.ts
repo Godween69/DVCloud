@@ -110,6 +110,18 @@ export class InternalStorageController {
     return { orphans: await this.admin.orphans(n) };
   }
 
+  // Стереть сразу все файлы без владельца: тело {confirm: <число файлов, показанное на экране>}.
+  @Post('files/orphans/purge')
+  @HttpCode(200)
+  async purgeOrphans(@Body() body: unknown, @Req() req: Request): Promise<{ count: number; bytes: number; skipped: number }> {
+    requireJson(req);
+    const c = asObject(body).confirm;
+    if (typeof c !== 'number' || !Number.isInteger(c) || c < 0) throw new BadRequestException('confirm: целое число');
+    const r = await this.admin.purgeOrphans(c);
+    await this.audit.write('file.purge-orphans', 'orphans', r);
+    return r;
+  }
+
   // Физическое удаление: единственное место, где файл стирается с диска.
   @Post('files/:id/purge')
   @HttpCode(200)

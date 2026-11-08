@@ -46,6 +46,7 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     stats: () => call('GET', '/internal/stats'),
     orphans: async () => (await call('GET', '/internal/files/orphans?limit=200')).orphans,
     purge: (id) => call('POST', `/internal/files/${encodeURIComponent(id)}/purge`, {}),
+    purgeOrphans: (confirm) => call('POST', '/internal/files/orphans/purge', { confirm }),
     adopt: (id, login) => call('POST', `/internal/files/${encodeURIComponent(id)}/adopt`, { login }),
     dedupe: (apply) => call('POST', '/internal/files/dedupe', { limit: 100, apply }),
     albums: async () => (await call('GET', '/internal/albums')).albums,

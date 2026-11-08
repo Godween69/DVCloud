@@ -37,11 +37,12 @@ describe('админка', () => {
         if (m && req.method === 'PATCH') return j(200, { user: { ...users[0], ...JSON.parse(body) } });
         if (/^\/internal\/users\/[a-z0-9_]+\/reset-2fa$/.test(req.url)) return j(200, { ok: true });
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
-        if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, bytes: 1048576, extraCopies: 2 });
+        if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
         if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z' }] });
         if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
         if (req.method === 'GET' && req.url === '/internal/quota-requests') return j(200, { requests: [{ id: '9', login: 'anna', displayName: 'Анна', needBytes: 5368709120, note: 'отпуск', createdAt: '2026-11-02T00:00:00.000Z', usedBytes: 1073741824, quotaBytes: 2147483648 }] });
         if (req.method === 'POST' && req.url === '/internal/files/dedupe') return j(200, { checked: 2, removed: JSON.parse(body).apply ? 2 : 0, freedBytes: 4096, mismatched: [] });
+        if (req.method === 'POST' && req.url === '/internal/files/orphans/purge') return JSON.parse(body).confirm === 1 ? j(200, { count: 1, bytes: 2048, skipped: 0 }) : j(409, { message: 'Файлов без владельца сейчас 1' });
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/purge$/.test(req.url)) return j(200, { links: 0, bytes: 2048 });
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
@@ -209,6 +210,16 @@ describe('админка', () => {
     await post('/storage/requests/9/grant', { login: 'anna', quota: '20' });
     assert.ok(calls.some((c) => c.startsWith('PATCH /internal/users/anna') && c.includes(`"quotaBytes":${20 * 1024 ** 3}`)));
     assert.ok(calls.some((c) => c.startsWith('POST /internal/quota-requests/9/resolve')));
+    // массовая чистка: без слова и с чужим числом на сервер уходит только верное
+    const n0 = calls.length;
+    await post('/storage/orphans/purge', { count: '1', word: 'нет' });
+    assert.equal(calls.length, n0, 'без слова «стереть» запроса нет');
+    await post('/storage/orphans/purge', { count: '5', word: 'стереть' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/orphans/purge') && c.includes('"confirm":5')));
+    await post('/storage/orphans/purge', { count: '1', word: ' Стереть ' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/files/orphans/purge') && c.includes('"confirm":1')));
+    const page2 = await req('GET', '/storage', { cookie });
+    assert.ok(page2.text.includes('впишите: стереть') && page2.text.includes('Стереть с диска все 1'));
     await post('/storage/dedupe', { apply: '1' });
     const after = await req('GET', '/storage', { cookie });
     assert.ok(after.text.includes('удалено: 2'));

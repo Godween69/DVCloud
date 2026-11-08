@@ -2,6 +2,9 @@ import { motion } from 'framer-motion';
 import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
+import { prefetchThumbs } from '../lib/prefetch';
+import { currentKey, monthKey, bubbleTitle, type Month } from '../lib/timeline';
+import { TimeRail } from './TimeRail';
 import { countFiles, formatDateTime } from '../lib/format';
 import { groupByMonth } from '../lib/group';
 import { isVideo } from '../lib/media';
@@ -39,6 +42,7 @@ interface Props {
   chip: { name: string; on: boolean } | null; // выбранный быстрый альбом для переключателя над сеткой
   onQuickOn: (on: boolean) => void; // включить или выключить быстрый альбом
   onPickQuick: () => void; // открыть выбор быстрого альбома
+  rail?: { months: Month[]; at: string | null; onJump: (at: string | null) => Promise<void> } | null; // полоса времени (только в разделах библиотеки)
 }
 
 export interface QuickView {
@@ -49,13 +53,14 @@ export interface QuickView {
 
 export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
   const [broken, setBroken] = useState(false);
+  const [ready, setReady] = useState(false); // миниатюра пришла: плавно проявляем её поверх мерцающей заглушки
   // Долгое нажатие пальцем включает выбор (как в Google Фото); следующий за ним «клик» не открывает просмотр.
   const hold = useRef<{ t: ReturnType<typeof setTimeout> | null; fired: boolean }>({ t: null, fired: false });
   const stopHold = () => { if (hold.current.t) { clearTimeout(hold.current.t); hold.current.t = null; } };
   const video = isVideo(file.mime);
   const inQuick = !!quick && quick.has(file.id);
   return (
-    <div className="group relative aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800">
+    <div data-tile={file.id} className={`group relative aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800 ${ready || broken ? '' : 'dv-shimmer'}`}>
     <button type="button" onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } onOpen(file.id); }}
       onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
       onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
@@ -66,7 +71,9 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
           <span className="line-clamp-2 w-full break-all text-center text-xs">{file.name}</span>
         </div>
       ) : (
-        <img src={thumbUrl(file.id)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} className="size-full object-cover transition-transform duration-300 group-hover:scale-[1.04]" />
+        <img src={thumbUrl(file.id)} alt="" loading="lazy" decoding="async" onLoad={() => setReady(true)} onError={() => setBroken(true)}
+          ref={(el) => { if (el && !ready && el.complete && el.naturalWidth > 0) setReady(true); }}
+          className={`size-full object-cover transition-[transform,opacity] duration-300 motion-reduce:transition-none group-hover:scale-[1.04] ${ready ? 'opacity-100' : 'opacity-0'}`} />
       )}
       {video && (
         <span className="pointer-events-none absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-black/50 text-white">
@@ -93,12 +100,15 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
   );
 }
 
-export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, chip, onQuickOn, onPickQuick }: Props) {
+export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, chip, onQuickOn, onPickQuick, rail }: Props) {
   const groups = useMemo(() => groupByMonth(files), [files]);
   const [layout, setLayout] = usePref<Layout>('layout', 'months', LAYOUTS);
   const [density, setDensity] = usePref<Density>('density', 'm', DENSITIES);
   const di = DENSITIES.indexOf(density);
   const sentinel = useRef<HTMLDivElement>(null);
+  const [cur, setCur] = useState<string | null>(null); // месяц на экране (для полосы времени)
+  const railMonths = rail && rail.months.length > 1 ? rail.months : null;
+  const at = rail?.at ?? null;
   // В режиме выбора нажатие на плитку отмечает её, а не открывает просмотр.
   const tap = (id: string) => (selecting ? onToggle(id) : onOpen(id));
   // Выбрать фото прямо с плитки: режим выбора включается сам.
@@ -112,6 +122,42 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
     io.observe(el);
     return () => io.disconnect();
   }, [hasMore, files.length, onMore]);
+
+  // Какой месяц сейчас на экране: по положению секций месяцев при прокрутке (раз в кадр).
+  useEffect(() => {
+    if (!railMonths || layout !== 'months') return;
+    let raf = 0;
+    const calc = () => {
+      raf = 0;
+      const secs = [...document.querySelectorAll<HTMLElement>('section[data-month]')].map((s) => ({ key: s.dataset.month as string, bottom: s.getBoundingClientRect().bottom }));
+      setCur(currentKey(secs, 120));
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(calc); };
+    calc();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf); };
+  }, [railMonths, layout, files.length]);
+
+  // Фоновая подгрузка миниатюр на следующие два экрана вниз, когда прокрутка остановилась (и после перехода к месяцу).
+  useEffect(() => {
+    if (!loaded || files.length === 0) return;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const run = () => {
+      const h = window.innerHeight;
+      const ids: string[] = [];
+      for (const el of document.querySelectorAll<HTMLElement>('[data-tile]')) {
+        const r = el.getBoundingClientRect();
+        if (r.top > h * 0.9 && r.top < h * 3) ids.push(el.dataset.tile as string);
+        else if (r.top >= h * 3) break;
+        if (ids.length >= 120) break;
+      }
+      if (ids.length) prefetchThumbs(ids);
+    };
+    const onScroll = () => { if (t) clearTimeout(t); t = setTimeout(run, 400); };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); if (t) clearTimeout(t); };
+  }, [loaded, files, layout, density]);
 
   if (!loaded) {
     return (
@@ -147,7 +193,15 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   const step = 'flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:text-gray-900 disabled:opacity-30 dark:hover:text-white';
 
   return (
-    <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6">
+    <div className={`mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`}>
+      {railMonths && (
+        <TimeRail months={railMonths} current={cur ?? (at ?? monthKey(railMonths[0].y, railMonths[0].m))} onPick={(i) => {
+          const x = railMonths[i];
+          const to = i === 0 ? null : monthKey(x.y, x.m);
+          if (to === at) { window.scrollTo({ top: 0 }); return; }
+          void rail?.onJump(to).then(() => window.scrollTo({ top: 0 }));
+        }} />
+      )}
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
         {selecting ? (
           <div className="mr-auto flex items-center gap-1">
@@ -182,6 +236,12 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
           <button type="button" className={seg(layout === 'wall')} aria-pressed={layout === 'wall'} onClick={() => setLayout('wall')}><LayoutGrid className="size-4" aria-hidden /><span className="hidden sm:inline">Сплошная лента</span></button>
         </div>
       </div>
+      {at && rail && (
+        <div role="status" className="mb-3 flex items-center gap-3 rounded-lg bg-violet-600/10 px-3 py-2 text-sm text-violet-900 dark:text-violet-100">
+          <span className="min-w-0 truncate">Показаны файлы, начиная с месяца «{(() => { const [y, m] = at.split('-').map(Number); return bubbleTitle({ y, m, n: 0 }); })()}», и старше</span>
+          <button type="button" onClick={() => { void rail.onJump(null).then(() => window.scrollTo({ top: 0 })); }} className="ml-auto shrink-0 rounded-md bg-violet-600 px-2.5 py-1 font-medium text-white hover:bg-violet-500">К новым</button>
+        </div>
+      )}
       {layout === 'wall' ? (
         <div className={`grid gap-1 ${GRID[density]}`}>
           {files.map((f) => (
@@ -190,7 +250,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
         </div>
       ) : (
         groups.map((g) => (
-          <section key={g.key} aria-label={g.title} className="mb-8 lg:grid lg:grid-cols-[11rem_1fr] lg:gap-6">
+          <section key={g.key} data-month={g.key} aria-label={g.title} className="mb-8 lg:grid lg:grid-cols-[11rem_1fr] lg:gap-6">
             <div className="mb-3 lg:sticky lg:top-28 lg:mb-0 lg:self-start">
               <h2 className="text-xl font-semibold tracking-tight text-gray-900 lg:text-2xl dark:text-white">{g.title}</h2>
               <p className="text-sm text-gray-500">{countFiles(g.items.length)}</p>

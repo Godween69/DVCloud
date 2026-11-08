@@ -272,6 +272,29 @@ describe('единое хранение и общий доступ (настоя
     assert.ok((await intCall('GET', '/internal/files/orphans')).orphans.some((o: any) => o.name === 'temp.jpg' || o.size > 0));
   });
 
+  it('администратор: все файлы без владельца стираются разом, только с верным числом, чужие файлы целы', async () => {
+    const st = await intCall('GET', '/internal/stats');
+    assert.ok(st.orphans >= 1 && st.orphanBytes > 0, 'есть что стирать');
+    const live = (await api('GET', '/api/files', { cookie: e.anna })).json.files.length;
+    const disk = (await libraryFiles()).length;
+    const post = (confirm: unknown) => fetch(`${e.intBase}/internal/files/orphans/purge`, { method: 'POST', headers: { authorization: `Bearer ${e.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ confirm }) });
+    assert.equal((await post(st.orphans + 1)).status, 409, 'другое число: ничего не стирается');
+    assert.equal((await post('много')).status, 400);
+    assert.equal((await libraryFiles()).length, disk);
+    const ok = await post(st.orphans);
+    assert.equal(ok.status, 200);
+    const r = (await ok.json()) as { count: number; bytes: number; skipped: number };
+    assert.equal(r.count, st.orphans);
+    assert.equal(r.bytes, st.orphanBytes);
+    assert.equal(r.skipped, 0);
+    assert.equal((await libraryFiles()).length, disk - st.orphans, 'с диска ушли только файлы без владельца');
+    assert.equal((await api('GET', '/api/files', { cookie: e.anna })).json.files.length, live, 'файлы людей целы');
+    const after = await intCall('GET', '/internal/stats');
+    assert.equal(after.orphans, 0);
+    assert.equal(after.orphanBytes, 0);
+    assert.equal((await post(0)).status, 200, 'повтор при нуле безопасен');
+  });
+
   it('скриншоты: PNG размером с экран уходит из библиотеки в «скриншоты», обычное фото остаётся', async () => {
     const sharp = (await import('sharp')).default;
     const shot = await sharp({ create: { width: 1080, height: 2400, channels: 3, background: '#223344' } }).png().toBuffer();

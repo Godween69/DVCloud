@@ -214,6 +214,9 @@ ${stats ? `<section class="panel"><div class="summary"><div><b>${stats.files}</b
 </section>
 <section class="panel"><h2>Файлы без владельца</h2>
 <p class="muted">Остаются, когда человек убрал файл насовсем или аккаунт удалён. На диске лежат, пока вы их не отдадите или не сотрёте.</p>
+${stats && stats.orphans > 0 ? `<form class="bulk" method="post" action="/storage/orphans/purge">${csrfInput(csrf)}<input type="hidden" name="count" value="${esc(stats.orphans)}">
+<p>Всего таких файлов: <b>${esc(stats.orphans)}</b>, они занимают <b>${esc(formatSize(stats.orphanBytes ?? 0))}</b>${orphans.length < stats.orphans ? ` (в таблице ниже только первые ${orphans.length})` : ''}. Стирание необратимо.</p>
+<input type="text" name="word" placeholder="впишите: стереть" autocomplete="off" required aria-label="Подтверждение: впишите слово стереть"> <button class="danger" type="submit">Стереть с диска все ${esc(stats.orphans)}</button></form>` : ''}
 <table><thead><tr><th>Файл</th><th>Размер</th><th>Дата</th><th>Действия</th></tr></thead>
 <tbody>${orphanRows || '<tr><td colspan="4" class="muted">Таких файлов нет.</td></tr>'}</tbody></table>
 

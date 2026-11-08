@@ -40,6 +40,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return json as T;
 }
 
+function timeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
 export const api = {
   me: () => request<{ user: User }>('GET', '/api/auth/me').then((r) => r.user),
   login: (login: string, password: string) =>
@@ -58,12 +62,19 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots') => {
+  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots', at?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
     if (kind && !trashed) q.set('kind', kind);
+    if (at && !trashed) { q.set('at', at); q.set('tz', timeZone()); }
     return request<{ files: FileItem[]; next: string | null }>('GET', `/api/files?${q}`);
+  },
+  // Оглавление ленты по месяцам для полосы времени (месяцы считаются в часовом поясе браузера, как и заголовки месяцев).
+  timeline: (kind?: 'photos' | 'videos' | 'screenshots') => {
+    const q = new URLSearchParams({ tz: timeZone() });
+    if (kind) q.set('kind', kind);
+    return request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/files/timeline?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),

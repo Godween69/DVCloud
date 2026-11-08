@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, loginPage, mediaPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
+import { CSS, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -95,7 +95,14 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     const ok = (text) => { session.flash = { kind: 'ok', text }; };
     try {
       let m;
-      if ((m = /^\/storage\/files\/(\d{1,18})\/(purge|adopt)$/.exec(path))) {
+      if (path === '/storage/orphans/purge') {
+        // Двойная защита: нужно вписать слово и число должно совпасть с тем, что сейчас на диске (проверяет сервер).
+        const count = Number(form.get('count'));
+        if ((form.get('word') ?? '').trim().toLowerCase() !== 'стереть') throw new ApiError(400, 'Чтобы стереть, впишите слово «стереть»');
+        if (!Number.isInteger(count) || count < 0) throw new ApiError(400, 'Нет числа файлов: обновите страницу');
+        const r = await api.purgeOrphans(count);
+        ok(`Стёрто файлов без владельца: ${r.count}, освобождено ${formatSize(r.bytes)}${r.skipped ? `, пропущено (появился владелец): ${r.skipped}` : ''}`);
+      } else if ((m = /^\/storage\/files\/(\d{1,18})\/(purge|adopt)$/.exec(path))) {
         if (m[2] === 'purge') {
           const r = await api.purge(m[1]);
           ok(`Стёрто с диска: ${r.bytes} байт`);

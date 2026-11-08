@@ -9,6 +9,7 @@ import { claimFile } from '../lib/claim';
 import { filesFromDrop, filesFromInput, uploadable, type PickedFile } from '../lib/folders';
 import { countFiles } from '../lib/format';
 import { useTheme } from '../lib/theme';
+import type { Month } from '../lib/timeline';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
 import type { Album, AlbumRef, Estimate, FileItem, SearchStatus, Usage, User } from '../types';
 import { useSearch } from '../lib/useSearch';
@@ -65,6 +66,16 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const doneToast = useCallback(() => setToast(null), []);
   const quick = useQuickAlbum(say);
 
+  // Оглавление для полосы времени: только в разделах библиотеки; обновляется при смене раздела и когда меняется число файлов.
+  const railKind = view === 'photos' ? 'photos' : view === 'videos' ? 'videos' : view === 'screenshots' ? 'screenshots' : view === 'library' ? 'all' : null;
+  const [tl, setTl] = useState<{ k: string; months: Month[] } | null>(null);
+  useEffect(() => {
+    if (!railKind) return;
+    let stop = false;
+    api.timeline(railKind === 'all' ? undefined : railKind).then((r) => { if (!stop) setTl({ k: railKind, months: r.months }); }).catch(() => {});
+    return () => { stop = true; };
+  }, [railKind, usage?.count]);
+
   const addLib = library.add;
   const queue = useMemo(
     () => new UploadQueue<File & { path?: string }>(sendFile, setJobs, (f, dup) => { if (!dup) addLib(f); refreshUsage(); }, 3, claimFile),
@@ -75,9 +86,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   useEffect(() => { if (view === 'search') api.searchStatus().then(setSearchStatus).catch(() => {}); }, [view]);
   useEffect(() => {
     // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
-    if (view === 'photos') photos.loadMore(true);
-    if (view === 'videos') videos.loadMore(true);
-    if (view === 'screenshots') shots.loadMore(true);
+    if (view === 'photos') void photos.jump(null);
+    if (view === 'videos') void videos.jump(null);
+    if (view === 'screenshots') void shots.jump(null);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [view]);
   useEffect(() => { if (view === 'trash') trash.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
@@ -277,8 +288,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     </div>
   );
 
-  const gallery = (feed: typeof library, empty?: ReactNode) => (
-    <Gallery files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
+  const gallery = (feed: typeof library, empty?: ReactNode, timeline = false) => (
+    <Gallery rail={timeline && tl && tl.k === railKind ? { months: tl.months, at: feed.at, onJump: feed.jump } : null} files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
       quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} chip={quick.saved ? { name: quick.saved.name, on: quick.on } : null} onQuickOn={quick.setOn} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
       empty={empty ?? (inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined)} />
@@ -295,16 +306,16 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
-        {view === 'library' && gallery(library)}
-        {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'))}
-        {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'))}
+        {view === 'library' && gallery(library, undefined, true)}
+        {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'), true)}
+        {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'), true)}
         {view === 'screenshots' && gallery(shots, (
           <div className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
             <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-paper-200 text-gray-500 dark:bg-gray-900"><Smartphone className="size-8" aria-hidden /></span>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Скриншотов пока нет</h2>
             <p className="mt-2 text-gray-600 dark:text-gray-400">Облако само находит снимки экрана среди ваших файлов. Для уже загруженных это занимает время: поиск идёт в фоне, когда нет загрузок. Новые скриншоты появятся здесь сразу после обработки.</p>
           </div>
-        ))}
+        ), true)}
         {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
           quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (

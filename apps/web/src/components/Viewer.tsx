@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl, previewUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
+import { usePref } from '../lib/prefs';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
 import type { AlbumRef, FileItem } from '../types';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
@@ -65,6 +66,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const busy = useRef(false);
   const [broken, setBroken] = useState(false);
   const [noPreview, setNoPreview] = useState(false); // превью нет или не открылось: показываем оригинал
+  const [vfit, setVfit] = usePref<'fit' | 'orig'>('video-size', 'fit', ['fit', 'orig'] as const); // ролик по размеру окна (по умолчанию) или в своём размере
   const [copyReady, setCopyReady] = useState(false); // у ролика, который идёт оригиналом, появилась копия для просмотра
   const touch = useRef<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -226,6 +228,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         </div>
         {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
+        {video && <button type="button" className={btn} onClick={() => setVfit(vfit === 'fit' ? 'orig' : 'fit')} aria-label={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по окну'} title={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по размеру окна'}>{vfit === 'fit' ? <Minimize2 className="size-5" aria-hidden /> : <Maximize2 className="size-5" aria-hidden />}</button>}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
         {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
       </div>
@@ -238,7 +241,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
             {video ? (
               <video key={`${file.id}${noPreview ? 'o' : 'v'}`} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))}
                 onCanPlay={(e) => { if (e.currentTarget.paused && e.currentTarget.currentTime === 0) e.currentTarget.play().catch(() => undefined); }}
-                controls autoPlay playsInline preload="auto" className="max-h-full max-w-full rounded-lg bg-black" />
+                controls autoPlay playsInline preload="auto" className={`rounded-lg bg-black ${vfit === 'fit' ? 'size-full object-contain' : 'max-h-full max-w-full'}`} />
             ) : broken ? (
               <div className="flex flex-col items-center gap-3 text-center text-white/70">
                 <FileQuestion className="size-12" aria-hidden />
