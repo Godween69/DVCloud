@@ -191,4 +191,42 @@ describe('настройки превью и видео в админке (на�
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('очередь копий: открытый ролик первым, остальные от новых к старым; «непростой» оригинал всегда получает копию', { skip: !hasFfmpeg && 'нет ffmpeg' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dvc-media-'));
+    const c = new Client({ connectionString: e.dbUrl });
+    await c.connect();
+    try {
+      assert.equal((await patch({ videoEnabled: false })).status, 200);
+      await new Promise((r2) => setTimeout(r2, 2500));
+      const mk = (name: string, size: string, crf: string, pix: string) => {
+        const f = join(dir, name);
+        execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=25:duration=1`, '-c:v', 'libx264', '-crf', crf, '-pix_fmt', pix, f]);
+        return readFile(f);
+      };
+      const ids: Record<string, string> = {};
+      // три разных ролика в порядке загрузки: q-old, q-mid, q-new; ещё один «полнодиапазонный» (yuvj420p) очень сжатый
+      for (const [name, size, crf, pix] of [['q-old.mp4', '640x360', '23', 'yuv420p'], ['q-mid.mp4', '640x360', '24', 'yuv420p'], ['q-new.mp4', '640x360', '25', 'yuv420p']] as const) {
+        ids[name] = (await upload(e.anna, name, await mk(name, size, crf, pix))).json.file.id;
+      }
+      ids['q-jpeg.mp4'] = (await upload(e.anna, 'q-jpeg.mp4', await mk('q-jpeg.mp4', '320x240', '51', 'yuvj420p'))).json.file.id;
+      // человек открыл самый старый, копии нет: он встаёт в начало очереди
+      assert.equal((await api('GET', `/api/files/${ids['q-old.mp4']}/view`, { cookie: e.anna })).status, 404);
+      assert.equal((await patch({ videoEnabled: true, videoHeight: 480, videoCrf: 32 })).status, 200);
+      const done = async () => Number((await c.query("SELECT count(*) AS n FROM video_copies v JOIN files f ON f.blob_id = v.blob_id WHERE f.original_name LIKE 'q-%'")).rows[0].n) === 4;
+      const end = Date.now() + 60_000;
+      while (!(await done()) && Date.now() < end) await new Promise((r2) => setTimeout(r2, 300));
+      assert.ok(await done(), 'копии не появились');
+      const order = (await c.query("SELECT f.original_name AS n, v.status AS s FROM video_copies v JOIN files f ON f.blob_id = v.blob_id WHERE f.original_name LIKE 'q-%' ORDER BY v.updated_at, f.id")).rows;
+      assert.equal(order[0].n, 'q-old.mp4', 'открытый ролик должен быть первым');
+      // дальше от новых к старым: самый новый по загрузке (q-jpeg), затем q-new, затем q-mid
+      assert.deepEqual(order.slice(1).map((r: { n: string }) => r.n), ['q-jpeg.mp4', 'q-new.mp4', 'q-mid.mp4']);
+      // «полнодиапазонный» оригинал: копия больше оригинала, но остаётся (раньше такой ролик оставался без копии)
+      assert.equal(order.find((r: { n: string }) => r.n === 'q-jpeg.mp4').s, 'ready');
+      assert.equal((await api('GET', `/api/files/${ids['q-jpeg.mp4']}/view`, { cookie: e.anna })).status, 200);
+    } finally {
+      await c.end();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -168,7 +168,8 @@ export class FilesController {
     const f = await this.files.getReadable(req.user.id, id);
     const rel = f.trashed_at ? null : await this.video.copyFor(f);
     if (!rel) {
-      res.setHeader('Cache-Control', 'private, max-age=30');
+      if (!f.trashed_at && f.mime.startsWith('video/')) this.video.want(f.blob_id); // открыли без копии: сделать её вне очереди
+      res.setHeader('Cache-Control', 'private, no-store');
       res.status(404).json({ message: 'Копии для просмотра нет' });
       return;
     }

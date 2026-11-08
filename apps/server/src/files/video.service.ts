@@ -17,6 +17,8 @@ export class VideoService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private stopping = false;
+  // Ролики, которые человек открыл, а копии ещё нет: делаются вне очереди, первыми.
+  private readonly wanted = new Set<string>();
 
   constructor(
     @Inject(DbService) private readonly db: DbService,
@@ -52,7 +54,13 @@ export class VideoService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // Человек открыл ролик без копии: ставим его в начало очереди (если копии включены, ролик возьмут на ближайшем проходе).
+  want(blobId: string | null): void {
+    if (blobId && this.wanted.size < 200) this.wanted.add(blobId);
+  }
+
   // Один проход: берёт ролики без актуальной копии по очереди, пока включено и нет загрузок.
+  // Сначала запрошенные (человек их открыл), потом самые новые: именно их обычно смотрят.
   async tick(): Promise<void> {
     if (this.running || this.stopping) return;
     this.running = true;
@@ -64,11 +72,12 @@ export class VideoService implements OnModuleInit, OnModuleDestroy {
           await this.db.query<{ id: string; path: string; size_bytes: string }>(
             `SELECT b.id, b.path, b.size_bytes FROM blobs b LEFT JOIN video_copies v ON v.blob_id = b.id
              WHERE b.mime LIKE 'video/%' AND (v.blob_id IS NULL OR v.params <> $1) AND EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)
-             ORDER BY b.id LIMIT 1`,
-            [videoParams(s)],
+             ORDER BY (b.id = ANY($2::bigint[])) DESC, b.id DESC LIMIT 1`,
+            [videoParams(s), [...this.wanted]],
           )
         ).rows[0];
         if (!next) return;
+        this.wanted.delete(next.id);
         await this.convert(next, s);
       }
     } catch {
@@ -78,13 +87,17 @@ export class VideoService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private codec(file: string): Promise<string> {
+  // Кодек, формат пикселей и высота первого видеопотока. Не прочиталось: пустые значения (тогда копию оставляем на всякий случай).
+  private probe(file: string): Promise<{ codec: string; pix: string; height: number }> {
     return new Promise((resolve) => {
       let out = '';
-      const p = spawn('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', file], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const p = spawn('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,pix_fmt,height', '-of', 'default=nw=1', file], { stdio: ['ignore', 'pipe', 'ignore'] });
       p.stdout.on('data', (c: Buffer) => (out += c.toString()));
-      p.on('error', () => resolve('h264'));
-      p.on('close', () => resolve(out.trim() || 'h264'));
+      p.on('error', () => resolve({ codec: '', pix: '', height: 0 }));
+      p.on('close', () => {
+        const get = (k: string): string => new RegExp(`^${k}=(.*)$`, 'm').exec(out)?.[1]?.trim() ?? '';
+        resolve({ codec: get('codec_name'), pix: get('pix_fmt'), height: Number(get('height')) || 0 });
+      });
     });
   }
 
@@ -140,9 +153,11 @@ export class VideoService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const size = (await stat(tmp)).size;
-    // Копию не оставляем, только если оригинал уже H.264 и копия не меньше его: браузер играет оригинал.
-    // HEVC, MJPEG и прочее браузеры часто не показывают (картинки нет, звук есть), для них копия нужна всегда.
-    if (size >= Number(b.size_bytes) * 0.9 && (await this.codec(this.storage.abs(b.path))) === 'h264') {
+    // Копию не оставляем только в одном случае: оригинал уже обычный компактный H.264 (стандартный формат пикселей,
+    // не крупнее 720p) и копия не меньше его. Всё остальное (HEVC, MJPEG, полный диапазон цвета yuvj420p, большой кадр,
+    // вертикальные 1080p) браузеры и видеокарты показывают по-разному, иногда звук есть, а картинки нет: копия нужна.
+    const src = size >= Number(b.size_bytes) * 0.9 ? await this.probe(this.storage.abs(b.path)) : null;
+    if (src && src.codec === 'h264' && src.pix === 'yuv420p' && src.height > 0 && src.height <= 720) {
       await rm(tmp, { force: true }); // выгоды нет: оригинал уже компактный
       await save('skipped', 0, null);
       return;

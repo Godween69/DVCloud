@@ -65,6 +65,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const busy = useRef(false);
   const [broken, setBroken] = useState(false);
   const [noPreview, setNoPreview] = useState(false); // превью нет или не открылось: показываем оригинал
+  const [copyReady, setCopyReady] = useState(false); // у ролика, который идёт оригиналом, появилась копия для просмотра
   const touch = useRef<number | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
@@ -81,7 +82,21 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
 
   // Новое фото: масштаб сбрасывается.
-  useEffect(() => { setBroken(false); setNoPreview(false); setView(NO_ZOOM); }, [file?.id]);
+  useEffect(() => { setBroken(false); setNoPreview(false); setCopyReady(false); setView(NO_ZOOM); }, [file?.id]);
+
+  // Ролик идёт оригиналом (копии ещё нет): раз в 15 секунд спрашиваем, не готова ли копия. Сервер делает её вне очереди.
+  const id = file?.id;
+  const isVid = !!file && isVideo(file.mime);
+  useEffect(() => {
+    if (!id || !isVid || !noPreview || broken || copyReady) return;
+    let stop = false;
+    const t = setInterval(() => {
+      fetch(videoViewUrl(id), { method: 'HEAD', cache: 'no-store', credentials: 'same-origin' })
+        .then((r) => { if (!stop && r.ok) setCopyReady(true); })
+        .catch(() => undefined);
+    }, 15_000);
+    return () => { stop = true; clearInterval(t); };
+  }, [id, isVid, noPreview, broken, copyReady]);
 
   // В каком альбоме лежит открытый файл (для подписи кнопки «В альбом» / «Сменить альбом»).
   useEffect(() => {
@@ -221,7 +236,9 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         <AnimatePresence mode="wait" initial={false}>
           <motion.div key={file.id} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex size-full items-center justify-center">
             {video ? (
-              <video key={`${file.id}${noPreview ? 'o' : 'v'}`} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} controls autoPlay playsInline className="max-h-full max-w-full rounded-lg" />
+              <video key={`${file.id}${noPreview ? 'o' : 'v'}`} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))}
+                onCanPlay={(e) => { if (e.currentTarget.paused && e.currentTarget.currentTime === 0) e.currentTarget.play().catch(() => undefined); }}
+                controls autoPlay playsInline preload="auto" className="max-h-full max-w-full rounded-lg bg-black" />
             ) : broken ? (
               <div className="flex flex-col items-center gap-3 text-center text-white/70">
                 <FileQuestion className="size-12" aria-hidden />
@@ -236,6 +253,21 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
             )}
           </motion.div>
         </AnimatePresence>
+        {video && noPreview && !broken && (
+          <div role="status" className="absolute inset-x-2 top-2 z-10 mx-auto flex max-w-xl flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-xl bg-black/70 px-3 py-2 text-center text-sm text-white/90 backdrop-blur">
+            {copyReady ? (
+              <>
+                <span>Копия для просмотра готова.</span>
+                <button type="button" onClick={(e) => { e.stopPropagation(); setNoPreview(false); setCopyReady(false); }} className="rounded-lg bg-violet-600 px-3 py-1 font-medium text-white hover:bg-violet-500">Переключить</button>
+              </>
+            ) : (
+              <>
+                <span>Показан оригинал: копия для просмотра готовится. Если картинки нет, скачайте файл.</span>
+                <a href={fileUrl(file.id, true)} download={file.name} onClick={(e) => e.stopPropagation()} className="rounded-lg bg-white/15 px-3 py-1 font-medium hover:bg-white/25">Скачать</a>
+              </>
+            )}
+          </div>
+        )}
         <p className="pointer-events-none absolute bottom-2 left-0 right-0 hidden text-center text-xs text-white/40 sm:block">
           {view.scale > 1 ? `${Math.round(view.scale * 100)}%. Клик вернёт масштаб` : 'Клик: дальше. Правый клик: назад. Колесо: масштаб. Клик по фону или Esc: закрыть'}
         </p>
