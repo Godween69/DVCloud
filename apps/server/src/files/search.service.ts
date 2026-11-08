@@ -3,6 +3,7 @@ import { DbService } from '../db/db.service';
 import { FileRow } from './files.service';
 import { MediaSettingsService } from './media-settings';
 import { MlClient, MlError } from './ml-client';
+import { PeopleService } from './people.service';
 
 export interface SearchHit {
   file: FileRow;
@@ -46,7 +47,30 @@ export class SearchService {
     @Inject(DbService) private readonly db: DbService,
     @Inject(MlClient) private readonly ml: MlClient,
     @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
+    @Inject(PeopleService) private readonly people: PeopleService,
   ) {}
+
+  // Запрос с именами: «Валя», «Валя на пляже», «кот Ефим». Имена выбирают людей, остальное уточняет смыслом (если поиск по смыслу доступен).
+  // Без совпадений с именами это обычный поиск по смыслу.
+  async find(ownerId: string, q: string, limit: number): Promise<{ hits: SearchHit[]; status: SearchStatus; people: { id: string; name: string }[] }> {
+    const pm = await this.people.matchNames(ownerId, q);
+    if (pm.ids.length === 0) return { ...(await this.search(ownerId, q, limit)), people: [] };
+    const people = await this.people.names(ownerId, pm.ids);
+    if (!pm.rest) {
+      const rows = await this.people.filesWithAll(ownerId, pm.ids, limit);
+      return { hits: rows.map((file) => ({ file, score: 1 })), status: await this.status(ownerId), people };
+    }
+    // Имя и уточнение: сначала всё, что относится к людям, потом отбор по смыслу среди них.
+    const mine = new Map((await this.people.filesWithAll(ownerId, pm.ids, 20_000)).map((f) => [f.id, f]));
+    try {
+      const r = await this.search(ownerId, pm.rest, 3000);
+      return { hits: r.hits.filter((h) => mine.has(h.file.id)).slice(0, limit), status: r.status, people };
+    } catch (e) {
+      // Поиск по смыслу выключен или недоступен: показываем всех найденных людей, без уточнения.
+      if (e instanceof ServiceUnavailableException) return { hits: [...mine.values()].slice(0, limit).map((file) => ({ file, score: 1 })), status: await this.status(ownerId), people };
+      throw e;
+    }
+  }
 
   async status(ownerId: string): Promise<SearchStatus> {
     const s = await this.settings.get();

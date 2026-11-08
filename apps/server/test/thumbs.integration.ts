@@ -80,14 +80,86 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     }
   });
 
-  it('окончательное удаление убирает и миниатюру', async () => {
+  it('окончательное удаление записи не трогает общую миниатюру: она уходит вместе с файлом-оригиналом', async () => {
     const up = await upload(e.boris, 'gone.jpg', await photo('#33cc66'));
     const id = up.json.file.id;
     assert.equal((await api('GET', `/api/files/${id}/thumb`, { cookie: e.boris })).status, 200);
     const before = (await e.walk(join(e.dataDir, 'thumbs'))).length;
     await api('DELETE', `/api/files/${id}`, { cookie: e.boris });
     await api('DELETE', `/api/files/${id}?permanent=1`, { cookie: e.boris });
+    assert.equal((await e.walk(join(e.dataDir, 'thumbs'))).length, before, 'оригинал ещё на диске, миниатюра при нём');
+    // администратор стирает оригинал: миниатюра уходит
+    const o = await e.intCall('GET', '/internal/files/orphans');
+    const gone = o.orphans.find((x: { name: string }) => x.name === 'gone.jpg');
+    assert.ok(gone, 'оригинал остался без владельца');
+    const blobId = gone.id;
+    assert.equal((await e.intCall('POST', `/internal/files/${blobId}/purge`)).links, 0);
     assert.equal((await e.walk(join(e.dataDir, 'thumbs'))).length, before - 1);
+  });
+
+  it('один и тот же файл у двух людей: миниатюра одна на всех, доступ у каждого по своей записи', async () => {
+    const buf = await photo('#aa44cc');
+    const a = await upload(e.anna, 'same-a.jpg', buf);
+    const b = await upload(e.boris, 'same-b.jpg', buf);
+    assert.equal(a.status, 201);
+    assert.equal(b.status, 201);
+    const before = (await e.walk(join(e.dataDir, 'thumbs'))).length;
+    const ta = await api('GET', `/api/files/${a.json.file.id}/thumb`, { cookie: e.anna });
+    const tb = await api('GET', `/api/files/${b.json.file.id}/thumb`, { cookie: e.boris });
+    assert.equal(ta.status, 200);
+    assert.equal(tb.status, 200);
+    assert.deepEqual(ta.buf, tb.buf);
+    assert.equal((await e.walk(join(e.dataDir, 'thumbs'))).length, before + 1, 'на диске одна миниатюра на двоих');
+    assert.equal((await api('GET', `/api/files/${b.json.file.id}/thumb`, { cookie: e.anna })).status, 404, 'чужая запись по-прежнему закрыта');
+    // один убрал свою запись: у второго миниатюра на месте
+    await api('DELETE', `/api/files/${a.json.file.id}`, { cookie: e.anna });
+    await api('DELETE', `/api/files/${a.json.file.id}?permanent=1`, { cookie: e.anna });
+    assert.equal((await api('GET', `/api/files/${b.json.file.id}/thumb`, { cookie: e.boris })).status, 200);
+    assert.equal((await e.walk(join(e.dataDir, 'thumbs'))).length, before + 1);
+  });
+
+  it('прежние миниатюры по записи переносятся на общие: лениво при запросе и разово при запуске', async () => {
+    const { ThumbsService } = await import('../src/files/thumbs.service');
+    const ths = e.app.get(ThumbsService);
+    const mk = async (name: string, color: string): Promise<string> => {
+      const up = await upload(e.anna, name, await photo(color));
+      const id = up.json.file.id as string;
+      assert.equal((await api('GET', `/api/files/${id}/thumb`, { cookie: e.anna })).status, 200);
+      return id;
+    };
+    // дублируем состояние «до обновления»: файл миниатюры лежит по прежнему пути
+    const pg = new (await import('pg')).default.Client({ connectionString: e.dbUrl });
+    await pg.connect();
+    try {
+      const lazy = await mk('lazy.jpg', '#112233');
+      const bulk = await mk('bulk.jpg', '#445566');
+      const dup = await mk('dup.jpg', '#778899');
+      const row = async (id: string) => (await pg.query('SELECT owner_id, blob_id FROM files WHERE id = $1', [id])).rows[0] as { owner_id: string; blob_id: string };
+      const { rename, mkdir, writeFile } = await import('node:fs/promises');
+      const legacyOf = async (id: string) => { const r = await row(id); return { shared: join(e.dataDir, 'thumbs', `${r.blob_id}.webp`), old: join(e.dataDir, 'thumbs', r.owner_id, `${id}.webp`), dir: join(e.dataDir, 'thumbs', r.owner_id) }; };
+      for (const id of [lazy, bulk]) { const l = await legacyOf(id); await mkdir(l.dir, { recursive: true }); await rename(l.shared, l.old); }
+      // лениво: первый же запрос подбирает прежнюю миниатюру, без пересчёта
+      const l1 = await legacyOf(lazy);
+      const t = await api('GET', `/api/files/${lazy}/thumb`, { cookie: e.anna });
+      assert.equal(t.status, 200);
+      await assert.rejects(stat(l1.old));
+      assert.ok((await stat(l1.shared)).size > 0);
+      // разово: прежнюю миниатюру и лишнюю копию подбирает перенос, запись без файла-оригинала не трогается
+      const l2 = await legacyOf(bulk);
+      const l3 = await legacyOf(dup);
+      await writeFile(l3.old, 'лишняя копия'); // общая миниатюра этого файла уже на месте: копия должна уйти
+      await writeFile(join(l2.dir, '999999.webp'), 'записи нет');
+      await rm(join(e.dataDir, '.thumbs-shared-v1'), { force: true });
+      const r = await ths.migrateLegacy();
+      assert.ok(r.moved >= 1 && r.dropped >= 2, JSON.stringify(r));
+      await assert.rejects(stat(l2.old));
+      assert.ok((await stat(l2.shared)).size > 0);
+      await assert.rejects(stat(l3.old));
+      assert.ok((await stat(l3.shared)).size > 0);
+      assert.deepEqual(await ths.migrateLegacy(), { moved: 0, dropped: 0 }, 'второй раз ничего не делает');
+    } finally {
+      await pg.end();
+    }
   });
 
   it('превью для просмотра: WebP не больше 2000 px, у видео и чужих 404', async () => {

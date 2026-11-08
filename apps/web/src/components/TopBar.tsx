@@ -5,7 +5,7 @@ import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
 
-export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'similar' | 'trash' | 'security' | 'search';
+export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'people' | 'similar' | 'trash' | 'security' | 'search';
 
 interface Props {
   user: User;
@@ -14,7 +14,8 @@ interface Props {
   usage: Usage | null;
   onAdd: () => void;
   onAddFolder: () => void;
-  searchOn: boolean; // поиск по смыслу включён администратором
+  searchOn: boolean; // поиск включён: по смыслу или по именам людей
+  peopleOn: boolean; // распознавание лиц или питомцев включено администратором
   theme: Theme;
   onToggleTheme: () => void;
   onLogout: () => void;
@@ -59,7 +60,7 @@ function AddMenu({ onAdd, onAddFolder }: { onAdd: () => void; onAddFolder: () =>
   );
 }
 
-export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, theme, onToggleTheme, onLogout }: Props) {
+export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, peopleOn, theme, onToggleTheme, onLogout }: Props) {
   const pct = usage && usage.quotaBytes ? Math.min(100, (usage.usedBytes / usage.quotaBytes) * 100) : null;
   const tone = pct === null ? 'bg-violet-500' : pct >= 90 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-violet-500';
   const textTone = pct !== null && pct >= 85 ? 'font-medium text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400';
@@ -75,7 +76,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
         </div>
 
         <nav aria-label="Разделы" className="ml-1 flex min-w-0 gap-1 overflow-x-auto sm:ml-4">
-          {([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ['similar', 'Похожие'], ['trash', 'Корзина']] as const).map(([id, label]) => (
+          {([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ...(peopleOn ? [['people', 'Люди'] as const] : []), ['similar', 'Похожие'], ['trash', 'Корзина']] as const).map(([id, label]) => (
             <button key={id} type="button" onClick={() => onView(id)} aria-current={view === id ? 'page' : undefined} className="relative shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:text-white">
               {view === id && <motion.span layoutId="nav-pill" className="absolute inset-0 rounded-lg bg-paper-200 dark:bg-gray-800" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
               <span className="relative">{label}</span>
@@ -93,7 +94,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
             </div>
           )}
           {searchOn && (
-            <button type="button" onClick={() => onView('search')} aria-current={view === 'search' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Поиск" title="Поиск по смыслу">
+            <button type="button" onClick={() => onView('search')} aria-current={view === 'search' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Поиск" title="Поиск">
               <Search className="size-5" aria-hidden />
             </button>
           )}

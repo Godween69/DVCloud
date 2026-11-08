@@ -68,6 +68,8 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
           timezone: (form.get('timezone') ?? '').trim() || undefined,
           searchEnabled: form.get('searchEnabled') === '1',
           searchCutoff: num('searchCutoff'),
+          facesEnabled: form.get('facesEnabled') === '1',
+          petsEnabled: form.get('petsEnabled') === '1',
         };
         for (const k of Object.keys(patch)) if (patch[k] === undefined) delete patch[k];
         const r = await api.saveMedia(patch);
@@ -79,8 +81,10 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         session.flash = { kind: 'ok', text: `${apply ? 'Пересчёт дат запущен' : 'Проверка дат запущена'}: файлов ${r.job.total}. Обновите страницу, чтобы увидеть ход.` };
       } else if (path === '/media/clear') {
         const what = form.get('what') ?? '';
+        // Данные лиц стираются целиком, вместе с названиями людей: нужно вписать слово.
+        if (what === 'people' && (form.get('word') ?? '').trim().toLowerCase() !== 'стереть') throw new ApiError(400, 'Чтобы стереть данные лиц, впишите слово «стереть»');
         const r = await api.clearMedia(what);
-        session.flash = { kind: 'ok', text: what.startsWith('index') ? `Сброшено записей поиска: ${r.files}. Они посчитаются заново в фоне` : `Очищено: ${r.files} файлов` };
+        session.flash = { kind: 'ok', text: what === 'people' ? `Стёрто находок: ${r.files}. Групп и названий больше нет` : what.startsWith('index') ? `Сброшено записей поиска: ${r.files}. Они посчитаются заново в фоне` : `Очищено: ${r.files} файлов` };
       } else {
         return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
       }

@@ -114,7 +114,33 @@ export interface SearchStatus {
   indexed: number; // из них уже готовых к поиску
 }
 export interface SearchResult {
+  people?: FoundPerson[]; // кого узнали по словам запроса («Валя»)
   files: FileItem[]; // от самого подходящего к менее подходящим
   indexed: number;
   total: number;
+}
+
+// Люди и питомцы (см. docs/PEOPLE.md)
+export interface PeopleGroup {
+  id: string;
+  name: string | null; // null: группа ещё не названа
+  kind: 'person' | 'pet';
+  hidden: boolean;
+  count: number; // файлов
+  cover: string; // номер находки для обложки
+}
+export interface PeopleList {
+  enabled: { faces: boolean; pets: boolean };
+  people: PeopleGroup[];
+}
+export interface FaceBox {
+  id: string;
+  kind: 'face' | 'cat' | 'dog';
+  box: [number, number, number, number]; // доли картинки: x, y, ширина, высота
+  personId: string | null;
+  name: string | null;
+}
+export interface FoundPerson {
+  id: string;
+  name: string;
 }

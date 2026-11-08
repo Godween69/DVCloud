@@ -11,7 +11,7 @@ RUN pip install onnxruntime==1.29.0 numpy==2.5.3 pillow==12.3.0 tokenizers==0.23
     && useradd --system --uid 1000 --no-create-home --shell /usr/sbin/nologin ml
 
 WORKDIR /app
-COPY app.py .
+COPY app.py vision.py ./
 USER ml
 EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

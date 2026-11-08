@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { DbService } from '../db/db.service';
 import { MediaSettings, MediaSettingsService, videoParams } from './media-settings';
 import { StorageService } from './storage.service';
-import { MlClient } from './ml-client';
+import { MlClient, MlHealth } from './ml-client';
 import { IndexStats, indexStats } from './search-index';
 import { detectTakenAt } from './taken';
 
-export type ClearTarget = 'thumbs' | 'previews' | 'videos' | 'index' | 'index-failed';
+export type ClearTarget = 'thumbs' | 'previews' | 'videos' | 'index' | 'index-failed' | 'people';
 
 export interface DirStat {
   files: number;
@@ -21,6 +21,16 @@ export interface MediaOverview {
   previews: DirStat;
   videos: { copies: DirStat; total: number; totalBytes: number; ready: number; skipped: number; failed: number; pending: number };
   search: IndexStats & { configured: boolean; up: boolean; modelFiles: boolean; model: string | null; sizeBytes: number };
+  people: PeopleStats;
+}
+
+// Лица и питомцы: готовы ли модели, сколько файлов просмотрено и что найдено.
+export interface PeopleStats {
+  faces: { enabled: boolean; modelFiles: boolean; total: number; done: number; failed: number; pending: number };
+  pets: { enabled: boolean; modelFiles: boolean; total: number; done: number; failed: number; pending: number };
+  detections: { faces: number; pets: number };
+  groups: number; // групп людей и питомцев у всех вместе
+  named: number; // из них с именем
 }
 
 export interface DatesJob {
@@ -152,6 +162,33 @@ export class AdminMediaService {
         pending: Number(x.pending),
       },
       search: { ...(await indexStats(this.db, h?.model ?? null)), configured: this.ml.configured, up: h !== null, modelFiles: h?.ready ?? false, model: h?.model ?? null, sizeBytes: size },
+      people: await this.peopleStats(settings, h),
+    };
+  }
+
+  private async peopleStats(settings: MediaSettings, h: MlHealth | null): Promise<PeopleStats> {
+    const fm = h?.faces?.ready ? h.faces.model : null;
+    const pm = h?.pets?.ready ? h.pets.model : null;
+    const r = (
+      await this.db.query<{ total: string; fd: string; ff: string; pd: string; pf: string }>(
+        `SELECT count(*) AS total,
+                count(*) FILTER (WHERE sf.status = 'done' AND sf.model = $1) AS fd, count(*) FILTER (WHERE sf.status = 'failed' AND sf.model = $1) AS ff,
+                count(*) FILTER (WHERE sp.status = 'done' AND sp.model = $2) AS pd, count(*) FILTER (WHERE sp.status = 'failed' AND sp.model = $2) AS pf
+         FROM blobs b LEFT JOIN detection_scans sf ON sf.blob_id = b.id AND sf.what = 'faces' LEFT JOIN detection_scans sp ON sp.blob_id = b.id AND sp.what = 'pets'
+         WHERE b.mime LIKE 'image/%' AND EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id AND f.trashed_at IS NULL)`,
+        [fm, pm],
+      )
+    ).rows[0];
+    const total = Number(r.total);
+    const d = (await this.db.query<{ f: string; p: string }>("SELECT count(*) FILTER (WHERE kind = 'face') AS f, count(*) FILTER (WHERE kind <> 'face') AS p FROM detections")).rows[0];
+    const g = (await this.db.query<{ n: string; named: string }>('SELECT count(*) AS n, count(name) AS named FROM people')).rows[0];
+    const part = (enabled: boolean, modelFiles: boolean, done: number, failed: number) => ({ enabled, modelFiles, total, done, failed, pending: Math.max(0, total - done - failed) });
+    return {
+      faces: part(settings.facesEnabled, fm !== null, Number(r.fd), Number(r.ff)),
+      pets: part(settings.petsEnabled, pm !== null, Number(r.pd), Number(r.pf)),
+      detections: { faces: Number(d.f), pets: Number(d.p) },
+      groups: Number(g.n),
+      named: Number(g.named),
     };
   }
 
@@ -176,7 +213,17 @@ export class AdminMediaService {
       const r = await this.db.query(what === 'index' ? 'DELETE FROM embeddings' : "DELETE FROM embeddings WHERE status = 'failed'");
       return { files: r.rowCount ?? 0, bytes: 0 };
     }
-    if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews, videos, index или index-failed');
+    if (what === 'people') {
+      // Все находки, группы и имена людей и питомцев. Фото не затрагиваются; при включённом распознавании просмотр начнётся заново.
+      const n = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM detections')).rows[0].n);
+      await this.db.query('DELETE FROM detection_scans');
+      await this.db.query('DELETE FROM people');
+      await this.db.query('DELETE FROM detections');
+      await rm(this.storage.abs('faces'), { recursive: true, force: true });
+      await mkdir(this.storage.abs('faces'), { recursive: true });
+      return { files: n, bytes: 0 };
+    }
+    if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews, videos, index, index-failed или people');
     const before = await dirStat(this.storage.abs(what));
     await rm(this.storage.abs(what), { recursive: true, force: true });
     await mkdir(this.storage.abs(what), { recursive: true });

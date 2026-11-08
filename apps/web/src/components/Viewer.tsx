@@ -1,12 +1,13 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl, previewUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { usePref } from '../lib/prefs';
 import { NO_ZOOM, clampPan, zoomAt, type View } from '../lib/zoom';
-import type { AlbumRef, FileItem } from '../types';
+import type { AlbumRef, FileItem, PeopleGroup } from '../types';
+import { FaceLayer } from './FaceLayer';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
 
 interface Props {
@@ -20,6 +21,7 @@ interface Props {
   onError: (message: string) => void;
   quick: { id: string; name: string; has: (id: string) => boolean } | null; // «быстрый альбом»
   onQuick: (f: FileItem) => Promise<'added' | 'moved' | null>; // 'moved': Shell уже сам перешёл к соседнему
+  people?: { groups: PeopleGroup[]; onChanged: () => void } | null; // есть, когда лица и питомцы включены
 }
 
 const FADE = { duration: 0.15 }; // уход старой кнопки 0,15 с + появление новой 0,15 с = плавная замена за 0,3 с
@@ -59,7 +61,7 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAlbumChanged, onError, quick, onQuick }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
@@ -73,6 +75,8 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const img = useRef<HTMLImageElement>(null);
   const [view, setView] = useState<View>(NO_ZOOM);
   const [dragging, setDragging] = useState(false);
+  const [faces, setFaces] = usePref<'on' | 'off'>('faces', 'off', ['on', 'off'] as const); // рамки лиц поверх фото
+  const [imgTick, setImgTick] = useState(0);
   // Альбом каждого файла запоминается (и подгружается для соседних фото заранее), поэтому при листании кнопки не мигают.
   const albums = useRef(new Map<string, AlbumRef[]>());
   const [, bump] = useState(0);
@@ -228,6 +232,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         </div>
         {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
+        {people && !video && <button type="button" className={`${btn} ${faces === 'on' ? '!bg-violet-600' : ''}`} onClick={() => setFaces(faces === 'on' ? 'off' : 'on')} aria-pressed={faces === 'on'} aria-label="Показать, кто на фото" title="Кто на фото"><ScanFace className="size-5" aria-hidden /></button>}
         {video && <button type="button" className={btn} onClick={() => setVfit(vfit === 'fit' ? 'orig' : 'fit')} aria-label={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по окну'} title={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по размеру окна'}>{vfit === 'fit' ? <Minimize2 className="size-5" aria-hidden /> : <Maximize2 className="size-5" aria-hidden />}</button>}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
         {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
@@ -249,13 +254,14 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
                 <a className="rounded-lg bg-violet-600 px-4 py-2 text-white hover:bg-violet-500" href={fileUrl(file.id, true)} download={file.name}>Скачать файл</a>
               </div>
             ) : (
-              <img ref={img} src={noPreview ? fileUrl(file.id) : previewUrl(file.id)} alt={file.name} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} draggable={false}
+              <img ref={img} src={noPreview ? fileUrl(file.id) : previewUrl(file.id)} alt={file.name} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} onLoad={() => setImgTick((n) => n + 1)} draggable={false}
                 onClick={onImgClick} onContextMenu={onImgContext} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
                 style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transition: dragging ? 'none' : 'transform 90ms ease-out', touchAction: 'none' }}
                 className={`max-h-full max-w-full select-none rounded-lg object-contain ${view.scale > 1 ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`} />
             )}
           </motion.div>
         </AnimatePresence>
+        {people && faces === 'on' && !video && !broken && <FaceLayer fileId={file.id} img={img} stage={stage} view={view} tick={imgTick} groups={people.groups} onChanged={people.onChanged} onError={onError} />}
         {video && noPreview && !broken && (
           <div role="status" className="absolute inset-x-2 top-2 z-10 mx-auto flex max-w-xl flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-xl bg-black/70 px-3 py-2 text-center text-sm text-white/90 backdrop-blur">
             {copyReady ? (

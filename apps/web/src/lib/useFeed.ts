@@ -4,7 +4,7 @@ import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
 // Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
-export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'videos' | 'screenshots') {
+export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'videos' | 'screenshots', person?: string) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
       if (reset) {
         cursor.current = null;
         done.current = false;
-        if (albumId) {
+        if (albumId || person) {
           setFiles([]);
           setLoaded(false);
         }
@@ -37,7 +37,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
       setError(null);
       try {
         const before = reset ? undefined : (cursor.current ?? undefined);
-        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before, kind, atRef.current ?? undefined);
+        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
@@ -58,17 +58,17 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
         }
       }
     },
-    [trashed, albumId, kind],
+    [trashed, albumId, kind, person],
   );
 
   // Догрузить файлы новее самого верхнего (лента начата с выбранного месяца). Вызывающий сам сохраняет положение прокрутки.
   const loadNewer = useCallback(async () => {
     const key = prevRef.current;
-    if (!key || newerBusy.current || trashed || albumId) return;
+    if (!key || newerBusy.current || trashed || albumId || person) return;
     const my = gen.current;
     newerBusy.current = true;
     try {
-      const r = await api.list(false, undefined, kind, undefined, key);
+      const r = await api.list(false, undefined, kind, undefined, key, person);
       if (my !== gen.current) return;
       prevRef.current = r.prev ?? null;
       setHasNewer(prevRef.current !== null);
@@ -81,7 +81,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
     } finally {
       newerBusy.current = false;
     }
-  }, [trashed, albumId, kind]);
+  }, [trashed, albumId, kind, person]);
 
   // Перейти к месяцу ("2015-03") или вернуться к самым новым (null). Сайт показывает ленту с этого месяца вниз.
   const jump = useCallback(async (to: string | null) => {

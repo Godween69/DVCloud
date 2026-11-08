@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { BlobRow, FileRow, ID_RE } from './files.service';
@@ -64,6 +65,7 @@ export class AdminStorageService {
         if (!del.rowCount) { skipped++; continue; }
         for (const p of new Set<string>([b.path, ...extra])) await this.storage.remove(p);
         await this.storage.remove(`videos/${b.id}.mp4`);
+        await this.removeDerived(b.id, []);
         count++;
         bytes += Number(b.size_bytes);
       }
@@ -78,6 +80,19 @@ export class AdminStorageService {
     return b;
   }
 
+  // Миниатюра и превью файла-оригинала (общие) уходят вместе с ним; прежние по записям, если ещё не перенесены, тоже.
+  private async removeDerived(blobId: string, links: Pick<FileRow, 'owner_id' | 'id'>[]): Promise<void> {
+    await this.storage.remove(`thumbs/${blobId}.webp`);
+    await this.storage.remove(`previews/${blobId}.webp`);
+    await rm(this.storage.abs(`faces/${blobId}`), { recursive: true, force: true }); // вырезки лиц
+    for (const l of links) await this.removeLegacyDerived(l);
+  }
+
+  private async removeLegacyDerived(l: Pick<FileRow, 'owner_id' | 'id'>): Promise<void> {
+    await this.storage.remove(`thumbs/${l.owner_id}/${l.id}.webp`);
+    await this.storage.remove(`previews/${l.owner_id}/${l.id}.webp`);
+  }
+
   // Стирает файл с диска и все записи людей о нём. Единственное место, где файлы удаляются физически.
   async purgeBlob(id: string): Promise<{ links: number; bytes: number }> {
     const b = await this.blob(id);
@@ -88,7 +103,7 @@ export class AdminStorageService {
     await this.db.query('DELETE FROM blobs WHERE id = $1', [id]);
     for (const p of paths) await this.storage.remove(p);
     await this.storage.remove(`videos/${id}.mp4`); // копия для просмотра (строка video_copies ушла вместе с blobs)
-    for (const l of links) await this.storage.remove(`thumbs/${l.owner_id}/${l.id}.webp`);
+    await this.removeDerived(id, links);
     return { links: links.length, bytes: Number(b.size_bytes) };
   }
 
@@ -203,7 +218,7 @@ export class AdminStorageService {
     const links = (await this.db.query<FileRow>('SELECT id, owner_id FROM files WHERE owner_id = $1', [u.id])).rows;
     await this.db.query('DELETE FROM albums WHERE owner_id = $1', [u.id]);
     await this.db.query('DELETE FROM files WHERE owner_id = $1', [u.id]);
-    for (const l of links) await this.storage.remove(`thumbs/${l.owner_id}/${l.id}.webp`);
+    for (const l of links) await this.removeLegacyDerived(l); // общие миниатюры остаются у файлов-оригиналов
     await this.db.query('DELETE FROM users WHERE id = $1', [u.id]);
     return { links: links.length };
   }

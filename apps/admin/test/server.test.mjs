@@ -47,7 +47,7 @@ describe('админка', () => {
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
         if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
-        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80 }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 } });
+        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: true, petsEnabled: false }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 }, people: { faces: { enabled: true, modelFiles: true, total: 100, done: 60, failed: 1, pending: 39 }, pets: { enabled: false, modelFiles: false, total: 100, done: 0, failed: 0, pending: 100 }, detections: { faces: 75, pets: 0 }, groups: 6, named: 2 } });
         if (req.method === 'PATCH' && req.url === '/internal/media/settings') { const b = JSON.parse(body); return b.previewMaxSide < 600 ? j(400, { message: 'previewMaxSide: целое число от 600 до 4000' }) : j(200, { settings: b, cleared: b.previewMaxSide ? ['previews'] : [] }); }
         if (req.method === 'GET' && req.url === '/internal/media/dates') return j(200, { job: { running: false, apply: false, startedAt: 'x', finishedAt: 'y', total: 100, checked: 100, changed: 3, examples: [{ name: '<i>a</i>.jpg', before: '2025-07-01T09:45:00.000Z', after: '2020-05-25T18:55:28.000Z' }] } });
         if (req.method === 'POST' && req.url === '/internal/media/dates') return j(200, { job: { running: true, apply: JSON.parse(body).apply, total: 100, checked: 0, changed: 0, examples: [] } });
@@ -293,6 +293,30 @@ describe('админка', () => {
     await post('/media/clear', { what: 'index-failed' });
     assert.ok(calls.some((c) => c.startsWith('POST /internal/media/clear') && c.includes('"what":"index-failed"')));
     assert.ok((await req('GET', '/media', { cookie })).text.includes('Сброшено записей поиска'));
+  });
+
+  it('люди и питомцы: панель с ходом, настройки, стирание только со словом', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/media', { cookie });
+    assert.ok(page.text.includes('Люди и питомцы') && page.text.includes('Найдено лиц: 75, питомцев: 0. Групп: 6, из них названо людьми: 2.'));
+    assert.ok(page.text.includes('Готово 60 из 100, не удалось прочитать: 1, в очереди: 39'));
+    assert.ok(page.text.includes('<b>Лица:</b> идёт просмотр') && page.text.includes('<b>Питомцы:</b> выключено'));
+    assert.ok(page.text.includes('name="facesEnabled" value="1" checked') && !page.text.includes('name="petsEnabled" value="1" checked'));
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/media/settings', { facesEnabled: '1', petsEnabled: '1' });
+    const sent = calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop();
+    assert.ok(sent.includes('"facesEnabled":true') && sent.includes('"petsEnabled":true'), sent);
+    await post('/media/settings', { previewEnabled: '1' });
+    assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"facesEnabled":false'), 'снятая галочка выключает лица');
+    const before = calls.filter((c) => c.includes('"what":"people"')).length;
+    await post('/media/clear', { what: 'people' });
+    await post('/media/clear', { what: 'people', word: 'нет' });
+    assert.equal(calls.filter((c) => c.includes('"what":"people"')).length, before, 'без слова ничего не стирается');
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('впишите слово'));
+    await post('/media/clear', { what: 'people', word: ' Стереть ' });
+    assert.equal(calls.filter((c) => c.includes('"what":"people"')).length, before + 1);
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Стёрто находок: 7'));
   });
 
   it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {

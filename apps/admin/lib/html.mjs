@@ -264,6 +264,22 @@ const searchPanel = (x, s, csrf) => {
 <p class="muted">${s.searchEnabled ? 'Поиск включён: векторы считаются в фоне, когда нет загрузок, и пока вы не выключите.' : 'Поиск выключен: ничего не считается, строка поиска на сайте скрыта.'}</p></section>`;
 };
 
+// Лица и питомцы: готовность моделей, ход просмотра, находки, полная очистка (со словом-подтверждением).
+const peoplePanel = (p, s, csrf, up) => {
+  if (!p) return '';
+  const row = (label, x) => {
+    const state = !x.enabled ? 'выключено' : !up ? 'ждёт службу ML' : !x.modelFiles ? 'нет файлов модели' : x.pending ? 'идёт просмотр' : 'всё просмотрено';
+    return `<p><b>${label}:</b> ${state}. Готово ${x.done} из ${x.total}${x.failed ? `, не удалось прочитать: ${x.failed}` : ''}${x.pending ? `, в очереди: ${x.pending}` : ''}.</p>
+<progress max="${Math.max(x.total, 1)}" value="${x.done + x.failed}" aria-label="Ход просмотра: ${label}"></progress>`;
+  };
+  return `<section class="panel"><div class="panel-head"><div><h2>Люди и питомцы</h2><p class="muted">Найдено лиц: ${p.detections.faces}, питомцев: ${p.detections.pets}. Групп: ${p.groups}, из них названо людьми: ${p.named}.</p></div></div>
+${row('Лица', p.faces)}
+${row('Питомцы', p.pets)}
+<form method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="people">
+<p class="muted">Стереть все находки, группы и имена людей и питомцев у всех. Фото не затрагиваются. Если распознавание включено, просмотр начнётся заново, а названия придётся давать снова.</p>
+<p><input type="text" name="word" placeholder="впишите: стереть" autocomplete="off" aria-label="Подтверждение: слово стереть"> <button class="danger" type="submit">Стереть данные лиц</button></p></form></section>`;
+};
+
 export function mediaPage({ media, dates, csrf, flash, loadError }) {
   const s = media?.settings;
   const clear = (what, label, hint) =>
@@ -296,6 +312,10 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
 <div class="setting"><div><b>Искать фото и видео по описанию</b><p class="muted">Облако в фоне «просматривает» каждое фото (для видео один кадр) нейросетью и запоминает его смысл, поэтому на сайте можно искать словами: «собака на пляже», «скриншот переписки». Работает по-русски. Фото не покидают ваш сервер. Нагружает процессор часами (разово), поэтому по умолчанию выключено.</p></div>${sw('searchEnabled', s.searchEnabled, 'Включить поиск')}</div>
 <div class="setting"><div><b>Строгость выдачи</b><p class="muted">В результатах остаются файлы, которые подходят не хуже этого процента от лучшего совпадения, от 50 до 95. Больше число: короче и точнее выдача. Меньше: больше находок, но и больше лишнего.</p></div><input class="narrow" type="number" name="searchCutoff" min="50" max="95" step="1" value="${s.searchCutoff}" aria-label="Строгость выдачи, проценты"></div>
 </section>
+<section class="panel"><h2>Люди и питомцы</h2>
+<div class="setting"><div><b>Узнавать лица на фото</b><p class="muted">Облако в фоне находит лица нейросетью и собирает их в группы «один человек»; каждый член семьи называет своих людей сам, чужих названий не видит, а на сайте можно искать «фото с Валей». Лица считаются в вашем облаке и никуда не отправляются. Это биометрические данные: включайте, только если все, кто пользуется облаком, согласны. Нагружает процессор часами (разово), поэтому по умолчанию выключено.</p></div>${sw('facesEnabled', s.facesEnabled, 'Включить лица')}</div>
+<div class="setting"><div><b>Узнавать питомцев</b><p class="muted">Так же находит кошек и собак. Узнавание по снимку питомца заметно грубее, чем для людей: группы можно объединять и править вручную.</p></div>${sw('petsEnabled', s.petsEnabled, 'Включить питомцев')}</div>
+</section>
 <section class="panel"><h2>Даты съёмки</h2>
 <div class="setting"><div><b>Часовой пояс</b><p class="muted">В нём записано время в метаданных и в именах файлов (там нет пояса). Для семьи в Москве: Europe/Moscow. Применяется к новым загрузкам и к пересчёту ниже.</p></div><span><input type="text" name="timezone" list="tz" value="${esc(s.timezone)}" maxlength="64" aria-label="Часовой пояс"><datalist id="tz">${TIMEZONES.map((z) => `<option value="${z}">`).join('')}</datalist></span></div>
 </section>
@@ -307,6 +327,7 @@ ${topBar('media', csrf)}
 ${flashHtml(flash, loadError)}
 ${stats}
 ${media ? searchPanel(media.search, s, csrf) : ''}
+${media ? peoplePanel(media.people, s, csrf, media.search.up) : ''}
 ${form}
 ${media ? datesPanel(dates, csrf) : ''}`);
 }

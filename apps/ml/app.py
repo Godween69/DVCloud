@@ -6,6 +6,8 @@
   GET  /health        состояние: готовы ли файлы модели, что сейчас загружено в память
   POST /embed/image   тело: сама картинка (JPEG, PNG, WebP); ответ: вектор картинки
   POST /embed/text    тело: {"text": "собака на пляже"}; ответ: вектор текста
+  POST /faces         тело: картинка; ответ: найденные лица (рамка в долях 0..1, оценка, вектор лица из 128 чисел)
+  POST /pets          тело: картинка; ответ: найденные кошки и собаки (рамка, оценка, вектор как у поиска по смыслу)
 
 Вектор приходит как base64 от float32 (little-endian), длина 1, уже нормированный: сходство двух
 векторов равно их скалярному произведению. Картинки и текст попадают в одно пространство, поэтому
@@ -28,6 +30,9 @@ import onnxruntime as ort
 from PIL import Image, ImageOps
 from tokenizers import Tokenizer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I не добавляет папку скрипта сам
+import vision  # noqa: E402
+
 Image.MAX_IMAGE_PIXELS = 60_000_000  # защита от «бомб»: огромных по размеру картинок
 
 # Нормировка CLIP: средние и разброс по каналам RGB (одинаковые для OpenAI CLIP и OpenCLIP/LAION).
@@ -36,6 +41,10 @@ STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
 SIDE = 224
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_TEXT_CHARS = 1000
+MAX_SIDE = 2560  # лица и питомцев ищем не на больше, чем такой картинке (крупнее уменьшаем)
+MIN_FACE_PX = 36  # лицо меньше этого на уменьшенной картинке узнать нельзя
+FACES_MODEL_ID = "yunet2023mar-sface2021dec"
+PETS_MODEL_ID = "yolox-s"
 
 
 def env_int(name, default, lo, hi):
@@ -54,6 +63,9 @@ class Config:
         self.idle_sec = env_int("DVML_IDLE_SEC", 120, 1, 86400)
         self.text_len = env_int("DVML_TEXT_LEN", 77, 8, 512)
         self.port = env_int("DVML_PORT", 8090, 1, 65535)
+        root = os.path.dirname(self.model_dir.rstrip("/"))
+        self.faces_dir = os.environ.get("DVML_FACES_DIR", os.path.join(root, "faces"))  # yunet.onnx, sface.onnx
+        self.pets_dir = os.environ.get("DVML_PETS_DIR", os.path.join(root, "pets"))  # yolox_s.onnx
 
     def path(self, *parts):
         return os.path.join(self.model_dir, *parts)
@@ -67,13 +79,26 @@ class InputError(Exception):
     """Плохой вход: не картинка, пустой текст."""
 
 
-def prep_image(data):
-    """Картинка -> тензор 1x3x224x224: короткая сторона до 224 (бикубика), обрезка по центру, нормировка."""
+def load_rgb(data, max_side=None):
+    """Байты картинки -> RGB с учётом поворота по EXIF; при max_side слишком крупную уменьшает."""
     try:
         img = Image.open(io.BytesIO(data))
         img = ImageOps.exif_transpose(img).convert("RGB")
     except Exception as e:  # битый файл, неизвестный формат, слишком большая картинка
         raise InputError("картинка не читается: %s" % type(e).__name__)
+    if max_side and max(img.size) > max_side:
+        k = max_side / max(img.size)
+        img = img.resize((max(1, round(img.size[0] * k)), max(1, round(img.size[1] * k))), Image.BILINEAR)
+    return img
+
+
+def prep_image(data):
+    """Картинка -> тензор 1x3x224x224: короткая сторона до 224 (бикубика), обрезка по центру, нормировка."""
+    return prep_pil(load_rgb(data))
+
+
+def prep_pil(img):
+    """RGB-картинка (PIL) -> тензор 1x3x224x224: обрезка по центру до квадрата, нормировка."""
     img = ImageOps.fit(img, (SIDE, SIDE), Image.BICUBIC)
     a = (np.asarray(img, dtype=np.float32) / 255.0 - MEAN) / STD
     return np.ascontiguousarray(a.transpose(2, 0, 1)[None, ...])
@@ -113,13 +138,21 @@ class Models:
         self.tok = None
         self.last = time.monotonic()
         self.dim = None
+        self.aux_kind = None  # "faces" | "pets" | None: отдельная группа сетей для лиц и питомцев
+        self.aux = {}
+
+    def faces_ready(self):
+        return all(os.path.isfile(os.path.join(self.cfg.faces_dir, n)) for n in ("yunet.onnx", "sface.onnx"))
+
+    def pets_ready(self):
+        return os.path.isfile(os.path.join(self.cfg.pets_dir, "yolox_s.onnx")) and self.files_ready()
 
     def files_ready(self):
         c = self.cfg
         return all(os.path.isfile(c.path(*p)) for p in (("visual", "model.onnx"), ("textual", "model.onnx"), ("textual", "tokenizer.json")))
 
-    def _open(self, rel):
-        path = self.cfg.path(*rel)
+    def _open(self, rel, abs_path=None):
+        path = abs_path or self.cfg.path(*rel)
         if not os.path.isfile(path):
             raise ModelError("нет файла модели: " + "/".join(rel))
         o = ort.SessionOptions()
@@ -158,18 +191,84 @@ class Models:
         if had:
             trim_memory()
 
+    def _aux_load(self, group):
+        if self.aux_kind == group:
+            return
+        self._aux_drop()
+        if group == "faces":
+            names = {"yunet": os.path.join(self.cfg.faces_dir, "yunet.onnx"), "sface": os.path.join(self.cfg.faces_dir, "sface.onnx")}
+        else:
+            names = {"yolox": os.path.join(self.cfg.pets_dir, "yolox_s.onnx")}
+        self.aux = {k: self._open((group, os.path.basename(v)), v) for k, v in names.items()}
+        self.aux_kind = group
+
+    def _aux_drop(self):
+        had = bool(self.aux)
+        self.aux = {}
+        self.aux_kind = None
+        if had:
+            trim_memory()
+
     def unload_if_idle(self):
         if time.monotonic() - self.last < self.cfg.idle_sec:
             return
         if self.lock.acquire(blocking=False):
             try:
-                if self.session is not None and time.monotonic() - self.last >= self.cfg.idle_sec:
+                if (self.session is not None or self.aux) and time.monotonic() - self.last >= self.cfg.idle_sec:
                     self._drop()
+                    self._aux_drop()
             finally:
                 self.lock.release()
 
     def image(self, data):
         x = prep_image(data)
+        with self.lock:
+            self._load("visual")
+            name = self.session.get_inputs()[0].name
+            out = self.session.run(None, {name: x})[0]
+            self.last = time.monotonic()
+        v = unit(out)
+        self.dim = len(v)
+        return v
+
+    def faces(self, data):
+        """Лица на фото: [{box:[x,y,w,h] в долях картинки, score, vector}]. Рамки меньше MIN_FACE_PX не берём."""
+        img = load_rgb(data, MAX_SIDE)
+        W, H = img.size
+        with self.lock:
+            self._aux_load("faces")
+            yn, sf = self.aux["yunet"], self.aux["sface"]
+            out = []
+            for f in vision.detect_faces(yn, img):
+                if min(f["box"][2], f["box"][3]) < MIN_FACE_PX:
+                    continue
+                try:
+                    v = vision.embed_face(sf, img, vision.refine_landmarks(yn, img, f))
+                except ValueError:
+                    continue
+                x, y, w, h = f["box"]
+                out.append({"box": [x / W, y / H, w / W, h / H], "score": round(f["score"], 4), "vector": encode(v)})
+            self.last = time.monotonic()
+        return out
+
+    def pets(self, data):
+        """Кошки и собаки на фото: [{kind, box (доли), score, vector}]. Вектор из той же модели CLIP, что и для поиска по смыслу."""
+        img = load_rgb(data, MAX_SIDE)
+        W, H = img.size
+        with self.lock:
+            self._aux_load("pets")
+            found = vision.detect_pets(self.aux["yolox"], img)
+            self.last = time.monotonic()
+        out = []
+        for p in found:
+            crop = vision.crop_with_margin(img, p["box"])
+            v = self.image_pil(crop)
+            x, y, w, h = p["box"]
+            out.append({"kind": p["kind"], "box": [x / W, y / H, w / W, h / H], "score": round(p["score"], 4), "vector": encode(v)})
+        return out
+
+    def image_pil(self, img):
+        x = prep_pil(img)
         with self.lock:
             self._load("visual")
             name = self.session.get_inputs()[0].name
@@ -224,12 +323,24 @@ def make_handler(cfg, models):
         def do_GET(self):
             if self.path != "/health":
                 return self._send(404, {"error": "нет такого адреса"})
-            self._send(200, {"ok": True, "model": cfg.model_id, "ready": models.files_ready(), "loaded": models.kind, "dim": models.dim})
+            self._send(200, {
+                "ok": True, "model": cfg.model_id, "ready": models.files_ready(), "loaded": models.kind or models.aux_kind, "dim": models.dim,
+                "faces": {"ready": models.faces_ready(), "model": FACES_MODEL_ID},
+                "pets": {"ready": models.pets_ready(), "model": PETS_MODEL_ID},
+            })
 
         def do_POST(self):
             try:
                 if self.path == "/embed/image":
                     v = models.image(self._body(MAX_IMAGE_BYTES))
+                elif self.path == "/faces":
+                    if not models.faces_ready():
+                        raise ModelError("нет файлов модели лиц")
+                    return self._send(200, {"model": FACES_MODEL_ID, "dim": 128, "faces": models.faces(self._body(MAX_IMAGE_BYTES))})
+                elif self.path == "/pets":
+                    if not models.pets_ready():
+                        raise ModelError("нет файлов модели питомцев")
+                    return self._send(200, {"model": PETS_MODEL_ID, "clip": cfg.model_id, "pets": models.pets(self._body(MAX_IMAGE_BYTES))})
                 elif self.path == "/embed/text":
                     try:
                         o = json.loads(self._body(64 * 1024))
@@ -306,6 +417,19 @@ def selftest(cfg):
     other = float(vs["кошка"] @ vs["автомобиль"])
     check("русский и английский рядом (кошка = cat)", same > other + 0.1, "%.2f против %.2f у «автомобиль»" % (same, other))
     check("русская фраза рядом с английской", same2 > 0.5, "%.2f" % same2)
+    # Лица и питомцы (если файлы моделей положены): на пустой картинке не должно быть ни лиц, ни питомцев, а работа идти без сбоев.
+    blank = io.BytesIO()
+    Image.new("RGB", (1200, 800), (128, 128, 128)).save(blank, "JPEG")
+    for title, ready, run in (("лица", m.faces_ready(), m.faces), ("питомцы", m.pets_ready(), m.pets)):
+        if not ready:
+            print("  --   %s: файлов модели нет (необязательно)" % title)
+            continue
+        t0 = time.time()
+        try:
+            found = run(blank.getvalue())
+            check("%s: пустая картинка без находок" % title, found == [], "%.1f с (с загрузкой модели)" % (time.time() - t0))
+        except Exception as e:  # noqa: BLE001
+            check("%s: запуск" % title, False, type(e).__name__)
     print("  память процесса: %d МБ" % (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024))
     print("ИТОГ: " + ("всё в порядке" if ok else "ЕСТЬ ПРОБЛЕМЫ"))
     return 0 if ok else 1

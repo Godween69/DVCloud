@@ -11,8 +11,9 @@ import { countFiles } from '../lib/format';
 import { useTheme } from '../lib/theme';
 import type { Month } from '../lib/timeline';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
-import type { Album, AlbumRef, Estimate, FileItem, SearchStatus, Usage, User } from '../types';
+import type { Album, AlbumRef, Estimate, FileItem, PeopleGroup, PeopleList, SearchStatus, Usage, User } from '../types';
 import { useSearch } from '../lib/useSearch';
+import { PeopleView, PersonHeader } from './PeopleView';
 import { SearchView } from './SearchView';
 import { QuotaDialog } from './QuotaDialog';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
@@ -55,12 +56,27 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const shots = useFeed(false, undefined, 'screenshots');
   const trash = useFeed(true);
   const albumFeed = useFeed(false, album?.id);
+  const [peopleList, setPeopleList] = useState<PeopleList | null>(null); // люди и питомцы (см. docs/PEOPLE.md)
+  const [showHiddenPeople, setShowHiddenPeople] = useState(false);
+  const [person, setPerson] = useState<PeopleGroup | null>(null); // открытая страница человека (внутри вкладки «Люди»)
+  const personFeed = useFeed(false, undefined, undefined, person?.id);
   const search = useSearch();
   const [searchStatus, setSearchStatus] = useState<SearchStatus | null>(null);
+  const inPerson = view === 'people' && person !== null;
   const inAlbum = view === 'albums' && album !== null;
   const foreign = inAlbum && album !== null && !album.mine; // чужой общий альбом: только смотреть, сохранять, скачивать
-  const active = inAlbum ? albumFeed : view === 'search' ? search : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
+  const active = inAlbum ? albumFeed : inPerson ? personFeed : view === 'search' ? search : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
+  const reloadPeople = useCallback(() => { api.peopleGroups(true).then(setPeopleList).catch(() => {}); }, []); // скрытые приходят тоже: прячет их сам список
+  const peopleOn = !!peopleList && (peopleList.enabled.faces || peopleList.enabled.pets);
+  const named = useMemo(() => (peopleList?.people ?? []).filter((p) => p.name && !p.hidden), [peopleList]);
+  // Страница человека следует за списком: переименование, слияние, роспуск.
+  useEffect(() => {
+    if (!person || !peopleList) return;
+    const now = peopleList.people.find((p) => p.id === person.id);
+    if (!now) setPerson(null);
+    else if (now.name !== person.name || now.hidden !== person.hidden || now.cover !== person.cover) setPerson(now);
+  }, [peopleList, person]);
   const refreshUsage = useCallback(() => { api.usage().then(setUsage).catch(() => {}); }, []);
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
   const doneToast = useCallback(() => setToast(null), []);
@@ -82,8 +98,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     [addLib, refreshUsage],
   );
 
-  useEffect(() => { library.loadMore(true); refreshUsage(); api.searchStatus().then(setSearchStatus).catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
-  useEffect(() => { if (view === 'search') api.searchStatus().then(setSearchStatus).catch(() => {}); }, [view]);
+  useEffect(() => { library.loadMore(true); refreshUsage(); api.searchStatus().then(setSearchStatus).catch(() => {}); reloadPeople(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { if (view === 'search') { api.searchStatus().then(setSearchStatus).catch(() => {}); reloadPeople(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
+  useEffect(() => { if (person) personFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [person?.id]);
   useEffect(() => {
     // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
     if (view === 'photos') void photos.jump(null);
@@ -100,6 +117,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   function changeView(v: View) {
     setView(v);
     setAlbum(null);
+    setPerson(null);
     endSelect();
   }
 
@@ -183,7 +201,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
     // Соседний файл показываем вместо удалённого; если соседей нет, просмотрщик закроется сам.
     leaveFeed(id);
-    [library, photos, videos, shots, search].forEach((f) => f.remove(id)); // файл мог лежать в нескольких лентах сразу
+    [library, photos, videos, shots, search, personFeed].forEach((f) => f.remove(id)); // файл мог лежать в нескольких лентах сразу
     say('Файл в корзине', {
       label: 'Восстановить',
       run: () => { api.restore(id).then((r) => { library.add(r.file); refreshUsage(); }).catch(() => say('Не получилось восстановить файл')); },
@@ -228,7 +246,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     const ids = [...selected];
     try {
       const n = await api.bulk('hide', ids);
-      ids.forEach((id) => { library.remove(id); photos.remove(id); videos.remove(id); shots.remove(id); albumFeed.remove(id); search.remove(id); });
+      ids.forEach((id) => { library.remove(id); photos.remove(id); videos.remove(id); shots.remove(id); albumFeed.remove(id); personFeed.remove(id); search.remove(id); });
       endSelect();
       refreshUsage();
       say(n === 1 ? 'Файл в корзине' : `В корзине файлов: ${n}`, { label: 'Восстановить', run: () => { api.bulk('restore', ids).then(() => { library.loadMore(true); if (album) albumFeed.loadMore(true); refreshUsage(); }).catch(() => say('Не получилось восстановить')); } });
@@ -302,7 +320,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
@@ -326,7 +344,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             {gallery(albumFeed)}
           </>
         )}
-        {view === 'search' && <SearchView search={search} status={searchStatus} onOpen={(id) => setViewer({ id })} />}
+        {view === 'people' && !person && <PeopleView list={peopleList} showHidden={showHiddenPeople} onShowHidden={setShowHiddenPeople} onOpen={(p) => { setPerson(p); endSelect(); }} onReload={() => reloadPeople()} />}
+        {view === 'people' && person && (
+          <>
+            <PersonHeader person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
+              onBack={() => { setPerson(null); endSelect(); reloadPeople(); }} onChanged={(p) => { setPerson(p); reloadPeople(); }} onGone={(t) => { setPerson(null); reloadPeople(); say(t); }} onError={say} />
+            {gallery(personFeed, <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">Файлов с этим человеком пока нет.</p>)}
+          </>
+        )}
+        {view === 'search' && <SearchView search={search} status={searchStatus} named={named} onOpen={(id) => setViewer({ id })} onPerson={(id) => { const p = peopleList?.people.find((x) => x.id === id); if (p) { setView('people'); setAlbum(null); setPerson(p); endSelect(); } }} />}
         {view === 'security' && <SecurityView onError={say} />}
         {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (
@@ -338,7 +364,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </main>
       <AnimatePresence>
-        {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum) && (
+        {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum || inPerson) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
@@ -351,7 +377,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
           <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={foreign ? undefined : (f) => toTrash(f.id)} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
-            quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile} />
+            quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile}
+            people={peopleOn ? { groups: (peopleList?.people ?? []).filter((p) => !p.hidden), onChanged: () => { reloadPeople(); if (inPerson) personFeed.loadMore(true); } } : null} />
         )}
       </AnimatePresence>
       <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} onCancel={() => queue.cancelWaiting()} onRetry={() => queue.retryFailed()} />

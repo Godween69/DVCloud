@@ -42,7 +42,7 @@ describe('настройки превью и видео в админке (на�
 
   it('по умолчанию: превью включены (2000, 80), видео выключено', async () => {
     const o = await intCall('GET', '/internal/media');
-    assert.deepEqual(o.settings, { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80 });
+    assert.deepEqual(o.settings, { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: false, petsEnabled: false });
     assert.equal(o.previews.files, 0);
   });
 

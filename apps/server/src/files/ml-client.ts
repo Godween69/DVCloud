@@ -5,6 +5,20 @@ import { CONFIG } from '../tokens';
 export interface MlHealth {
   model: string;
   ready: boolean; // файлы модели на месте
+  faces: { ready: boolean; model: string } | null; // модель лиц (null: служба старой версии, лиц не знает)
+  pets: { ready: boolean; model: string } | null;
+}
+
+// Находка на картинке: рамка в долях картинки (0..1), оценка, вектор (float32 little-endian, нормирован).
+export interface MlDetection {
+  kind: 'face' | 'cat' | 'dog';
+  box: [number, number, number, number]; // x, y, ширина, высота
+  score: number;
+  vector: Buffer;
+}
+export interface MlDetections {
+  model: string;
+  detections: MlDetection[];
 }
 
 export interface MlVector {
@@ -47,9 +61,14 @@ export class MlClient {
     try {
       const r = await fetch(`${this.url}/health`, { signal: AbortSignal.timeout(3000) });
       if (!r.ok) return null;
-      const j = (await r.json()) as { model?: unknown; ready?: unknown };
+      const j = (await r.json()) as { model?: unknown; ready?: unknown; faces?: unknown; pets?: unknown };
       if (typeof j.model !== 'string') return null;
-      return { model: j.model, ready: j.ready === true };
+      const part = (v: unknown): { ready: boolean; model: string } | null => {
+        if (typeof v !== 'object' || v === null) return null;
+        const o = v as { ready?: unknown; model?: unknown };
+        return typeof o.model === 'string' ? { ready: o.ready === true, model: o.model } : null;
+      };
+      return { model: j.model, ready: j.ready === true, faces: part(j.faces), pets: part(j.pets) };
     } catch {
       return null;
     }
@@ -75,6 +94,46 @@ export class MlClient {
     const vector = Buffer.from(j.vector, 'base64');
     if (vector.length < MIN_BYTES || vector.length % 4 !== 0) throw new MlError(502, 'Служба поиска вернула вектор неверной длины');
     return { model: j.model, vector };
+  }
+
+  // Лица или питомцы на картинке (JPEG, уже уменьшенная). Модели тяжёлые на холодном старте, поэтому таймаут большой.
+  private async detect(path: '/faces' | '/pets', field: 'faces' | 'pets', data: Buffer): Promise<MlDetections> {
+    if (!this.configured) throw new MlError(0, 'Служба распознавания не настроена');
+    let r: Response;
+    try {
+      r = await fetch(`${this.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: data, signal: AbortSignal.timeout(120_000) });
+    } catch {
+      throw new MlError(0, 'Служба распознавания недоступна');
+    }
+    let j: { error?: unknown; model?: unknown; faces?: unknown; pets?: unknown } = {};
+    try {
+      j = (await r.json()) as typeof j;
+    } catch {
+      /* не JSON */
+    }
+    if (!r.ok) throw new MlError(r.status, typeof j.error === 'string' ? j.error : `Служба распознавания ответила ${r.status}`);
+    const list = j[field];
+    if (typeof j.model !== 'string' || !Array.isArray(list)) throw new MlError(502, 'Служба распознавания вернула непонятный ответ');
+    const out: MlDetection[] = [];
+    for (const it of list as { kind?: unknown; box?: unknown; score?: unknown; vector?: unknown }[]) {
+      const box = it.box;
+      if (!Array.isArray(box) || box.length !== 4 || box.some((n) => typeof n !== 'number' || !Number.isFinite(n))) throw new MlError(502, 'Служба распознавания вернула неверную рамку');
+      if (typeof it.vector !== 'string' || typeof it.score !== 'number') throw new MlError(502, 'Служба распознавания вернула непонятный ответ');
+      const kind = field === 'faces' ? 'face' : it.kind === 'dog' ? 'dog' : it.kind === 'cat' ? 'cat' : null;
+      if (!kind) throw new MlError(502, 'Служба распознавания вернула неизвестный вид');
+      const vector = Buffer.from(it.vector, 'base64');
+      if (vector.length < MIN_BYTES || vector.length % 4 !== 0) throw new MlError(502, 'Служба распознавания вернула вектор неверной длины');
+      out.push({ kind, box: box as [number, number, number, number], score: it.score, vector });
+    }
+    return { model: j.model, detections: out };
+  }
+
+  faces(data: Buffer): Promise<MlDetections> {
+    return this.detect('/faces', 'faces', data);
+  }
+
+  pets(data: Buffer): Promise<MlDetections> {
+    return this.detect('/pets', 'pets', data);
   }
 
   image(data: Buffer): Promise<MlVector> {

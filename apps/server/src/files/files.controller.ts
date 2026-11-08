@@ -49,11 +49,11 @@ export class FilesController {
   }
 
   @Get()
-  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string, @Query('at') at?: string, @Query('tz') tz?: string, @Query('after') after?: string): Promise<{ files: PublicFile[]; next: string | null; prev: string | null }> {
+  async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string, @Query('at') at?: string, @Query('tz') tz?: string, @Query('after') after?: string, @Query('person') person?: string): Promise<{ files: PublicFile[]; next: string | null; prev: string | null }> {
     if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined, person: typeof person === 'string' ? person : undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next, prev: r.prev };
   }

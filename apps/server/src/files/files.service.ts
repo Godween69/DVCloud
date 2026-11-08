@@ -305,7 +305,7 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
@@ -334,6 +334,12 @@ export class FilesService {
     if (opts.albumId !== undefined) {
       params.push(opts.albumId);
       where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
+    }
+    // Файлы, на которых есть выбранный человек или питомец (группа принадлежит этому человеку).
+    if (opts.person !== undefined) {
+      if (!ID_RE.test(opts.person)) throw new BadRequestException('person: неверный номер');
+      params.push(opts.person);
+      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
     }
     // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
     // Разделы ленты: фото (картинки кроме скриншотов), видео, скриншоты; без kind всё вместе.

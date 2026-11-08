@@ -13,6 +13,8 @@ export interface MediaSettings {
   timezone: string; // пояс, в котором записано время без пояса (EXIF, имя файла): так определяется дата съёмки
   searchEnabled: boolean; // поиск по смыслу: фоновое построение векторов и строка поиска на сайте
   searchCutoff: number; // в выдаче остаются совпадения не слабее этого процента от лучшего (50-95)
+  facesEnabled: boolean; // искать лица на фото и собирать людей (нужна служба ML с моделью лиц)
+  petsEnabled: boolean; // искать кошек и собак и собирать питомцев
 }
 
 export const DEFAULT_MEDIA: MediaSettings = {
@@ -25,6 +27,8 @@ export const DEFAULT_MEDIA: MediaSettings = {
   timezone: 'UTC',
   searchEnabled: false, // нужен ML-сервис и время процессора: включается осознанно
   searchCutoff: 80,
+  facesEnabled: false, // это биометрия: включается осознанно
+  petsEnabled: false,
 };
 
 export const VIDEO_HEIGHTS = [480, 720, 1080];
@@ -41,7 +45,7 @@ export function parseMediaPatch(input: unknown): Partial<MediaSettings> {
   const o = input as Record<string, unknown>;
   const out: Partial<MediaSettings> = {};
   for (const [k, v] of Object.entries(o)) {
-    if (k === 'previewEnabled' || k === 'videoEnabled' || k === 'searchEnabled') {
+    if (k === 'previewEnabled' || k === 'videoEnabled' || k === 'searchEnabled' || k === 'facesEnabled' || k === 'petsEnabled') {
       if (typeof v !== 'boolean') throw new BadRequestException(`${k}: ожидалось да или нет`);
       out[k] = v;
     } else if (k === 'previewMaxSide' || k === 'previewQuality' || k === 'videoCrf' || k === 'searchCutoff') {

@@ -19,6 +19,9 @@ import { SimilarService } from './files/similar.service';
 import { FilesService } from './files/files.service';
 import { StorageService } from './files/storage.service';
 import { ThumbsService } from './files/thumbs.service';
+import { PeopleController } from './files/people.controller';
+import { PeopleScanService } from './files/people-scan.service';
+import { PeopleService } from './files/people.service';
 import { VideoService } from './files/video.service';
 import { MediaSettingsService } from './files/media-settings';
 import { AdminMediaService } from './files/admin-media.service';
@@ -51,8 +54,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, UploadsController],
-      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
     };
   }
 }

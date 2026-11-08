@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User } from './types';
+import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -62,13 +62,14 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots', at?: string, after?: string) => {
+  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
     if (kind && !trashed) q.set('kind', kind);
     if (at && !trashed) { q.set('at', at); q.set('tz', timeZone()); }
     if (after && !trashed) q.set('after', after);
+    if (person && !trashed) q.set('person', person);
     return request<{ files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/files?${q}`);
   },
   // Оглавление ленты по месяцам для полосы времени (месяцы считаются в часовом поясе браузера, как и заголовки месяцев).
@@ -78,6 +79,16 @@ export const api = {
     return request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/files/timeline?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
+  // Люди и питомцы
+  peopleGroups: (hidden = false) => request<PeopleList>('GET', `/api/people${hidden ? '?hidden=1' : ''}`),
+  facesOf: (fileId: string) => request<{ faces: FaceBox[] }>('GET', `/api/people/file/${encodeURIComponent(fileId)}`).then((r) => r.faces),
+  assignFace: (detectionId: string, personId: string | null) => request<{ ok: true }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}`, { personId }),
+  createPerson: (detectionId: string, name: string) => request<{ id: string }>('POST', '/api/people', { detectionId, name }),
+  renamePerson: (id: string, name: string | null) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { name }),
+  hidePerson: (id: string, hidden: boolean) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { hidden }),
+  mergePeople: (into: string, from: string) => request<unknown>('POST', `/api/people/${encodeURIComponent(into)}/merge`, { from }),
+  deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
+  removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),
   search: (q: string) => request<SearchResult>('GET', `/api/search?${new URLSearchParams({ q })}`),
   similar: (kind: 'duplicates' | 'series') => request<SimilarResult>('GET', `/api/similar/${kind}`),
@@ -118,6 +129,7 @@ export const previewUrl = (id: string): string => `/api/files/${id}/preview`;
 
 // Видео для просмотра: уменьшенная копия, если её сделал сервер; иначе 404 и плеер берёт оригинал.
 export const videoViewUrl = (id: string): string => `/api/files/${id}/view`;
+export const cropUrl = (detectionId: string): string => `/api/people/detections/${detectionId}/crop`;
 export const fileUrl = (id: string, download = false): string => `/api/files/${id}${download ? '?download=1' : ''}`;
 
 // Один запрос с телом и прогрессом. Возвращает HTTP-статус и разобранный JSON.
