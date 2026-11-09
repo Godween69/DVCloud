@@ -19,6 +19,7 @@ import { QuotaDialog } from './QuotaDialog';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
 import { AlbumHeader, AlbumsView } from './AlbumsView';
 import { Gallery } from './Gallery';
+import { YandexView } from './YandexView';
 import { SecurityView } from './SecurityView';
 import { SelectionBar } from './SelectionBar';
 import { ShareDialog } from './ShareDialog';
@@ -68,6 +69,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const active = inAlbum ? albumFeed : inPerson ? personFeed : view === 'search' ? search : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
   const reloadPeople = useCallback(() => { api.peopleGroups(true).then(setPeopleList).catch(() => {}); }, []); // скрытые приходят тоже: прячет их сам список
+  const [yandexOn, setYandexOn] = useState(false);
+  useEffect(() => { api.yandexStatus().then((y) => setYandexOn(y.enabled)).catch(() => {}); }, []);
   const peopleOn = !!peopleList && (peopleList.enabled.faces || peopleList.enabled.pets);
   const named = useMemo(() => (peopleList?.people ?? []).filter((p) => p.name && !p.hidden), [peopleList]);
   // Страница человека следует за списком: переименование, слияние, роспуск.
@@ -320,7 +323,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} yandexOn={yandexOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <main>
@@ -353,6 +356,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
           </>
         )}
         {view === 'search' && <SearchView search={search} status={searchStatus} named={named} onOpen={(id) => setViewer({ id })} onPerson={(id) => { const p = peopleList?.people.find((x) => x.id === id); if (p) { setView('people'); setAlbum(null); setPerson(p); endSelect(); } }} />}
+        {view === 'yandex' && <YandexView onError={say} />}
         {view === 'security' && <SecurityView onError={say} />}
         {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (

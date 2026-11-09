@@ -205,7 +205,7 @@ ${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/delete`, {}, 'Удал
   return layout('DV Cloud: хранилище', `
 ${topBar('storage', csrf)}
 ${flashHtml(flash, loadError)}
-${stats ? `<section class="panel"><div class="summary"><div><b>${stats.files}</b><span>записей людей</span></div><div><b>${stats.blobs}</b><span>файлов на диске</span></div><div><b>${esc(formatSize(stats.bytes))}</b><span>занято на диске</span></div><div><b>${stats.orphans}</b><span>без владельца</span></div><div><b>${stats.extraCopies}</b><span>лишних копий</span></div></div></section>` : ''}
+${stats ? `<section class="panel"><div class="summary"><div><b>${stats.files}</b><span>записей людей</span></div><div><b>${stats.blobs}</b><span>файлов на диске</span></div><div><b>${esc(formatSize(stats.bytes))}</b><span>занято на диске</span></div><div><b>${stats.orphans}</b><span>без владельца</span></div><div><b>${stats.extraCopies}</b><span>лишних копий</span></div></div>${stats.yandex && stats.yandex.accounts > 0 ? `<p class="hint">Яндекс Диск подключён у людей: ${esc(stats.yandex.accounts)}${stats.yandex.expired > 0 ? ` (вход истёк: ${esc(stats.yandex.expired)})` : ''}. Файлов в списках: ${esc(stats.yandex.items)}, забрано: ${esc(stats.yandex.done)}.</p>` : ''}</section>` : ''}
 
 <section class="panel"><h2>Просьбы о месте</h2>
 <table><thead><tr><th>Кто</th><th>Нужно</th><th>Сейчас</th><th>Комментарий</th><th>Действия</th></tr></thead>

@@ -86,5 +86,5 @@ export function startEnv() {
     await drop?.();
     if (dataDir) await rm(dataDir, { recursive: true, force: true });
   }
-  return { start, stop, api, upload, intCall, loginAs, jpeg, walk, get dataDir() { return dataDir; }, get app() { return pub; }, get dbUrl() { return dbUrl; }, get base() { return base; }, get intBase() { return intBase; }, get token() { return TOKEN; }, get anna() { return anna; }, get boris() { return boris; } };
+  return { start, stop, api, upload, intCall, loginAs, jpeg, walk, get dataDir() { return dataDir; }, get app() { return pub; }, get dbUrl() { return dbUrl; }, get base() { return base; }, get intBase() { return intBase; }, get token() { return TOKEN; }, get helperToken() { return 'helper-test-token-'.padEnd(40, 'y'); }, get anna() { return anna; }, get boris() { return boris; } };
 }

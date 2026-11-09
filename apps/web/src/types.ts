@@ -144,3 +144,25 @@ export interface FoundPerson {
   id: string;
   name: string;
 }
+
+// Раздел «Яндекс Диск» (см. docs/YANDEX.md).
+export type YandexItemState = 'new' | 'queued' | 'done' | 'waiting' | 'failed' | 'skipped';
+export interface YandexStatus {
+  enabled: boolean;
+  connected: boolean;
+  state?: 'connected' | 'expired';
+  list?: { state: 'idle' | 'running' | 'error'; note: string | null; at: string | null };
+  counts?: Record<YandexItemState, number>;
+  bytes?: { total: number; done: number; remaining: number };
+  years?: { year: number | null; n: number; bytes: number; todo: number }[];
+  import?: { state: 'idle' | 'running' | 'paused'; note: string | null; intoAlbum: boolean; current: { name: string; size: number; got: number } | null; speed: number; etaSec: number | null };
+  quota?: { freeBytes: number | null; needBytes: number; fits: boolean };
+}
+export interface YandexItem {
+  name: string;
+  size: number;
+  takenHint: string | null;
+  state: YandexItemState;
+  error: string | null;
+  fileId: string | null;
+}

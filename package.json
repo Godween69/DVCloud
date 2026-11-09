@@ -15,6 +15,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:login": "npm test --prefix apps/login",
     "licenses": "node tools/check-licenses.mjs",
     "dev:server": "npm run build --workspace @dvcloud/server && node --env-file=dvcloud.env apps/server/dist/src/main.js",
     "dev:web": "npm run dev --workspace @dvcloud/web",

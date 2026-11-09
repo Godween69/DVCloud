@@ -14,6 +14,10 @@ export interface Config {
   authUrl: string; // адрес сервиса DV Auth (второй фактор); пусто = второй фактор отключён
   authSecret: string; // секрет этого приложения в DV Auth
   mlUrl: string; // адрес ML-сервиса (поиск по смыслу); пусто = поиск недоступен
+  secretsKey: string; // ключ шифрования чужих секретов в базе (сессия Яндекса); пусто = раздел «Яндекс Диск» выключен
+  yandexLoginUrl: string; // адрес помощника входа по QR (отдельный контейнер); пусто = раздел выключен
+  yandexLoginToken: string; // общий секрет сервера и помощника входа
+  yandexBase: string; // адрес Диска (меняется только в тестах)
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -46,6 +50,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (authSecret !== '' && authSecret.length < 32) throw new Error('DVCLOUD_AUTH_SECRET должен быть не короче 32 символов');
   const mlUrl = (env.DVCLOUD_ML_URL ?? '').trim().replace(/\/+$/, '');
   if (mlUrl !== '' && !/^https?:\/\//.test(mlUrl)) throw new Error('DVCLOUD_ML_URL должен начинаться с http:// или https://');
+  const secretsKey = env.DVCLOUD_SECRETS_KEY ?? '';
+  if (secretsKey !== '' && secretsKey.length < 32) throw new Error('DVCLOUD_SECRETS_KEY должен быть не короче 32 символов');
+  const yandexLoginUrl = (env.DVCLOUD_YANDEX_LOGIN_URL ?? '').trim().replace(/\/+$/, '');
+  if (yandexLoginUrl !== '' && !/^https?:\/\//.test(yandexLoginUrl)) throw new Error('DVCLOUD_YANDEX_LOGIN_URL должен начинаться с http:// или https://');
+  const yandexLoginToken = env.DVCLOUD_YANDEX_LOGIN_TOKEN ?? '';
+  if (yandexLoginUrl !== '' && (secretsKey === '' || yandexLoginToken.length < 32)) {
+    throw new Error('Для раздела «Яндекс Диск» нужны DVCLOUD_SECRETS_KEY и DVCLOUD_YANDEX_LOGIN_TOKEN (не короче 32 символов)');
+  }
+  const yandexBase = (env.DVCLOUD_YANDEX_BASE ?? 'https://disk.yandex.ru').replace(/\/+$/, '');
   return {
     port,
     host: env.DVCLOUD_HOST ?? '127.0.0.1',
@@ -61,5 +74,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     authUrl,
     authSecret,
     mlUrl,
+    secretsKey,
+    yandexLoginUrl,
+    yandexLoginToken,
+    yandexBase,
   };
 }

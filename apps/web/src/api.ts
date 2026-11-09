@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User } from './types';
+import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -91,6 +91,22 @@ export const api = {
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
   removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),
+  yandexStatus: () => request<YandexStatus>('GET', '/api/yandex'),
+  yandexConnect: () => request<{ id: string }>('POST', '/api/yandex/connect', {}),
+  // QR приходит картинкой; пока помощник не готов, сервер отвечает 204 (null).
+  yandexQr: async (id: string): Promise<string | null> => {
+    const r = await fetch(`/api/yandex/connect/${id}/qr`, { cache: 'no-store' });
+    if (r.status === 204) return null;
+    if (!r.ok) throw new ApiError(r.status, 'Не удалось получить QR-код.');
+    return URL.createObjectURL(await r.blob());
+  },
+  yandexConnectStatus: (id: string) => request<{ state: 'waiting' | 'done' | 'failed'; note?: string }>('GET', `/api/yandex/connect/${id}`),
+  yandexDisconnect: () => request<{ ok: true }>('DELETE', '/api/yandex'),
+  yandexList: () => request<{ ok: true }>('POST', '/api/yandex/list', {}),
+  yandexImport: (opts: { years?: (number | null)[]; retryFailed?: boolean; intoAlbum?: boolean }) => request<{ queued: number }>('POST', '/api/yandex/import', opts),
+  yandexPause: () => request<{ ok: true }>('POST', '/api/yandex/pause', {}),
+  yandexResume: () => request<{ ok: true }>('POST', '/api/yandex/resume', {}),
+  yandexItems: (state: string | null, offset: number) => request<{ items: YandexItem[]; total: number }>('GET', `/api/yandex/items?limit=50&offset=${offset}${state ? `&state=${state}` : ''}`),
   search: (q: string) => request<SearchResult>('GET', `/api/search?${new URLSearchParams({ q })}`),
   similar: (kind: 'duplicates' | 'series') => request<SimilarResult>('GET', `/api/similar/${kind}`),
   trash: (id: string) => request<{ file: FileItem }>('DELETE', `/api/files/${id}`),

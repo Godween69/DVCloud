@@ -32,7 +32,7 @@ export class AdminStorageService {
     @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
-  async stats(): Promise<{ files: number; blobs: number; orphans: number; orphanBytes: number; bytes: number; extraCopies: number }> {
+  async stats(): Promise<{ files: number; blobs: number; orphans: number; orphanBytes: number; bytes: number; extraCopies: number; yandex: { accounts: number; expired: number; items: number; done: number } }> {
     const r = await this.db.query<{ files: string; blobs: string; orphans: string; orphan_bytes: string; bytes: string; extra: string }>(
       `SELECT (SELECT count(*) FROM files) AS files, (SELECT count(*) FROM blobs) AS blobs,
               (SELECT count(*) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)) AS orphans,
@@ -40,7 +40,15 @@ export class AdminStorageService {
               (SELECT COALESCE(sum(size_bytes), 0) FROM blobs) AS bytes, (SELECT count(*) FROM blob_extra_paths) AS extra`,
     );
     const x = r.rows[0];
-    return { files: Number(x.files), blobs: Number(x.blobs), orphans: Number(x.orphans), orphanBytes: Number(x.orphan_bytes), bytes: Number(x.bytes), extraCopies: Number(x.extra) };
+    // Яндекс Диск: только числа, без имён и без сессий.
+    const y = (await this.db.query<{ accounts: string; expired: string; items: string; done: string }>(
+      `SELECT (SELECT count(*) FROM yandex_accounts) AS accounts, (SELECT count(*) FROM yandex_accounts WHERE state = 'expired') AS expired,
+              (SELECT count(*) FROM yandex_items) AS items, (SELECT count(*) FROM yandex_items WHERE state = 'done') AS done`,
+    )).rows[0];
+    return {
+      files: Number(x.files), blobs: Number(x.blobs), orphans: Number(x.orphans), orphanBytes: Number(x.orphan_bytes), bytes: Number(x.bytes), extraCopies: Number(x.extra),
+      yandex: { accounts: Number(y.accounts), expired: Number(y.expired), items: Number(y.items), done: Number(y.done) },
+    };
   }
 
   // Файлы на диске, на которые не ссылается ничей список (человек убрал у себя насовсем или удалён аккаунт).

@@ -66,6 +66,21 @@ services:
     cpus: 2
     networks: [ml]
 
+  # Вход в Яндекс по QR (необязательно, см. docs/YANDEX.md). Включается профилем: docker compose --profile yandex up -d
+  # Нужны DVCLOUD_SECRETS_KEY и DVCLOUD_YANDEX_LOGIN_TOKEN в dvcloud.env, а серверу ещё DVCLOUD_YANDEX_LOGIN_URL=http://login:8099.
+  # Службе нужен выход в интернет (к Яндексу), но наружу она не публикуется: с ней говорит только сервер.
+  login:
+    build: { context: ., target: login }
+    profiles: ["yandex"]
+    restart: unless-stopped
+    env_file: dvcloud.env
+    environment:
+      PORT: "8099"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    mem_limit: 1g
+
   web:
     build: { context: ., target: web }
     restart: unless-stopped
