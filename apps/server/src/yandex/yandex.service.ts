@@ -395,14 +395,16 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
         this.lastSyncCheck = Date.now();
         await this.autoSync().catch((e) => this.log.warn(`автосверка: ${(e as Error).message}`));
       }
-      for (;;) {
-        if (this.stopping || Date.now() < this.coolUntil) break;
-        const a = (await this.db.query<AccountRow>("SELECT * FROM yandex_accounts WHERE import_state = 'running' AND state = 'connected' ORDER BY id LIMIT 1")).rows[0];
-        if (!a) break;
-        const more = await this.step(a);
-        if (!more) {
-          // этому аккаунту нечего делать сейчас; другие аккаунты, если есть, обработаются на следующем тике
-          break;
+      // Идём по всем идущим аккаунтам по очереди: пока у одного есть что брать, берём его; когда делать нечего (всё забрано или
+      // файлы ждут повтора), переходим к следующему. Раньше брался всегда первый аккаунт, и если ему было нечего делать,
+      // остальные не получали очереди никогда.
+      const ids = (await this.db.query<{ id: string }>("SELECT id FROM yandex_accounts WHERE import_state = 'running' AND state = 'connected' ORDER BY id")).rows.map((r) => r.id);
+      for (const id of ids) {
+        for (;;) {
+          if (this.stopping || Date.now() < this.coolUntil) return;
+          const a = (await this.db.query<AccountRow>("SELECT * FROM yandex_accounts WHERE id = $1 AND import_state = 'running' AND state = 'connected'", [id])).rows[0];
+          if (!a) break;
+          if (!(await this.step(a))) break;
         }
       }
     } catch (e) {

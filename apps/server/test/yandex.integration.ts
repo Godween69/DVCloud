@@ -245,6 +245,8 @@ describe('Яндекс Диск (настоящий Postgres, поддельны
   });
 
   it('повторная сверка: новое находится и показывается, ночная сверка и автозабор, пауза не отменяется', async () => {
+    // Забор у Анны к этому моменту закончен (упавшие файлы дожали попытки): ставим то же состояние, чтобы тест не зависел от скорости
+    await dbq("UPDATE yandex_accounts SET import_state = 'idle', import_note = NULL WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
     const s0 = await status(e.anna);
     assert.equal(s0.sync.found, null, 'первое чтение списка не считается сверкой');
     assert.deepEqual([s0.sync.auto, s0.sync.autoImport], [false, false]);
@@ -332,5 +334,21 @@ describe('Яндекс Диск (настоящий Postgres, поддельны
     assert.equal((await jr('POST', '/api/yandex/import', e.boris, { years: ['x'] })).status, 400);
     assert.equal((await jr('POST', '/api/yandex/import', e.boris, { years: [1800] })).status, 400);
     assert.equal((await api('POST', '/api/yandex/import', { cookie: e.boris, body: '{}', type: 'text/plain' })).status, 415);
+  });
+
+  it('два подключённых аккаунта: у первого нечего брать, второй всё равно забирается (раньше очередь застревала на первом)', async () => {
+    assert.equal((await api('DELETE', '/api/yandex', { cookie: e.boris })).status, 200); // начинаем с чистого листа
+    await dbq("UPDATE users SET quota_bytes = 1073741824 WHERE login = 'boris'"); // квоту из прошлого теста возвращаем
+    await connectFlow(e.anna);
+    await jr('POST', '/api/yandex/list', e.anna, {});
+    assert.ok(await wait(async () => (await status(e.anna)).counts?.new >= 7), JSON.stringify(await status(e.anna)));
+    await connectFlow(e.boris);
+    await jr('POST', '/api/yandex/list', e.boris, {});
+    assert.ok(await wait(async () => (await status(e.boris)).counts?.new >= 7));
+    // Первый аккаунт «идёт», но все его файлы отложены надолго (как у Яндекса при ответе 500): очередь у него пуста.
+    await dbq("UPDATE yandex_items SET state = 'waiting', updated_at = now() + interval '1 day' WHERE account_id = (SELECT a.id FROM yandex_accounts a JOIN users u ON u.id = a.owner_id WHERE u.login = 'anna')");
+    await dbq("UPDATE yandex_accounts SET import_state = 'running' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    assert.equal((await jr('POST', '/api/yandex/import', e.boris, {})).status, 200);
+    assert.ok(await wait(async () => (await status(e.boris)).counts.done >= 4), JSON.stringify(await status(e.boris)) + JSON.stringify(await dbq("SELECT a.id, u.login, a.import_state, a.state FROM yandex_accounts a JOIN users u ON u.id = a.owner_id ORDER BY a.id")));
   });
 });
