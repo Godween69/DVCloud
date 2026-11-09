@@ -2,7 +2,7 @@ import { ArrowLeft, Check, Combine, Eye, EyeOff, Loader2, Pencil, PawPrint, Tras
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl } from '../api';
 import { countFiles } from '../lib/format';
-import { sortGroups } from '../lib/people';
+import { mergePlan, sortGroups } from '../lib/people';
 import type { PeopleGroup, PeopleList } from '../types';
 
 const msg = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
@@ -24,16 +24,43 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
   onReload: () => void;
 }) {
   useEffect(() => { onReload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const stop = () => { setSelecting(false); setPicked(new Set()); setProblem(null); };
+  const toggle = (id: string) => setPicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   if (!list) return <p className="mt-20 flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-5 animate-spin" aria-hidden />Загружаем…</p>;
   const off = !list.enabled.faces && !list.enabled.pets;
   const groups = sortGroups(list.people);
   const hiddenCount = groups.filter((g) => g.hidden).length;
   const shown = groups.filter((g) => showHidden || !g.hidden);
+  const chosen = shown.filter((g) => picked.has(g.id));
+  const plan = mergePlan(chosen);
+  async function mergeChosen() {
+    if (!plan || busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api.mergePeopleMany(plan.into.id, plan.from.map((p) => p.id));
+      stop();
+      onReload();
+    } catch (e) {
+      setProblem(msg(e, 'Не получилось объединить'));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="mx-auto max-w-[1200px] px-3 py-6 sm:px-6">
+    <div className={`mx-auto max-w-[1200px] px-3 py-6 sm:px-6 ${selecting ? "pb-28" : ""}`}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Люди и питомцы</h1>
+        {!off && shown.length > 1 && (
+          <button type="button" onClick={() => (selecting ? stop() : setSelecting(true))} aria-pressed={selecting} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-pressed:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-pressed:bg-gray-800">
+            <Combine className="size-4" aria-hidden />{selecting ? 'Отменить выбор' : 'Выбрать и объединить'}
+          </button>
+        )}
         {(hiddenCount > 0 || showHidden) && (
           <button type="button" onClick={() => onShowHidden(!showHidden)} aria-pressed={showHidden} className="ml-auto flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
             {showHidden ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
@@ -54,8 +81,11 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
       <ul className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
         {shown.map((p) => (
           <li key={p.id}>
-            <button type="button" onClick={() => onOpen(p)} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden ? 'opacity-50' : ''}`}>
-              <Cover p={p} size="aspect-square w-full max-w-32 transition-transform group-hover:scale-105" />
+            <button type="button" onClick={() => (selecting ? toggle(p.id) : onOpen(p))} aria-pressed={selecting ? picked.has(p.id) : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden ? 'opacity-50' : ''}`}>
+              <span className="relative block w-full max-w-32">
+                <Cover p={p} size={`aspect-square w-full transition-transform group-hover:scale-105 ${picked.has(p.id) ? 'ring-4 ring-violet-500' : ''}`} />
+                {selecting && <span className={`absolute right-1 top-1 flex size-6 items-center justify-center rounded-full border-2 border-white ${picked.has(p.id) ? 'bg-violet-600 text-white' : 'bg-black/30'}`}>{picked.has(p.id) && <Check className="size-4" aria-hidden />}</span>}
+              </span>
               <span className="w-full min-w-0">
                 <span className={`block truncate text-sm font-medium ${p.name ? 'text-gray-900 dark:text-white' : 'text-violet-700 dark:text-violet-300'}`}>
                   {p.name ?? (p.kind === 'pet' ? 'Дайте имя питомцу' : 'Дайте имя')}
@@ -66,6 +96,24 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
           </li>
         ))}
       </ul>
+
+      {selecting && (
+        <div role="region" aria-label="Объединение групп" className="fixed inset-x-0 bottom-0 z-30 border-t border-paper-300 bg-paper-50/95 px-4 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95">
+          <div className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-sm text-gray-700 dark:text-gray-300" aria-live="polite">
+              {picked.size < 2 ? 'Отметьте несколько групп одного человека' : `Выбрано групп: ${picked.size}. Соберутся в «${plan?.into.name ?? 'группу без имени'}» (${countFiles(plan?.into.count ?? 0)}).`}
+              {plan && plan.lostNames.length > 0 && <span className="block text-amber-700 dark:text-amber-400">Эти имена пропадут: {plan.lostNames.join(', ')}.</span>}
+              {problem && <span className="block text-red-600 dark:text-red-400" role="alert">{problem}</span>}
+            </span>
+            <span className="ml-auto flex gap-2">
+              <button type="button" onClick={stop} className="rounded-lg px-3 py-1.5 text-sm hover:bg-paper-200 dark:hover:bg-gray-800">Отмена</button>
+              <button type="button" disabled={!plan || busy} onClick={() => void mergeChosen()} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">
+                {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Combine className="size-4" aria-hidden />}Объединить
+              </button>
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -277,4 +277,58 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await intCall('GET', '/internal/media')).people.detections.faces, n1, 'находки заменены, а не удвоены');
     assert.equal((await dbq("SELECT 1 FROM detections WHERE kind = 'face' AND model <> 'fake-faces-v2'")).length, 0);
   });
+  it('строгость лиц: границы 30-55 в настройках, подсказка по числу групп', async () => {
+    assert.equal((await patch({ facesSim: 29 })).status, 400);
+    assert.equal((await patch({ facesSim: 56 })).status, 400);
+    assert.equal((await patch({ facesSim: 0.45 })).status, 400, 'целое число процентов');
+    assert.equal((await intCall('GET', '/internal/media')).settings.facesSim, 45, 'по умолчанию 45');
+    assert.equal((await patch({ facesSim: 40 })).status, 200);
+    assert.equal((await intCall('GET', '/internal/media')).settings.facesSim, 40);
+    const h = await intCall('GET', '/internal/media/people/hint');
+    assert.deepEqual(h.rows.map((x: any) => x.sim), [30, 35, 40, 45, 50, 55]);
+    assert.ok(h.rows.every((x: any) => x.groups >= 1 && x.ungrouped >= 0), JSON.stringify(h));
+    assert.equal((await patch({ facesSim: 45 })).status, 200);
+  });
+
+  it('«Пересобрать группы»: названные и скрытые остаются, безымянные собираются заново', async () => {
+    const before = (await people(e.anna, true)).people;
+    assert.ok(before.length >= 2, JSON.stringify(before));
+    const [keep, drop] = before;
+    assert.equal((await jr('PATCH', `/api/people/${keep.id}`, e.anna, { name: 'Оставить' })).status, 200);
+    const bor = (await people(e.boris, true)).people;
+    assert.ok(bor.length >= 1);
+    assert.equal((await jr('PATCH', `/api/people/${bor[0].id}`, e.boris, { hidden: true })).status, 200);
+    const r = await intCall('POST', '/internal/media/people/rebuild', {});
+    assert.ok(r.removed >= 1 && r.created >= 1, JSON.stringify(r));
+    const after = (await people(e.anna, true)).people;
+    assert.equal(after.length, before.length, 'число групп то же: те же лица собрались снова');
+    const kept = after.find((x: any) => x.id === keep.id);
+    assert.equal(kept?.name, 'Оставить');
+    assert.equal(kept?.count, keep.count);
+    assert.ok(!after.some((x: any) => x.id === drop.id), 'безымянная группа пересоздана с новым номером');
+    assert.equal(after.find((x: any) => x.id !== keep.id).count, drop.count, 'в ней те же файлы');
+    const b2 = (await people(e.boris, true)).people;
+    assert.equal(b2.length, bor.length);
+    assert.equal(b2.find((x: any) => x.id === bor[0].id)?.hidden, true, 'скрытая группа не тронута');
+  });
+
+  it('объединить сразу несколько групп: в названную, имена остальных пропадают, чужие и пустой список отклоняются', async () => {
+    const list = (await people(e.anna, true)).people;
+    const keep = list.find((x: any) => x.name === 'Оставить');
+    const other = list.find((x: any) => x.id !== keep.id);
+    const total = keep.count + other.count;
+    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [] })).status, 400);
+    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [keep.id] })).status, 400, 'сама в себя не сливается');
+    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id })).status, 400);
+    const boris = (await people(e.boris, true)).people[0];
+    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [boris.id] })).status, 404, 'чужая группа');
+    assert.equal((await jr('POST', '/api/people/merge-many', e.boris, { into: boris.id, from: [keep.id] })).status, 404);
+    const ok = await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [other.id, other.id] });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json.merged, 1, 'повтор в списке не считается дважды');
+    const now = (await people(e.anna, true)).people;
+    assert.equal(now.length, list.length - 1);
+    assert.equal(now.find((x: any) => x.id === keep.id).name, 'Оставить');
+    assert.ok(now.find((x: any) => x.id === keep.id).count >= other.count, `было ${total} файлов у двух групп, склеилось`);
+  });
 });

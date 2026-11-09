@@ -87,6 +87,7 @@ export const api = {
   renamePerson: (id: string, name: string | null) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { name }),
   hidePerson: (id: string, hidden: boolean) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { hidden }),
   mergePeople: (into: string, from: string) => request<unknown>('POST', `/api/people/${encodeURIComponent(into)}/merge`, { from }),
+  mergePeopleMany: (into: string, from: string[]) => request<{ merged: number }>('POST', '/api/people/merge-many', { into, from }),
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
   removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),

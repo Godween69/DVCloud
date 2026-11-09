@@ -8,6 +8,7 @@ import { AdminAlbum, AdminStorageService, QuotaRequest } from '../files/admin-st
 import { InternalTokenGuard } from './internal-token.guard';
 import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
+import { PeopleService } from '../files/people.service';
 
 @Controller('internal/health')
 export class InternalHealthController {
@@ -204,7 +205,25 @@ export class InternalMediaController {
   constructor(
     private readonly media: AdminMediaService,
     private readonly audit: AuditService,
+    private readonly people: PeopleService,
   ) {}
+
+  // «Пересобрать группы»: безымянные автоматические группы людей собираются заново по текущей строгости.
+  // Названные, скрытые и правленные вручную остаются.
+  @Post('people/rebuild')
+  @HttpCode(200)
+  async rebuildPeople(@Req() req: Request): Promise<{ removed: number; created: number; kept: number }> {
+    requireJson(req);
+    const r = await this.people.rebuildFaces();
+    await this.audit.write('media.people', 'rebuild', { ...r });
+    return r;
+  }
+
+  // Подсказка: сколько групп получилось бы при каждой строгости. Ничего не меняет.
+  @Get('people/hint')
+  async hintPeople(): Promise<{ rows: { sim: number; groups: number; ungrouped: number }[] }> {
+    return { rows: await this.people.hintFaces() };
+  }
 
   @Get()
   overview(): Promise<MediaOverview> {

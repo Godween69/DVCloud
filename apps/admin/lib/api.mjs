@@ -13,14 +13,14 @@ function messageOf(json) {
 }
 
 export function createApi({ baseUrl, token, fetchImpl = fetch }) {
-  async function call(method, path, body) {
+  async function call(method, path, body, timeoutMs = 10000) {
     let r;
     try {
       r = await fetchImpl(baseUrl + path, {
         method,
         headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new ApiError(0, 'Сервер DVCloud недоступен');
@@ -57,6 +57,9 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     startDates: (apply) => call('POST', '/internal/media/dates', { apply }),
     saveMedia: (patch) => call('PATCH', '/internal/media/settings', patch),
     clearMedia: (what) => call('POST', '/internal/media/clear', { what }),
+    // Пересборка и подсчёт групп на десятках тысяч лиц идут минуты: ожидание длиннее обычных 10 секунд.
+    rebuildPeople: () => call('POST', '/internal/media/people/rebuild', {}, 300000),
+    peopleHint: () => call('GET', '/internal/media/people/hint', undefined, 300000),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };

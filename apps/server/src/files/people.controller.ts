@@ -92,6 +92,15 @@ export class PeopleController {
     return { ok: true };
   }
 
+  // Объединить несколько групп сразу: {into: "12", from: ["13", "14"]}.
+  @Post('merge-many')
+  @HttpCode(200)
+  async mergeMany(@Req() req: Req_, @Body() body: unknown): Promise<{ merged: number }> {
+    const o = obj(body);
+    if (typeof o.into !== 'string' || !Array.isArray(o.from) || !o.from.every((x) => typeof x === 'string')) throw new BadRequestException('Нужны into (номер группы) и from (список номеров)');
+    return { merged: await this.people.mergeMany(req.user.id, o.into, o.from as string[]) };
+  }
+
   @Delete(':id')
   async remove(@Req() req: Req_, @Param('id') id: string): Promise<{ ok: true }> {
     await this.people.remove(req.user.id, id);

@@ -10,13 +10,12 @@ import { StorageService } from './storage.service';
 
 // Насколько похожи два лица (скалярное произведение нормированных векторов SFace), чтобы считать их одним человеком.
 // OpenCV рекомендует 0,363 для проверки двух снимков; для сбора групп берём строже: лишнюю группу легко объединить
-// вручную, а чужое лицо в группе придётся искать глазами. Для питомцев (вектор CLIP по вырезанному кадру) порог выше:
-// все кошки между собой похожи сильнее, чем люди. Оба можно подстроить переменными окружения.
+// вручную, а чужое лицо в группе придётся искать глазами. Порог для лиц теперь в настройках админки (facesSim, по умолчанию 45). Для питомцев (вектор CLIP по вырезанному кадру) порог выше:
+// все кошки между собой похожи сильнее, чем люди. Порог питомцев можно подстроить переменной окружения.
 const num = (v: string | undefined, d: number): number => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 && n < 1 ? n : d;
 };
-export const FACE_SIM = num(process.env.DVCLOUD_FACE_SIM, 0.45);
 export const PET_SIM = num(process.env.DVCLOUD_PET_SIM, 0.9);
 // Новая безымянная группа заводится, когда в ней набралось хотя бы столько находок: так случайные лица в толпе не засоряют список.
 export const MIN_GROUP = 3;
@@ -56,6 +55,48 @@ function normalize(v: Float32Array): void {
   for (let i = 0; i < v.length; i++) n += v[i] * v[i];
   n = Math.sqrt(n);
   if (n > 0) for (let i = 0; i < v.length; i++) v[i] /= n;
+}
+
+export interface FreeDet { id: string; v: Float32Array }
+
+// Разложить свободные находки: к существующим группам (по центру группы), остальные в новые группы. Порядок входа важен
+// (лучшие находки первыми задают группы). Отдаёт управление циклу событий, чтобы большой пересчёт не вешал сервер.
+export async function groupFree(
+  free: FreeDet[],
+  cent: Map<string, Float32Array>,
+  rej: Map<string, Set<string>>,
+  T: number,
+): Promise<{ toExisting: { det: string; person: string }[]; fresh: { dets: string[] }[] }> {
+  const toExisting: { det: string; person: string }[] = [];
+  const fresh: { sum: Float32Array; cen: Float32Array; dets: string[] }[] = [];
+  let n = 0;
+  for (const d of free) {
+    if (++n % 200 === 0) await new Promise((r) => setImmediate(r));
+    const v = d.v;
+    let best = -1, bestP = '';
+    for (const [pid, c] of cent) {
+      if (c.length !== v.length || rej.get(d.id)?.has(pid)) continue;
+      const s = dot(c, v);
+      if (s > best) { best = s; bestP = pid; }
+    }
+    if (best >= T) { toExisting.push({ det: d.id, person: bestP }); continue; }
+    let bi = -1, bs = -1;
+    fresh.forEach((g, i) => {
+      if (g.cen.length !== v.length) return;
+      const s = dot(g.cen, v);
+      if (s > bs) { bs = s; bi = i; }
+    });
+    if (bs >= T) {
+      const g = fresh[bi];
+      for (let i = 0; i < v.length; i++) g.sum[i] += v[i];
+      g.cen = Float32Array.from(g.sum);
+      normalize(g.cen);
+      g.dets.push(d.id);
+    } else {
+      fresh.push({ sum: Float32Array.from(v), cen: Float32Array.from(v), dets: [d.id] });
+    }
+  }
+  return { toExisting, fresh: fresh.map((g) => ({ dets: g.dets })) };
 }
 
 // Для сопоставления слов запроса с именем: «Валей», «Валю», «Вали» это «Валя». Без словаря: сравниваем начало слова.
@@ -131,92 +172,138 @@ export class PeopleService {
   // Сопоставить новые находки с группами человека: сначала с уже существующими (по среднему вектору группы), остальные
   // собрать в новые безымянные группы. Назначения, которые сделал сам человек, и имена не меняются никогда.
   async recluster(ownerId: string, kind: PersonKind): Promise<{ assigned: number; created: number }> {
-    return this.exclusive(`${ownerId}:${kind}`, async () => {
-      const T = kind === 'person' ? FACE_SIM : PET_SIM;
-      const kinds = KINDS[kind];
-      const people = (await this.db.query<{ id: string }>('SELECT id FROM people WHERE owner_id = $1 AND kind = $2', [ownerId, kind])).rows;
-      const cent = new Map<string, Float32Array>();
-      if (people.length) {
-        const rows = (
-          await this.db.query<{ person_id: string; vector: Buffer }>(
-            `SELECT dp.person_id, d.vector FROM detection_people dp JOIN detections d ON d.id = dp.detection_id
-             WHERE dp.owner_id = $1 AND dp.person_id = ANY($2::bigint[])`,
-            [ownerId, people.map((p) => p.id)],
-          )
-        ).rows;
-        for (const r of rows) {
-          const v = f32(r.vector);
-          const c = cent.get(r.person_id) ?? new Float32Array(v.length);
-          if (c.length === v.length) for (let i = 0; i < v.length; i++) c[i] += v[i];
-          cent.set(r.person_id, c);
-        }
-        for (const c of cent.values()) normalize(c);
-      }
-      const rej = new Map<string, Set<string>>();
-      for (const r of (await this.db.query<{ detection_id: string; person_id: string }>('SELECT detection_id, person_id FROM detection_rejects WHERE owner_id = $1', [ownerId])).rows) {
-        if (!rej.has(r.detection_id)) rej.set(r.detection_id, new Set());
-        rej.get(r.detection_id)!.add(r.person_id);
-      }
-      const un = (
-        await this.db.query<{ id: string; vector: Buffer; score: number }>(
-          `SELECT d.id, d.vector, d.score FROM detections d
-           WHERE d.kind = ANY($2::text[]) AND d.blob_id IN (SELECT blob_id FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL)
-             AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id AND dp.owner_id = $1)
-           ORDER BY d.score DESC, d.id`,
-          [ownerId, kinds],
-        )
-      ).rows;
-      const toExisting: { det: string; person: string }[] = [];
-      const fresh: { sum: Float32Array; cen: Float32Array; dets: string[] }[] = [];
-      for (const d of un) {
-        const v = f32(d.vector);
-        let best = -1, bestP = '';
-        for (const [pid, c] of cent) {
-          if (c.length !== v.length || rej.get(d.id)?.has(pid)) continue;
-          const s = dot(c, v);
-          if (s > best) { best = s; bestP = pid; }
-        }
-        if (best >= T) { toExisting.push({ det: d.id, person: bestP }); continue; }
-        let bi = -1, bs = -1;
-        fresh.forEach((g, i) => {
-          if (g.cen.length !== v.length) return;
-          const s = dot(g.cen, v);
-          if (s > bs) { bs = s; bi = i; }
-        });
-        if (bs >= T) {
-          const g = fresh[bi];
-          for (let i = 0; i < v.length; i++) g.sum[i] += v[i];
-          g.cen = Float32Array.from(g.sum);
-          normalize(g.cen);
-          g.dets.push(d.id);
-        } else {
-          fresh.push({ sum: Float32Array.from(v), cen: Float32Array.from(v), dets: [d.id] });
-        }
-      }
-      let assigned = 0, created = 0;
-      if (toExisting.length) {
-        await this.db.query(
+    return this.exclusive(`${ownerId}:${kind}`, () => this.doRecluster(ownerId, kind));
+  }
+
+  // Порог сходства: у лиц его задаёт администратор (процент в настройках), у питомцев он постоянный.
+  private async threshold(kind: PersonKind): Promise<number> {
+    return kind === 'person' ? (await this.settings.get()).facesSim / 100 : PET_SIM;
+  }
+
+  // Средние векторы групп (центры) по списку номеров групп.
+  private async centroids(ownerId: string, ids: string[]): Promise<Map<string, Float32Array>> {
+    const cent = new Map<string, Float32Array>();
+    if (!ids.length) return cent;
+    const rows = (
+      await this.db.query<{ person_id: string; vector: Buffer }>(
+        `SELECT dp.person_id, d.vector FROM detection_people dp JOIN detections d ON d.id = dp.detection_id
+         WHERE dp.owner_id = $1 AND dp.person_id = ANY($2::bigint[])`,
+        [ownerId, ids],
+      )
+    ).rows;
+    for (const r of rows) {
+      const v = f32(r.vector);
+      const c = cent.get(r.person_id) ?? new Float32Array(v.length);
+      if (c.length === v.length) for (let i = 0; i < v.length; i++) c[i] += v[i];
+      cent.set(r.person_id, c);
+    }
+    for (const c of cent.values()) normalize(c);
+    return cent;
+  }
+
+  private async rejects(ownerId: string): Promise<Map<string, Set<string>>> {
+    const rej = new Map<string, Set<string>>();
+    for (const r of (await this.db.query<{ detection_id: string; person_id: string }>('SELECT detection_id, person_id FROM detection_rejects WHERE owner_id = $1', [ownerId])).rows) {
+      if (!rej.has(r.detection_id)) rej.set(r.detection_id, new Set());
+      rej.get(r.detection_id)!.add(r.person_id);
+    }
+    return rej;
+  }
+
+  private async doRecluster(ownerId: string, kind: PersonKind): Promise<{ assigned: number; created: number }> {
+    const T = await this.threshold(kind);
+    const kinds = KINDS[kind];
+    const people = (await this.db.query<{ id: string }>('SELECT id FROM people WHERE owner_id = $1 AND kind = $2', [ownerId, kind])).rows;
+    const cent = await this.centroids(ownerId, people.map((p) => p.id));
+    const rej = await this.rejects(ownerId);
+    const un = (
+      await this.db.query<{ id: string; vector: Buffer; score: number }>(
+        `SELECT d.id, d.vector, d.score FROM detections d
+         WHERE d.kind = ANY($2::text[]) AND d.blob_id IN (SELECT blob_id FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL)
+           AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id AND dp.owner_id = $1)
+         ORDER BY d.score DESC, d.id`,
+        [ownerId, kinds],
+      )
+    ).rows;
+    const { toExisting, fresh } = await groupFree(un.map((d) => ({ id: d.id, v: f32(d.vector) })), cent, rej, T);
+    let assigned = 0, created = 0;
+    if (toExisting.length) {
+      await this.db.query(
+        `INSERT INTO detection_people (detection_id, owner_id, person_id, source)
+         SELECT x.det, $1, x.person, 'auto' FROM unnest($2::bigint[], $3::bigint[]) AS x(det, person) ON CONFLICT DO NOTHING`,
+        [ownerId, toExisting.map((x) => x.det), toExisting.map((x) => x.person)],
+      );
+      assigned += toExisting.length;
+    }
+    for (const g of fresh) {
+      if (g.dets.length < MIN_GROUP) continue;
+      await this.db.tx(async (c) => {
+        const p = await c.query<{ id: string }>('INSERT INTO people (owner_id, kind) VALUES ($1, $2) RETURNING id', [ownerId, kind]);
+        await c.query(
           `INSERT INTO detection_people (detection_id, owner_id, person_id, source)
-           SELECT x.det, $1, x.person, 'auto' FROM unnest($2::bigint[], $3::bigint[]) AS x(det, person) ON CONFLICT DO NOTHING`,
-          [ownerId, toExisting.map((x) => x.det), toExisting.map((x) => x.person)],
+           SELECT x, $1, $2, 'auto' FROM unnest($3::bigint[]) AS x ON CONFLICT DO NOTHING`,
+          [ownerId, p.rows[0].id, g.dets],
         );
-        assigned += toExisting.length;
+      });
+      created++;
+      assigned += g.dets.length;
+    }
+    return { assigned, created };
+  }
+
+  // Что «пересобирается»: безымянные, не скрытые группы людей, в которых никого не назначали вручную. Всё остальное
+  // (названные, скрытые, правленные руками) остаётся как есть.
+  private static readonly DISPOSABLE = `p.kind = 'person' AND p.name IS NULL AND NOT p.hidden
+    AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.person_id = p.id AND dp.source = 'manual')`;
+
+  private async faceOwners(): Promise<string[]> {
+    return (await this.db.query<{ owner_id: string }>(
+      `SELECT DISTINCT f.owner_id FROM files f JOIN detections d ON d.blob_id = f.blob_id WHERE d.kind = 'face' AND f.blob_id IS NOT NULL`,
+    )).rows.map((r) => r.owner_id);
+  }
+
+  // «Пересобрать группы»: у всех безымянных автоматических групп людей стереть состав и собрать лица заново по текущей
+  // строгости. Названные, скрытые и правленные вручную группы остаются; к ним лица тоже могут присоединиться.
+  async rebuildFaces(): Promise<{ removed: number; created: number; kept: number }> {
+    let removed = 0, created = 0, kept = 0;
+    for (const owner of await this.faceOwners()) {
+      await this.exclusive(`${owner}:person`, async () => {
+        const del = await this.db.query(`DELETE FROM people p WHERE p.owner_id = $1 AND ${PeopleService.DISPOSABLE}`, [owner]);
+        removed += del.rowCount ?? 0;
+        created += (await this.doRecluster(owner, 'person')).created;
+        kept += Number((await this.db.query<{ n: string }>("SELECT count(*) AS n FROM people WHERE owner_id = $1 AND kind = 'person'", [owner])).rows[0].n);
+      });
+    }
+    this.seen.clear();
+    return { removed, created, kept };
+  }
+
+  // Подсказка для настройки: сколько групп людей получилось бы при каждой строгости (только считает, ничего не меняет).
+  async hintFaces(): Promise<{ sim: number; groups: number; ungrouped: number }[]> {
+    const sims = [30, 35, 40, 45, 50, 55];
+    const out = sims.map((sim) => ({ sim, groups: 0, ungrouped: 0 }));
+    for (const owner of await this.faceOwners()) {
+      const keep = (
+        await this.db.query<{ id: string }>(`SELECT p.id FROM people p WHERE p.owner_id = $1 AND p.kind = 'person' AND NOT (${PeopleService.DISPOSABLE})`, [owner])
+      ).rows.map((r) => r.id);
+      const cent = await this.centroids(owner, keep);
+      const free = (
+        await this.db.query<{ id: string; vector: Buffer }>(
+          `SELECT d.id, d.vector FROM detections d
+           WHERE d.kind = 'face' AND d.blob_id IN (SELECT blob_id FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL)
+             AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id AND dp.owner_id = $1 AND dp.person_id = ANY($2::bigint[]))
+           ORDER BY d.score DESC, d.id`,
+          [owner, keep],
+        )
+      ).rows.map((d) => ({ id: d.id, v: f32(d.vector) }));
+      for (const row of out) {
+        const { toExisting, fresh } = await groupFree(free, cent, new Map(), row.sim / 100);
+        const big = fresh.filter((g) => g.dets.length >= MIN_GROUP);
+        row.groups += keep.length + big.length;
+        row.ungrouped += free.length - toExisting.length - big.reduce((n, g) => n + g.dets.length, 0);
       }
-      for (const g of fresh) {
-        if (g.dets.length < MIN_GROUP) continue;
-        await this.db.tx(async (c) => {
-          const p = await c.query<{ id: string }>('INSERT INTO people (owner_id, kind) VALUES ($1, $2) RETURNING id', [ownerId, kind]);
-          await c.query(
-            `INSERT INTO detection_people (detection_id, owner_id, person_id, source)
-             SELECT x, $1, $2, 'auto' FROM unnest($3::bigint[]) AS x ON CONFLICT DO NOTHING`,
-            [ownerId, p.rows[0].id, g.dets],
-          );
-        });
-        created++;
-        assigned += g.dets.length;
-      }
-      return { assigned, created };
-    });
+    }
+    return out;
   }
 
   async status(): Promise<{ faces: boolean; pets: boolean }> {
@@ -297,6 +384,19 @@ export class PeopleService {
       }
       await c.query('DELETE FROM people WHERE id = $1', [from.id]); // отказы «это не он» уходят вместе с группой
     });
+  }
+
+  // Объединить сразу несколько групп в одну: {from: [...]} переходят в into. Сначала проверяется всё, потом сливается.
+  async mergeMany(ownerId: string, intoId: string, fromIds: string[]): Promise<number> {
+    const ids = [...new Set(fromIds)].filter((x) => x !== intoId);
+    if (ids.length === 0) throw new BadRequestException('Выберите хотя бы две группы');
+    if (ids.length > 300) throw new BadRequestException('За раз можно объединить не больше 300 групп');
+    const into = await this.person(ownerId, intoId);
+    for (const id of ids) {
+      if ((await this.person(ownerId, id)).kind !== into.kind) throw new BadRequestException('Человека нельзя объединить с питомцем');
+    }
+    for (const id of ids) await this.merge(ownerId, intoId, id);
+    return ids.length;
   }
 
   // Распустить группу: находки становятся «ничьими» и при следующем пересчёте могут собраться заново. Чтобы группа не

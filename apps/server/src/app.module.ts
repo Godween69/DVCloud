@@ -68,7 +68,7 @@ export class InternalModule {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
       controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, AdminMediaService],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, PeopleService, AdminMediaService],
     };
   }
 }
