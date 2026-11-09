@@ -109,9 +109,9 @@ progress::-webkit-progress-value { background:var(--ok); border-radius:6px; } pr
 @media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition:none; } }
 `;
 
-const layout = (title, body) => `<!doctype html>
+const layout = (title, body, head = '') => `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title><link rel="stylesheet" href="/style.css"></head>
+<title>${esc(title)}</title><link rel="stylesheet" href="/style.css">${head}</head>
 <body><main>${body}</main></body></html>`;
 
 const csrfInput = (csrf) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
@@ -265,8 +265,30 @@ const searchPanel = (x, s, csrf) => {
 };
 
 // Лица и питомцы: готовность моделей, ход просмотра, находки, полная очистка (со словом-подтверждением).
-const peoplePanel = (p, s, csrf, up) => {
+// Ход и итог долгой операции над группами людей (подсчёт или пересборка). Пока идёт, страница сама обновляется.
+const simText = (n) => (n / 100).toFixed(2).replace('.', ',');
+const jobBlock = (j) => {
+  if (!j) return '';
+  const name = j.kind === 'hint' ? 'Подсчёт групп' : 'Пересборка групп';
+  if (j.state === 'running') {
+    return `<div class="msg" role="status"><b>${name}: идёт.</b> ${esc(j.text)}. Прошло ${j.elapsedSec} с.
+<progress max="${Math.max(j.steps, 1)}" value="${j.step}" aria-label="Ход: ${name}"></progress>
+<span class="muted">Страница обновляется сама каждые 3 секунды. Её можно закрыть: работа идёт на сервере.</span></div>`;
+  }
+  if (j.state === 'error') return `<div class="msg error" role="alert"><b>${name}: не получилось.</b> ${esc(j.error ?? 'Неизвестная ошибка')}. Попробуйте ещё раз; если повторится, смотрите журнал сервера.</div>`;
+  if (j.kind === 'rebuild' && j.rebuild) {
+    return `<div class="msg ok"><b>Пересборка групп готова</b> (заняла ${j.elapsedSec} с). Безымянных групп стёрто: ${j.rebuild.removed}, собрано заново: ${j.rebuild.created}. Названные, скрытые и правленные вручную группы остались. Всего групп людей теперь: ${j.rebuild.kept}.</div>`;
+  }
+  if (j.kind === 'hint' && j.hint) {
+    return `<div class="msg ok"><b>Подсчёт готов</b> (занял ${j.elapsedSec} с). Сколько групп людей получилось бы при каждой строгости (ничего не изменилось):
+<ul>${j.hint.map((x) => `<li>при ${simText(x.sim)}: ${x.groups} групп, без группы останется ${x.ungrouped} лиц</li>`).join('')}</ul></div>`;
+  }
+  return '';
+};
+
+const peoplePanel = (p, s, csrf, up, job) => {
   if (!p) return '';
+  const busy = job?.state === 'running';
   const row = (label, x) => {
     const state = !x.enabled ? 'выключено' : !up ? 'ждёт службу ML' : !x.modelFiles ? 'нет файлов модели' : x.pending ? 'идёт просмотр' : 'всё просмотрено';
     return `<p><b>${label}:</b> ${state}. Готово ${x.done} из ${x.total}${x.failed ? `, не удалось прочитать: ${x.failed}` : ''}${x.pending ? `, в очереди: ${x.pending}` : ''}.</p>
@@ -275,8 +297,9 @@ const peoplePanel = (p, s, csrf, up) => {
   return `<section class="panel"><div class="panel-head"><div><h2>Люди и питомцы</h2><p class="muted">Найдено лиц: ${p.detections.faces}, питомцев: ${p.detections.pets}. Групп: ${p.groups}, из них названо людьми: ${p.named}.</p></div></div>
 ${row('Лица', p.faces)}
 ${row('Питомцы', p.pets)}
-<div class="setting"><div><b>Пересобрать группы</b><p class="muted">Стирает только безымянные группы людей, которые сделала сама программа, и собирает лица заново по текущей строгости (сохраните её выше). <b>Остаются как есть:</b> группы с именем, скрытые группы и группы, где вы что-то правили вручную; к названным группам при этом присоединятся и подходящие лица из стёртых. Объединённая вами группа без имени считается безымянной и будет пересобрана: если хотите сохранить её, назовите. Фото и имена не страдают. Займёт несколько минут.</p></div>
-<span><form method="post" action="/media/people/hint" class="inline">${csrfInput(csrf)}<button type="submit" title="Только посчитать, ничего не меняется">Показать, сколько групп получится</button></form> <form method="post" action="/media/people/rebuild" class="inline">${csrfInput(csrf)}<button class="danger" type="submit">Пересобрать группы</button></form></span></div>
+${jobBlock(job)}
+<div class="setting"><div><b>Пересобрать группы</b><p class="muted">Стирает только безымянные группы людей, которые сделала сама программа, и собирает лица заново по текущей строгости (сохраните её выше). <b>Остаются как есть:</b> группы с именем, скрытые группы и группы, где вы что-то правили вручную; к названным группам при этом присоединятся и подходящие лица из стёртых. Объединённая вами группа без имени считается безымянной и будет пересобрана: если хотите сохранить её, назовите. Фото и имена не страдают. Работа идёт в фоне: ход и итог видны ниже в этой панели, страница обновляется сама.</p></div>
+<span><form method="post" action="/media/people/hint" class="inline">${csrfInput(csrf)}<button type="submit"${busy ? ' disabled' : ''} title="Только посчитать, ничего не меняется">Показать, сколько групп получится</button></form> <form method="post" action="/media/people/rebuild" class="inline">${csrfInput(csrf)}<button class="danger" type="submit"${busy ? ' disabled' : ''}>Пересобрать группы</button></form></span></div>
 <form method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="people">
 <p class="muted">Стереть все находки, группы и имена людей и питомцев у всех. Фото не затрагиваются. Если распознавание включено, просмотр начнётся заново, а названия придётся давать снова.</p>
 <p><input type="text" name="word" placeholder="впишите: стереть" autocomplete="off" aria-label="Подтверждение: слово стереть"> <button class="danger" type="submit">Стереть данные лиц</button></p></form></section>`;
@@ -330,9 +353,9 @@ ${topBar('media', csrf)}
 ${flashHtml(flash, loadError)}
 ${stats}
 ${media ? searchPanel(media.search, s, csrf) : ''}
-${media ? peoplePanel(media.people, s, csrf, media.search.up) : ''}
+${media ? peoplePanel(media.people, s, csrf, media.search.up, media.peopleJob) : ''}
 ${form}
-${media ? datesPanel(dates, csrf) : ''}`);
+${media ? datesPanel(dates, csrf) : ''}`, media?.peopleJob?.state === 'running' ? '<meta http-equiv="refresh" content="3">' : '');
 }
 
 export function secretPage({ title, login, password }) {

@@ -32,6 +32,19 @@ export interface PersonInfo {
   cover: string; // id находки для обложки (лицо или питомец)
 }
 
+// Долгая операция над группами людей (подсчёт или пересборка), идёт в фоне; админка показывает ход.
+export interface FaceJob {
+  kind: 'hint' | 'rebuild';
+  state: 'running' | 'done' | 'error';
+  step: number;
+  steps: number;
+  text: string; // что делается сейчас
+  elapsedSec: number;
+  hint?: { sim: number; groups: number; ungrouped: number }[];
+  rebuild?: { removed: number; created: number; kept: number };
+  error?: string;
+}
+
 export interface FileFace {
   id: string; // id находки
   kind: 'face' | 'cat' | 'dog';
@@ -112,7 +125,8 @@ const STOP = new Set(['фото', 'фотки', 'фотка', 'фотограф�
 
 @Injectable()
 export class PeopleService {
-  private readonly locks = new Map<string, Promise<unknown>>();
+  // Замки общие на весь процесс: у публичного и внутреннего порта свои экземпляры службы, а пересчёт должен быть один за раз.
+  private static readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(
     @Inject(DbService) private readonly db: DbService,
@@ -122,13 +136,13 @@ export class PeopleService {
 
   // Один пересчёт групп человека за раз: два одновременных создали бы дубли групп.
   private async exclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.locks.get(key) ?? Promise.resolve();
+    const prev = PeopleService.locks.get(key) ?? Promise.resolve();
     const run = prev.catch(() => undefined).then(fn);
-    this.locks.set(key, run);
+    PeopleService.locks.set(key, run);
     try {
       return await run;
     } finally {
-      if (this.locks.get(key) === run) this.locks.delete(key);
+      if (PeopleService.locks.get(key) === run) PeopleService.locks.delete(key);
     }
   }
 
@@ -264,25 +278,31 @@ export class PeopleService {
 
   // «Пересобрать группы»: у всех безымянных автоматических групп людей стереть состав и собрать лица заново по текущей
   // строгости. Названные, скрытые и правленные вручную группы остаются; к ним лица тоже могут присоединиться.
-  async rebuildFaces(): Promise<{ removed: number; created: number; kept: number }> {
+  async rebuildFaces(onStep: (done: number, total: number) => void = () => undefined): Promise<{ removed: number; created: number; kept: number }> {
     let removed = 0, created = 0, kept = 0;
-    for (const owner of await this.faceOwners()) {
+    const owners = await this.faceOwners();
+    onStep(0, owners.length);
+    for (const [i, owner] of owners.entries()) {
       await this.exclusive(`${owner}:person`, async () => {
         const del = await this.db.query(`DELETE FROM people p WHERE p.owner_id = $1 AND ${PeopleService.DISPOSABLE}`, [owner]);
         removed += del.rowCount ?? 0;
         created += (await this.doRecluster(owner, 'person')).created;
         kept += Number((await this.db.query<{ n: string }>("SELECT count(*) AS n FROM people WHERE owner_id = $1 AND kind = 'person'", [owner])).rows[0].n);
       });
+      onStep(i + 1, owners.length);
     }
     this.seen.clear();
     return { removed, created, kept };
   }
 
   // Подсказка для настройки: сколько групп людей получилось бы при каждой строгости (только считает, ничего не меняет).
-  async hintFaces(): Promise<{ sim: number; groups: number; ungrouped: number }[]> {
+  async hintFaces(onStep: (done: number, total: number, sim: number) => void = () => undefined): Promise<{ sim: number; groups: number; ungrouped: number }[]> {
     const sims = [30, 35, 40, 45, 50, 55];
     const out = sims.map((sim) => ({ sim, groups: 0, ungrouped: 0 }));
-    for (const owner of await this.faceOwners()) {
+    const owners = await this.faceOwners();
+    let done = 0;
+    onStep(0, owners.length * sims.length, sims[0]);
+    for (const owner of owners) {
       const keep = (
         await this.db.query<{ id: string }>(`SELECT p.id FROM people p WHERE p.owner_id = $1 AND p.kind = 'person' AND NOT (${PeopleService.DISPOSABLE})`, [owner])
       ).rows.map((r) => r.id);
@@ -301,9 +321,35 @@ export class PeopleService {
         const big = fresh.filter((g) => g.dets.length >= MIN_GROUP);
         row.groups += keep.length + big.length;
         row.ungrouped += free.length - toExisting.length - big.reduce((n, g) => n + g.dets.length, 0);
+        onStep(++done, owners.length * sims.length, sims[done % sims.length]);
       }
     }
     return out;
+  }
+
+  private job: (Omit<FaceJob, 'elapsedSec'> & { startedAt: number; finishedAt: number | null }) | null = null;
+
+  // Состояние последней долгой операции (или null, если с запуска сервера ничего не запускали).
+  faceJob(): FaceJob | null {
+    const j = this.job;
+    if (!j) return null;
+    const { startedAt, finishedAt, ...rest } = j;
+    return { ...rest, elapsedSec: Math.round(((finishedAt ?? Date.now()) - startedAt) / 1000) };
+  }
+
+  // Запустить подсчёт или пересборку в фоне. Одновременно идёт одна операция: вторая получает отказ.
+  startFaceJob(kind: 'hint' | 'rebuild'): FaceJob {
+    if (this.job?.state === 'running') throw new ConflictException(`Уже идёт ${this.job.kind === 'hint' ? 'подсчёт' : 'пересборка'} групп: дождитесь конца`);
+    const job: NonNullable<PeopleService['job']> = { kind, state: 'running', step: 0, steps: 1, text: 'Подготовка', startedAt: Date.now(), finishedAt: null };
+    this.job = job;
+    const run = kind === 'hint'
+      ? this.hintFaces((done, total, sim) => { job.step = done; job.steps = total; job.text = `Считаю при строгости ${(sim / 100).toFixed(2).replace('.', ',')}`; }).then((rows) => { job.hint = rows; })
+      : this.rebuildFaces((done, total) => { job.step = done; job.steps = total; job.text = `Собираю заново группы людей: ${done} из ${total}`; }).then((r) => { job.rebuild = r; });
+    void run
+      .then(() => { job.state = 'done'; job.step = job.steps; job.text = 'Готово'; })
+      .catch((e: unknown) => { job.state = 'error'; job.error = e instanceof Error ? e.message : 'Неизвестная ошибка'; job.text = 'Не получилось'; })
+      .finally(() => { job.finishedAt = Date.now(); });
+    return this.faceJob()!;
   }
 
   async status(): Promise<{ faces: boolean; pets: boolean }> {

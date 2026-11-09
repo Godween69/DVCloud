@@ -8,7 +8,7 @@ import { AdminAlbum, AdminStorageService, QuotaRequest } from '../files/admin-st
 import { InternalTokenGuard } from './internal-token.guard';
 import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
-import { PeopleService } from '../files/people.service';
+import { FaceJob, PeopleService } from '../files/people.service';
 
 @Controller('internal/health')
 export class InternalHealthController {
@@ -209,25 +209,27 @@ export class InternalMediaController {
   ) {}
 
   // «Пересобрать группы»: безымянные автоматические группы людей собираются заново по текущей строгости.
-  // Названные, скрытые и правленные вручную остаются.
+  // Названные, скрытые и правленные вручную остаются. Идёт в фоне: ответ приходит сразу, ход виден в GET /internal/media.
   @Post('people/rebuild')
   @HttpCode(200)
-  async rebuildPeople(@Req() req: Request): Promise<{ removed: number; created: number; kept: number }> {
+  async rebuildPeople(@Req() req: Request): Promise<{ job: FaceJob }> {
     requireJson(req);
-    const r = await this.people.rebuildFaces();
-    await this.audit.write('media.people', 'rebuild', { ...r });
-    return r;
+    const job = this.people.startFaceJob('rebuild');
+    await this.audit.write('media.people', 'rebuild', {});
+    return { job };
   }
 
-  // Подсказка: сколько групп получилось бы при каждой строгости. Ничего не меняет.
-  @Get('people/hint')
-  async hintPeople(): Promise<{ rows: { sim: number; groups: number; ungrouped: number }[] }> {
-    return { rows: await this.people.hintFaces() };
+  // Подсказка: сколько групп получилось бы при каждой строгости. Ничего не меняет, тоже в фоне.
+  @Post('people/hint')
+  @HttpCode(200)
+  async hintPeople(@Req() req: Request): Promise<{ job: FaceJob }> {
+    requireJson(req);
+    return { job: this.people.startFaceJob('hint') };
   }
 
   @Get()
-  overview(): Promise<MediaOverview> {
-    return this.media.overview();
+  async overview(): Promise<MediaOverview & { peopleJob: FaceJob | null }> {
+    return { ...(await this.media.overview()), peopleJob: this.people.faceJob() };
   }
 
   @Get('dates')

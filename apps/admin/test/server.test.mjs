@@ -13,6 +13,7 @@ describe('админка', () => {
   let fake, admin, base, port;
   const users = [{ id: '1', login: 'anna', displayName: '<img src=x onerror=alert(1)>', isAdmin: false, disabled: false, quotaBytes: null, createdAt: '2026-11-02T00:00:00.000Z' }];
   const calls = [];
+  let peopleJob = null; // что сервер отдаёт как состояние долгой операции над группами
 
   before(async () => {
     fake = createServer((req, res) => {
@@ -47,13 +48,13 @@ describe('админка', () => {
         if (req.method === 'POST' && /^\/internal\/files\/\d+\/adopt$/.test(req.url)) return j(200, { fileId: '55' });
         if (req.method === 'POST' && /^\/internal\/albums\/\d+\/transfer$/.test(req.url)) return j(200, { albumId: '4', linked: 12 });
         if (req.method === 'DELETE' && /^\/internal\/albums\/\d+$/.test(req.url)) return j(200, { ok: true });
-        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: true, petsEnabled: false, facesSim: 45 }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 }, people: { faces: { enabled: true, modelFiles: true, total: 100, done: 60, failed: 1, pending: 39 }, pets: { enabled: false, modelFiles: false, total: 100, done: 0, failed: 0, pending: 100 }, detections: { faces: 75, pets: 0 }, groups: 6, named: 2 } });
+        if (req.method === 'GET' && req.url === '/internal/media') return j(200, { settings: { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: true, petsEnabled: false, facesSim: 45 }, thumbs: { files: 10, bytes: 1048576 }, previews: { files: 3, bytes: 2097152 }, videos: { copies: { files: 1, bytes: 5242880 }, total: 4, totalBytes: 1073741824, ready: 1, skipped: 1, failed: 0, pending: 2 }, search: { total: 100, ready: 40, failed: 2, pending: 58, configured: true, up: true, modelFiles: true, model: 'xlm-test', sizeBytes: 81920 }, people: { faces: { enabled: true, modelFiles: true, total: 100, done: 60, failed: 1, pending: 39 }, pets: { enabled: false, modelFiles: false, total: 100, done: 0, failed: 0, pending: 100 }, detections: { faces: 75, pets: 0 }, groups: 6, named: 2 }, peopleJob });
         if (req.method === 'PATCH' && req.url === '/internal/media/settings') { const b = JSON.parse(body); return b.previewMaxSide < 600 ? j(400, { message: 'previewMaxSide: целое число от 600 до 4000' }) : j(200, { settings: b, cleared: b.previewMaxSide ? ['previews'] : [] }); }
         if (req.method === 'GET' && req.url === '/internal/media/dates') return j(200, { job: { running: false, apply: false, startedAt: 'x', finishedAt: 'y', total: 100, checked: 100, changed: 3, examples: [{ name: '<i>a</i>.jpg', before: '2025-07-01T09:45:00.000Z', after: '2020-05-25T18:55:28.000Z' }] } });
         if (req.method === 'POST' && req.url === '/internal/media/dates') return j(200, { job: { running: true, apply: JSON.parse(body).apply, total: 100, checked: 0, changed: 0, examples: [] } });
         if (req.method === 'POST' && req.url === '/internal/media/clear') return j(200, { files: 7, bytes: 100 });
-        if (req.method === 'POST' && req.url === '/internal/media/people/rebuild') return j(200, { removed: 41, created: 12, kept: 18 });
-        if (req.method === 'GET' && req.url === '/internal/media/people/hint') return j(200, { rows: [{ sim: 30, groups: 20, ungrouped: 5 }, { sim: 45, groups: 322, ungrouped: 90 }] });
+        if (req.method === 'POST' && req.url === '/internal/media/people/rebuild') { if (peopleJob?.state === 'running') return j(409, { message: 'Уже идёт пересборка групп: дождитесь конца' }); peopleJob = { kind: 'rebuild', state: 'running', step: 0, steps: 2, text: 'Подготовка', elapsedSec: 0 }; return j(200, { job: peopleJob }); }
+        if (req.method === 'POST' && req.url === '/internal/media/people/hint') { peopleJob = { kind: 'hint', state: 'running', step: 0, steps: 6, text: 'Считаю', elapsedSec: 0 }; return j(200, { job: peopleJob }); }
         if (req.method === 'POST' && /^\/internal\/quota-requests\/\d+\/resolve$/.test(req.url)) return j(200, { ok: true });
         if (req.method === 'DELETE' && /^\/internal\/users\/[a-z0-9_]+/.test(req.url)) return j(200, { links: 3 });
         j(404, { message: 'нет' });
@@ -321,21 +322,42 @@ describe('админка', () => {
     assert.ok((await req('GET', '/media', { cookie })).text.includes('Стёрто находок: 7'));
   });
 
-  it('строгость лиц, подсказка по числу групп и «Пересобрать группы»', async () => {
+  it('строгость лиц, подсказка по числу групп и «Пересобрать группы»: запуск, ход, итог', async () => {
     const cookie = await login();
     const page = await req('GET', '/media', { cookie });
     assert.ok(page.text.includes('name="facesSim" min="30" max="55" step="1" value="45"'));
     assert.ok(page.text.includes('Остаются как есть:') && page.text.includes('группы с именем'), 'предупреждение про названные группы на месте');
+    assert.ok(!page.text.includes('http-equiv="refresh"') && !page.text.includes(' disabled'), 'пока ничего не идёт: ни обновления, ни заблокированных кнопок');
     const csrf = csrfOf(page.text);
     const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
     await post('/media/settings', { facesSim: '38' });
     assert.ok(calls.filter((c) => c.startsWith('PATCH /internal/media/settings')).pop().includes('"facesSim":38'));
-    await post('/media/people/hint', {});
-    assert.ok((await req('GET', '/media', { cookie })).text.includes('при 0,30: 20; при 0,45: 322'));
     assert.equal((await req('POST', '/media/people/rebuild', { cookie, form: { csrf: 'wrong' } })).status, 403);
+    // подсчёт запущен: видно ход, страница обновляется сама, кнопки заблокированы
+    await post('/media/people/hint', {});
+    let run = (await req('GET', '/media', { cookie })).text;
+    assert.ok(run.includes('Подсчёт групп: идёт.') && run.includes('Считаю. Прошло 0 с.') && run.includes('<progress max="6" value="0"'), 'ход подсчёта виден');
+    assert.ok(run.includes('http-equiv="refresh" content="3"') && (run.match(/ disabled/g) ?? []).length === 2, 'страница обновляется, обе кнопки заблокированы');
+    assert.ok(run.includes('Пока ничего') || run.includes('Подсчёт запущен'), 'после нажатия сказано, что запущено');
+    // подсчёт закончился: итог остаётся в панели
+    peopleJob = { kind: 'hint', state: 'done', step: 6, steps: 6, text: 'Готово', elapsedSec: 9, hint: [{ sim: 30, groups: 20, ungrouped: 5 }, { sim: 45, groups: 322, ungrouped: 90 }] };
+    run = (await req('GET', '/media', { cookie })).text;
+    assert.ok(run.includes('Подсчёт готов') && run.includes('при 0,30: 20 групп, без группы останется 5 лиц') && run.includes('при 0,45: 322 групп'), 'итог подсчёта');
+    assert.ok(!run.includes('http-equiv="refresh"') && !run.includes(' disabled'), 'после конца обновление и блокировка сняты');
+    // пересборка: запуск, ход, итог; повторный запуск во время работы отклоняется
+    peopleJob = null;
     await post('/media/people/rebuild', {});
-    assert.ok(calls.includes('POST /internal/media/people/rebuild {}') || calls.some((c) => c.startsWith('POST /internal/media/people/rebuild')));
-    assert.ok((await req('GET', '/media', { cookie })).text.includes('Безымянных групп стёрто: 41, собрано заново: 12'));
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/media/people/rebuild')));
+    run = (await req('GET', '/media', { cookie })).text;
+    assert.ok(run.includes('Пересборка групп: идёт.'));
+    await post('/media/people/rebuild', {});
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Уже идёт пересборка групп'), 'вторая пересборка не стартует');
+    peopleJob = { kind: 'rebuild', state: 'done', step: 2, steps: 2, text: 'Готово', elapsedSec: 31, rebuild: { removed: 41, created: 12, kept: 18 } };
+    run = (await req('GET', '/media', { cookie })).text;
+    assert.ok(run.includes('Пересборка групп готова') && run.includes('Безымянных групп стёрто: 41, собрано заново: 12') && run.includes('Всего групп людей теперь: 18'));
+    peopleJob = { kind: 'rebuild', state: 'error', step: 1, steps: 2, text: 'Не получилось', elapsedSec: 3, error: 'сбой базы' };
+    assert.ok((await req('GET', '/media', { cookie })).text.includes('Пересборка групп: не получилось.') );
+    peopleJob = null;
   });
 
   it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {

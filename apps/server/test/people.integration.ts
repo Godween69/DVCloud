@@ -39,6 +39,12 @@ describe('лица и питомцы (настоящий Postgres и диск, �
       await c.end();
     }
   };
+  // Долгая операция над группами идёт в фоне: ждём, пока в обзоре админки она перестанет быть «running».
+  const finishedJob = async () => {
+    let j: any = null;
+    assert.ok(await wait(async () => { j = (await intCall('GET', '/internal/media')).peopleJob; return j !== null && j.state !== 'running'; }), 'операция не закончилась');
+    return j;
+  };
   const fileNames = (r: { json: any }) => r.json.files.map((f: any) => f.name).sort();
 
   before(async () => {
@@ -284,9 +290,14 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await intCall('GET', '/internal/media')).settings.facesSim, 45, 'по умолчанию 45');
     assert.equal((await patch({ facesSim: 40 })).status, 200);
     assert.equal((await intCall('GET', '/internal/media')).settings.facesSim, 40);
-    const h = await intCall('GET', '/internal/media/people/hint');
-    assert.deepEqual(h.rows.map((x: any) => x.sim), [30, 35, 40, 45, 50, 55]);
-    assert.ok(h.rows.every((x: any) => x.groups >= 1 && x.ungrouped >= 0), JSON.stringify(h));
+    assert.equal((await intCall('GET', '/internal/media')).peopleJob, null, 'пока ничего не запускали');
+    const started = await intCall('POST', '/internal/media/people/hint', {});
+    assert.equal(started.job.kind, 'hint');
+    const h = await finishedJob();
+    assert.equal(h.state, 'done', JSON.stringify(h));
+    assert.deepEqual(h.hint.map((x: any) => x.sim), [30, 35, 40, 45, 50, 55]);
+    assert.ok(h.hint.every((x: any) => x.groups >= 1 && x.ungrouped >= 0), JSON.stringify(h));
+    assert.ok(h.step === h.steps && h.steps >= 6 && h.elapsedSec >= 0);
     assert.equal((await patch({ facesSim: 45 })).status, 200);
   });
 
@@ -298,7 +309,11 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     const bor = (await people(e.boris, true)).people;
     assert.ok(bor.length >= 1);
     assert.equal((await jr('PATCH', `/api/people/${bor[0].id}`, e.boris, { hidden: true })).status, 200);
-    const r = await intCall('POST', '/internal/media/people/rebuild', {});
+    const started = await intCall('POST', '/internal/media/people/rebuild', {});
+    assert.equal(started.job.kind, 'rebuild');
+    const job = await finishedJob();
+    assert.equal(job.state, 'done', JSON.stringify(job));
+    const r = job.rebuild;
     assert.ok(r.removed >= 1 && r.created >= 1, JSON.stringify(r));
     const after = (await people(e.anna, true)).people;
     assert.equal(after.length, before.length, 'число групп то же: те же лица собрались снова');

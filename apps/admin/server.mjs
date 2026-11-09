@@ -81,11 +81,11 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         const r = await api.startDates(apply);
         session.flash = { kind: 'ok', text: `${apply ? 'Пересчёт дат запущен' : 'Проверка дат запущена'}: файлов ${r.job.total}. Обновите страницу, чтобы увидеть ход.` };
       } else if (path === '/media/people/rebuild') {
-        const r = await api.rebuildPeople();
-        session.flash = { kind: 'ok', text: `Группы пересобраны. Безымянных групп стёрто: ${r.removed}, собрано заново: ${r.created}. Названные, скрытые и правленные вручную группы остались. Всего групп людей теперь: ${r.kept}.` };
+        await api.rebuildPeople();
+        session.flash = { kind: 'ok', text: 'Пересборка групп запущена. Ход виден в панели «Люди и питомцы», страница обновляется сама.' };
       } else if (path === '/media/people/hint') {
-        const r = await api.peopleHint();
-        session.flash = { kind: 'ok', text: `Сколько групп людей получилось бы: ${r.rows.map((x) => `при ${(x.sim / 100).toFixed(2).replace('.', ',')}: ${x.groups}`).join('; ')}. Ничего не изменилось, это только подсчёт.` };
+        await api.peopleHint();
+        session.flash = { kind: 'ok', text: 'Подсчёт запущен. Результат появится в панели «Люди и питомцы», страница обновляется сама.' };
       } else if (path === '/media/clear') {
         const what = form.get('what') ?? '';
         // Данные лиц стираются целиком, вместе с названиями людей: нужно вписать слово.
