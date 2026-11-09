@@ -117,6 +117,28 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await api('GET', '/api/files?person=abc', { cookie: e.anna })).status, 400);
   });
 
+
+  it('альбом по людям: обязательно эти, не должно быть тех; чужие группы и пустые условия отклоняются', async () => {
+    const list = (await people(e.anna)).people;
+    const valya = list.find((x: any) => x.name === 'Валя').id;
+    const dima = list.find((x: any) => x.name === 'Дима').id;
+    const count = async (include: string[], exclude: string[]) => (await jr('POST', '/api/people/match', e.anna, { include, exclude })).json.count;
+    assert.equal(await count([valya], []), 5);
+    assert.equal(await count([valya], [dima]), 4, 'Валя без Димы: общий снимок отпадает');
+    assert.equal(await count([dima], [valya]), 2);
+    assert.equal(await count([valya, dima], []), 1);
+    assert.equal((await jr('POST', '/api/people/match', e.anna, { include: [], exclude: [dima] })).status, 400, 'нужен хотя бы один обязательный');
+    assert.equal((await jr('POST', '/api/people/match', e.anna, { include: [valya], exclude: [valya] })).status, 400, 'один человек в обоих списках');
+    assert.equal((await jr('POST', '/api/people/match', e.anna, { include: ['abc'] })).status, 400);
+    assert.equal((await jr('POST', '/api/people/match', e.anna, { include: ['999999'] })).status, 404, 'чужой или несуществующей группы нет');
+    const made = await jr('POST', '/api/people/album', e.anna, { name: 'Только Валя', include: [valya], exclude: [dima] });
+    assert.equal(made.status, 201, JSON.stringify(made.json));
+    assert.equal(made.json.added, 4);
+    const inside = await api('GET', `/api/albums/${made.json.id}/files`, { cookie: e.anna });
+    assert.deepEqual(fileNames(inside), ['a0.jpg', 'a1.jpg', 'a2.jpg', 'a3.jpg']);
+    assert.equal((await jr('POST', '/api/people/album', e.anna, { name: 'Только Валя', include: [valya], exclude: [dima] })).status, 409, 'название занято');
+    assert.equal((await jr('POST', '/api/people/album', e.anna, { name: 'Пусто', include: [dima], exclude: [dima] })).status, 400);
+  });
   it('обложку группы можно выбрать самому по фото и вернуть автоматический выбор', async () => {
     const a = (await people(e.anna)).people[0];
     const auto = a.cover;

@@ -573,6 +573,31 @@ export class PeopleService {
     return (await this.db.query<FileRow>(`SELECT f.* FROM files f WHERE ${where} ORDER BY f.taken_at DESC, f.id DESC LIMIT $${params.length}`, params)).rows;
   }
 
+  // Файлы по условиям: обязательно есть все из include, и нет ни одного из exclude. Только свои группы.
+  // Возвращает общее число и номера (не больше limit, сначала новые).
+  async matchFiles(ownerId: string, includeIn: unknown, excludeIn: unknown, limit: number): Promise<{ count: number; ids: string[] }> {
+    const clean = (v: unknown, what: string): string[] => {
+      if (v === undefined || v === null) return [];
+      if (!Array.isArray(v) || v.length > 50 || !v.every((x) => typeof x === 'string' && ID_RE.test(x))) throw new BadRequestException(`${what}: список номеров групп`);
+      return [...new Set(v as string[])];
+    };
+    const inc = clean(includeIn, 'include');
+    const exc = clean(excludeIn, 'exclude');
+    if (inc.length === 0) throw new BadRequestException('Выберите хотя бы одного, кто обязательно должен быть на фото');
+    if (inc.some((x) => exc.includes(x))) throw new BadRequestException('Один и тот же человек не может быть и в «обязательно», и в «не должно быть»');
+    const own = await this.db.query<{ n: string }>('SELECT count(*) AS n FROM people WHERE owner_id = $1 AND id = ANY($2::bigint[])', [ownerId, [...inc, ...exc]]);
+    if (Number(own.rows[0].n) !== inc.length + exc.length) throw new NotFoundException('Такой группы нет');
+    const has = (param: string) => `EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 WHERE d.blob_id = f.blob_id AND dp.person_id = ${param})`;
+    const params: unknown[] = [ownerId];
+    let where = `f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND NOT ${hiddenFromLibrary('f', '$1')}`;
+    for (const id of inc) { params.push(id); where += ` AND ${has(`$${params.length}`)}`; }
+    for (const id of exc) { params.push(id); where += ` AND NOT ${has(`$${params.length}`)}`; }
+    const total = Number((await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE ${where}`, params)).rows[0].n);
+    params.push(limit);
+    const r = await this.db.query<{ id: string }>(`SELECT f.id FROM files f WHERE ${where} ORDER BY f.taken_at DESC, f.id DESC LIMIT $${params.length}`, params);
+    return { count: total, ids: r.rows.map((x) => x.id) };
+  }
+
   async names(ownerId: string, ids: string[]): Promise<{ id: string; name: string }[]> {
     if (ids.length === 0) return [];
     return (await this.db.query<{ id: string; name: string }>('SELECT id, name FROM people WHERE owner_id = $1 AND id = ANY($2::bigint[]) AND name IS NOT NULL', [ownerId, ids])).rows;

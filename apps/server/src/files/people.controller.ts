@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Pa
 import type { Request, Response } from 'express';
 import { SessionGuard } from '../auth/session.guard';
 import { UserRow } from '../users/users.service';
+import { AlbumsService } from './albums.service';
 import { FileFace, PeopleService, PersonInfo } from './people.service';
 import { StorageService } from './storage.service';
 
@@ -19,6 +20,7 @@ export class PeopleController {
   constructor(
     private readonly people: PeopleService,
     private readonly storage: StorageService,
+    private readonly albums: AlbumsService,
   ) {}
 
   @Get()
@@ -63,6 +65,26 @@ export class PeopleController {
     const o = obj(body);
     if (typeof o.detectionId !== 'string' || typeof o.name !== 'string') throw new BadRequestException('Нужны detectionId и name');
     return this.people.createFromDetection(req.user.id, o.detectionId, o.name);
+  }
+
+  // Сколько файлов подходит: {include: ["1","2"], exclude: ["3"]}. Обязательны все из include, никого из exclude.
+  @Post('match')
+  @HttpCode(200)
+  async match(@Req() req: Req_, @Body() body: unknown): Promise<{ count: number }> {
+    const o = obj(body);
+    return { count: (await this.people.matchFiles(req.user.id, o.include, o.exclude, 1)).count };
+  }
+
+  // Создать альбом под этими условиями: {name, include, exclude}. Снимок на сегодня: новые фото сами не добавляются.
+  @Post('album')
+  async album(@Req() req: Req_, @Body() body: unknown): Promise<{ id: string; name: string; added: number }> {
+    const o = obj(body);
+    const m = await this.people.matchFiles(req.user.id, o.include, o.exclude, 20000);
+    if (m.ids.length === 0) throw new BadRequestException('Под эти условия не подходит ни одного фото');
+    const album = await this.albums.create(req.user.id, o.name, 'any');
+    let added = 0;
+    for (let i = 0; i < m.ids.length; i += 1000) added += (await this.albums.addFiles(req.user.id, album.id, m.ids.slice(i, i + 1000))).added;
+    return { id: album.id, name: album.name, added };
   }
 
   @Patch(':id')

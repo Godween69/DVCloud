@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, Image as ImageIcon, Loader2, Pencil, PawPrint, Trash2, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, Image as ImageIcon, Loader2, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl } from '../api';
 import { countFiles } from '../lib/format';
@@ -15,6 +15,66 @@ function Cover({ p, size }: { p: PeopleGroup; size: string }) {
   );
 }
 
+// Панель «Альбом по людям»: у каждой группы три состояния по кругу: нет, «обязательно», «не должно быть».
+function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: () => void }) {
+  const [state, setState] = useState<Record<string, 'in' | 'out'>>({});
+  const [name, setName] = useState('');
+  const [count, setCount] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const inc = Object.keys(state).filter((k) => state[k] === 'in');
+  const exc = Object.keys(state).filter((k) => state[k] === 'out');
+  useEffect(() => {
+    setCount(null);
+    if (inc.length === 0) return;
+    let live = true;
+    const t = setTimeout(() => { api.matchPeople(inc, exc).then((r) => { if (live) setCount(r.count); }).catch(() => { if (live) setCount(null); }); }, 300);
+    return () => { live = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inc.join(','), exc.join(',')]);
+  const cycle = (id: string) => { setDone(null); setState((prev) => { const n = { ...prev }; if (!n[id]) n[id] = 'in'; else if (n[id] === 'in') n[id] = 'out'; else delete n[id]; return n; }); };
+  async function create() {
+    if (busy || inc.length === 0 || !name.trim()) return;
+    setBusy(true); setProblem(null); setDone(null);
+    try {
+      const r = await api.albumByPeople(name.trim(), inc, exc);
+      setDone(`Альбом «${r.name}» создан: ${countFiles(r.added)}. Он во вкладке «Альбомы».`);
+      setName('');
+    } catch (e) { setProblem(msg(e, 'Не получилось создать альбом')); } finally { setBusy(false); }
+  }
+  return (
+    <section aria-label="Альбом по людям" className="glass mb-6 rounded-xl p-4">
+      <div className="mb-3 flex items-start gap-3">
+        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Нажимайте на людей: один раз «обязательно есть на фото» (зелёная рамка), второй раз «не должно быть» (красная), третий снимает выбор. Альбом соберётся из фото на сегодня.</p>
+        <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800"><X className="size-4" aria-hidden /></button>
+      </div>
+      <ul className="mb-3 flex flex-wrap gap-2">
+        {groups.map((g) => (
+          <li key={g.id}>
+            <button type="button" onClick={() => cycle(g.id)} aria-pressed={!!state[g.id]} title={state[g.id] === 'in' ? 'Обязательно есть' : state[g.id] === 'out' ? 'Не должно быть' : 'Не учитывать'}
+              className={`flex items-center gap-2 rounded-full border-2 py-1 pl-1 pr-3 text-sm dark:text-white ${state[g.id] === 'in' ? 'border-green-500 bg-green-500/10' : state[g.id] === 'out' ? 'border-red-500 bg-red-500/10' : 'border-paper-300 dark:border-gray-700'}`}>
+              <Cover p={g} size="size-7" />{g.name ?? 'Без имени'}
+              {state[g.id] === 'in' && <span className="text-green-700 dark:text-green-400">обязательно</span>}
+              {state[g.id] === 'out' && <span className="text-red-700 dark:text-red-400">не должно быть</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={(e) => { e.preventDefault(); void create(); }} className="flex flex-wrap items-center gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} aria-label="Название альбома" placeholder="Название альбома"
+          className="min-w-0 max-w-xs flex-1 rounded-lg border border-paper-300 bg-paper-50 px-3 py-1.5 text-base outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        <button type="submit" disabled={busy || inc.length === 0 || !name.trim() || count === 0} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Check className="size-4" aria-hidden />}OK
+        </button>
+        <span className="text-sm text-gray-600 dark:text-gray-400" aria-live="polite">{inc.length === 0 ? 'Выберите хотя бы одного, кто обязательно должен быть' : count === null ? 'Считаем…' : count === 0 ? 'Таких фото нет' : `Подходит: ${countFiles(count)}`}</span>
+      </form>
+      {problem && <p className="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">{problem}</p>}
+      {done && <p className="mt-2 text-sm text-green-700 dark:text-green-400" role="status">{done}</p>}
+    </section>
+  );
+}
+
 // Вкладка «Люди»: круглые обложки групп. Названные первыми; безымянные просят имя. Скрытые прячутся и показываются кнопкой.
 export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }: {
   list: PeopleList | null;
@@ -28,6 +88,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [byPeople, setByPeople] = useState(false);
   const stop = () => { setSelecting(false); setPicked(new Set()); setProblem(null); };
   const toggle = (id: string) => setPicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   if (!list) return <p className="mt-20 flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-5 animate-spin" aria-hidden />Загружаем…</p>;
@@ -61,6 +122,11 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
             <Combine className="size-4" aria-hidden />{selecting ? 'Отменить выбор' : 'Выбрать и объединить'}
           </button>
         )}
+        {!off && shown.length > 0 && (
+          <button type="button" onClick={() => setByPeople((v) => !v)} aria-expanded={byPeople} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-expanded:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-expanded:bg-gray-800">
+            <Plus className="size-4" aria-hidden />Альбом по людям
+          </button>
+        )}
         {(hiddenCount > 0 || showHidden) && (
           <button type="button" onClick={() => onShowHidden(!showHidden)} aria-pressed={showHidden} className="ml-auto flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
             {showHidden ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
@@ -69,6 +135,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
         )}
       </div>
 
+      {byPeople && !off && <AlbumByPeople groups={groups.filter((g) => !g.hidden)} onClose={() => setByPeople(false)} />}
       {off && <p className="max-w-xl text-gray-600 dark:text-gray-400">Распознавание лиц и питомцев выключено администратором.</p>}
       {!off && shown.length === 0 && (
         <div className="mx-auto flex max-w-md flex-col items-center py-16 text-center">
