@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { BlobRow, FileRow, ID_RE } from './files.service';
+import { MediaSettingsService } from './media-settings';
 import { StorageService } from './storage.service';
 
 export interface AdminAlbum {
@@ -10,6 +11,15 @@ export interface AdminAlbum {
   owner: string;
   count: number;
   sharedWith: number;
+}
+
+export interface AdminFile {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  owner: string;
+  takenAt: string;
 }
 
 export interface QuotaRequest {
@@ -30,6 +40,7 @@ export class AdminStorageService {
   constructor(
     @Inject(DbService) private readonly db: DbService,
     @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(MediaSettingsService) private readonly settings: MediaSettingsService,
   ) {}
 
   async stats(): Promise<{ files: number; blobs: number; orphans: number; orphanBytes: number; bytes: number; extraCopies: number; yandex: { accounts: number; expired: number; items: number; done: number } }> {
@@ -164,6 +175,101 @@ export class AdminStorageService {
       freed += Number(b.size_bytes);
     }
     return { checked: rows.length, removed, freedBytes: freed, mismatched };
+  }
+
+  // ---- Просмотр всех файлов ----
+
+  // Файлы всех людей (кроме корзины): фильтр по человеку, по датам съёмки (по часовому поясу из настроек) и по части имени.
+  // Постранично по курсору «время_номер», как лента людей. total: сколько всего под фильтр.
+  async browse(o: { login?: string; from?: string; to?: string; q?: string; albumId?: string; limit: number; before?: string }): Promise<{ files: AdminFile[]; next: string | null; total: number }> {
+    const tz = (await this.settings.get()).timezone;
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    if ((o.from !== undefined && !day.test(o.from)) || (o.to !== undefined && !day.test(o.to))) throw new BadRequestException('Дата вида 2026-11-09');
+    if (o.albumId !== undefined && !ID_RE.test(o.albumId)) throw new NotFoundException('Альбом не найден');
+    const params: unknown[] = [];
+    const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+    let where = 'f.trashed_at IS NULL AND f.blob_id IS NOT NULL';
+    if (o.login) where += ` AND u.login = ${add(o.login)}`;
+    if (o.from) where += ` AND f.taken_at >= (${add(o.from)}::date)::timestamp AT TIME ZONE ${add(tz)}`;
+    if (o.to) where += ` AND f.taken_at < ((${add(o.to)}::date + 1)::timestamp AT TIME ZONE ${add(tz)})`;
+    if (o.q) where += ` AND f.original_name ILIKE ${add('%' + o.q.replace(/[\\%_]/g, (c) => '\\' + c) + '%')}`;
+    if (o.albumId) where += ` AND f.id IN (SELECT file_id FROM album_items WHERE album_id = ${add(o.albumId)})`;
+    const total = Number((await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f JOIN users u ON u.id = f.owner_id WHERE ${where}`, params)).rows[0].n);
+    let page = where;
+    if (o.before !== undefined) {
+      const m = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)_(\d{1,18})$/.exec(o.before);
+      if (!m) throw new BadRequestException('Неверный курсор before');
+      page += ` AND (f.taken_at, f.id) < (${add(m[1])}::timestamptz, ${add(m[2])}::bigint)`;
+    }
+    const r = await this.db.query<{ id: string; name: string; mime: string; size_bytes: string; owner: string; taken_at: Date }>(
+      `SELECT f.id, f.original_name AS name, f.mime, b.size_bytes, u.login AS owner, f.taken_at FROM files f JOIN users u ON u.id = f.owner_id JOIN blobs b ON b.id = f.blob_id
+       WHERE ${page} ORDER BY f.taken_at DESC, f.id DESC LIMIT ${add(o.limit + 1)}`,
+      params,
+    );
+    const more = r.rows.length > o.limit;
+    const rows = more ? r.rows.slice(0, o.limit) : r.rows;
+    const last = rows[rows.length - 1];
+    return {
+      files: rows.map((x) => ({ id: x.id, name: x.name, mime: x.mime, size: Number(x.size_bytes), owner: x.owner, takenAt: x.taken_at.toISOString() })),
+      next: more && last ? `${last.taken_at.toISOString()}_${last.id}` : null,
+      total,
+    };
+  }
+
+  // Где лежит содержимое файла (для показа админу): путь в хранилище, тип и номер содержимого.
+  async blobOf(fileId: string): Promise<{ path: string; mime: string; blobId: string; name: string } | null> {
+    if (!ID_RE.test(fileId)) return null;
+    const r = await this.db.query<{ path: string; mime: string; blob_id: string; name: string }>('SELECT b.path, b.mime, b.id AS blob_id, f.original_name AS name FROM files f JOIN blobs b ON b.id = f.blob_id WHERE f.id = $1', [fileId]);
+    return r.rows[0] ? { path: r.rows[0].path, mime: r.rows[0].mime, blobId: r.rows[0].blob_id, name: r.rows[0].name } : null;
+  }
+
+  get root(): string {
+    return this.storage.root;
+  }
+
+  abs(rel: string): string {
+    return this.storage.abs(rel);
+  }
+
+  // ---- Общий доступ к альбомам (раздача из админки) ----
+
+  async albumShares(albumId: string): Promise<string[]> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const r = await this.db.query<{ login: string }>('SELECT u.login FROM album_shares s JOIN users u ON u.id = s.user_id WHERE s.album_id = $1 ORDER BY u.login', [albumId]);
+    return r.rows.map((x) => x.login);
+  }
+
+  async setShare(albumId: string, login: string, on: boolean): Promise<void> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const a = (await this.db.query<{ owner_id: string }>('SELECT owner_id FROM albums WHERE id = $1', [albumId])).rows[0];
+    if (!a) throw new NotFoundException('Альбом не найден');
+    const u = (await this.db.query<{ id: string }>('SELECT id FROM users WHERE login = $1', [login])).rows[0];
+    if (!u) throw new NotFoundException('Нет такого человека');
+    if (u.id === a.owner_id) throw new BadRequestException('Это альбом самого человека, ему делиться не нужно');
+    if (on) await this.db.query('INSERT INTO album_shares (album_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [albumId, u.id]);
+    else await this.db.query('DELETE FROM album_shares WHERE album_id = $1 AND user_id = $2', [albumId, u.id]);
+  }
+
+  // Скрыть альбом у всех: снять все доступы. Сам альбом и его файлы у хозяина остаются. Возвращает, сколько доступов снято.
+  async unshareAll(albumId: string): Promise<number> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
+    return (await this.db.query('DELETE FROM album_shares WHERE album_id = $1', [albumId])).rowCount ?? 0;
+  }
+
+  // Открыть альбом всем действующим людям, кроме хозяина. Возвращает, сколько новых доступов создано.
+  async shareWithAll(albumId: string): Promise<number> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
+    const r = await this.db.query('INSERT INTO album_shares (album_id, user_id) SELECT a.id, u.id FROM albums a CROSS JOIN users u WHERE a.id = $1 AND u.id <> a.owner_id AND NOT u.disabled ON CONFLICT DO NOTHING', [albumId]);
+    return r.rowCount ?? 0;
+  }
+
+  // Каждый альбом каждого человека открыть всем остальным: «чтобы в семье все видели альбомы друг друга».
+  async shareEverything(): Promise<{ albums: number; links: number }> {
+    const albums = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM albums')).rows[0].n);
+    const r = await this.db.query('INSERT INTO album_shares (album_id, user_id) SELECT a.id, u.id FROM albums a CROSS JOIN users u WHERE u.id <> a.owner_id AND NOT u.disabled ON CONFLICT DO NOTHING');
+    return { albums, links: r.rowCount ?? 0 };
   }
 
   // ---- Альбомы ----

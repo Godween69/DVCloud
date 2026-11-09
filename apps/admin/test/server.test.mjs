@@ -13,6 +13,9 @@ describe('админка', () => {
   let fake, admin, base, port;
   const users = [{ id: '1', login: 'anna', displayName: '<img src=x onerror=alert(1)>', isAdmin: false, disabled: false, quotaBytes: null, createdAt: '2026-11-02T00:00:00.000Z' }];
   const calls = [];
+  let backupCfg = { kind: 'folder', folder: '', host: '', port: 22, user: '', path: '', withDerived: false, limitMbit: 0 };
+  let backupJob = null;
+  const backupState = () => ({ config: backupCfg, rootAvailable: true, publicKey: backupCfg.kind === 'ssh' ? 'ssh-ed25519 AAAATESTKEY dvcloud-backup' : null, job: backupJob, last: { state: 'done', step: 'Готово', percent: 100, startedAt: '2026-11-08T08:00:00.000Z', finishedAt: '2026-11-08T08:30:00.000Z', error: null, result: { files: 120, bytes: 5368709120, dumpBytes: 20480, pending: 0, destination: '/backup/dvcloud-backup' } } });
   let peopleJob = null; // что сервер отдаёт как состояние долгой операции над группами
 
   before(async () => {
@@ -41,6 +44,20 @@ describe('админка', () => {
         if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
         if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z' }] });
         if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/browse/files?')) return j(200, { files: [{ id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z' }], next: '2026-03-05T10:00:00.000Z_41', total: 90 });
+        if (req.method === 'GET' && req.url === '/internal/browse/files/41/thumb') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
+        if (req.method === 'GET' && req.url === '/internal/browse/files/41/original') { res.writeHead(req.headers.range ? 206 : 200, { 'content-type': 'image/jpeg', 'content-length': 4, 'accept-ranges': 'bytes' }); return res.end('JPEG'); }
+        if (req.method === 'GET' && /^\/internal\/browse\/files\/\d+\/(thumb|original)$/.test(req.url)) return j(404, { message: 'нет' });
+        if (req.method === 'GET' && req.url === '/internal/albums/3/shares') return j(200, { logins: ['boris'] });
+        if (req.method === 'PUT' && /^\/internal\/albums\/3\/shares\/[a-z0-9_]+$/.test(req.url)) return j(200, { ok: true });
+        if (req.method === 'DELETE' && /^\/internal\/albums\/3\/shares\/[a-z0-9_]+$/.test(req.url)) return j(200, { ok: true });
+        if (req.method === 'DELETE' && req.url === '/internal/albums/3/shares') return j(200, { removed: 1 });
+        if (req.method === 'POST' && req.url === '/internal/albums/3/share-all') return j(200, { added: 2 });
+        if (req.method === 'POST' && req.url === '/internal/share-everything') return j(200, { albums: 1, links: 3 });
+        if (req.method === 'GET' && req.url === '/internal/backup') return j(200, backupState());
+        if (req.method === 'PATCH' && req.url === '/internal/backup/config') { const b = JSON.parse(body); if (b.host === 'плохо') return j(400, { message: 'Сервер: адрес или имя' }); backupCfg = { ...backupCfg, ...b }; return j(200, backupState()); }
+        if (req.method === 'POST' && req.url === '/internal/backup/check') return j(200, { where: '/backup/dvcloud-backup', freeBytes: 5 * 1024 ** 3 });
+        if (req.method === 'POST' && req.url === '/internal/backup/start') { backupJob = { state: 'running', step: 'Копирую файлы', percent: 42, startedAt: '2026-11-09T08:00:00.000Z', finishedAt: null, error: null, result: null }; return j(200, { job: backupJob }); }
         if (req.method === 'GET' && req.url === '/internal/quota-requests') return j(200, { requests: [{ id: '9', login: 'anna', displayName: 'Анна', needBytes: 5368709120, note: 'отпуск', createdAt: '2026-11-02T00:00:00.000Z', usedBytes: 1073741824, quotaBytes: 2147483648 }] });
         if (req.method === 'POST' && req.url === '/internal/files/dedupe') return j(200, { checked: 2, removed: JSON.parse(body).apply ? 2 : 0, freedBytes: 4096, mismatched: [] });
         if (req.method === 'POST' && req.url === '/internal/files/orphans/purge') return JSON.parse(body).confirm === 1 ? j(200, { count: 1, bytes: 2048, skipped: 0 }) : j(409, { message: 'Файлов без владельца сейчас 1' });
@@ -358,6 +375,95 @@ describe('админка', () => {
     peopleJob = { kind: 'rebuild', state: 'error', step: 1, steps: 2, text: 'Не получилось', elapsedSec: 3, error: 'сбой базы' };
     assert.ok((await req('GET', '/media', { cookie })).text.includes('Пересборка групп: не получилось.') );
     peopleJob = null;
+  });
+
+  it('страница «Файлы»: плитки с превью, фильтры уходят на сервер, имена экранируются, «Показать ещё» хранит фильтры', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/files?login=anna&from=2026-03-01&q=IMG', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('data="/files/41/thumb"') && page.text.includes('href="/files/41/view"'));
+    assert.ok(!page.text.includes('<b>IMG_1</b>'), 'имя файла экранировано');
+    assert.ok(page.text.includes('Найдено: <b>90</b>'));
+    assert.ok(page.text.includes('before=2026-03-05'), 'ссылка на следующую страницу');
+    assert.ok(page.text.includes('login=anna'), 'фильтр сохраняется в ссылке');
+    assert.ok(!page.text.includes('<script'));
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/browse/files?') && c.includes('login=anna') && c.includes('from=2026-03-01') && c.includes('q=IMG') && c.includes('limit=60')));
+    assert.ok(page.text.includes('class="info"'), 'кнопка «Инфо»');
+  });
+
+  it('миниатюра и файл отдаются через админку; без входа нельзя; чужих путей нет', async () => {
+    const cookie = await login();
+    const t = await fetch(`${base}/files/41/thumb`, { headers: { cookie: `dvcloud_admin=${cookie.split('=')[1] ?? ''}`, host: `127.0.0.1:${port}` } });
+    assert.equal(t.status, 200);
+    assert.equal(t.headers.get('content-type'), 'image/webp');
+    assert.equal(await t.text(), 'WEBP');
+    assert.ok(t.headers.get('content-security-policy').includes("img-src 'self'"));
+    const o = await fetch(`${base}/files/41/view`, { headers: { cookie: `dvcloud_admin=${cookie.split('=')[1] ?? ''}`, range: 'bytes=0-3' } });
+    assert.equal(o.status, 206, 'Range доходит до сервера');
+    assert.equal((await fetch(`${base}/files/99/thumb`, { headers: { cookie: `dvcloud_admin=${cookie.split('=')[1] ?? ''}` } })).status, 404);
+    assert.equal((await fetch(`${base}/files/41/thumb`, { redirect: 'manual' })).status, 303, 'без входа на страницу входа');
+    assert.equal((await req('GET', '/files/41/..%2f..%2fusers', { cookie })).status, 404);
+  });
+
+  it('«Альбомы людям»: кому открыт, открыть одному, всем, закрыть; «всё всем» только со словом', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/sharing', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Отпуск') && page.text.includes('boris'));
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/sharing/3/add', { login: 'boris' });
+    assert.ok(calls.some((c) => c.startsWith('PUT /internal/albums/3/shares/boris')));
+    await post('/sharing/3/remove', { login: 'boris' });
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums/3/shares/boris')));
+    await post('/sharing/3/all', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/share-all')));
+    assert.ok(page.text.includes('Скрыть у всех'), 'у альбома с доступами есть кнопка скрытия');
+    await post('/sharing/3/hide', {});
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums/3/shares ')), 'скрыть у всех снимает все доступы');
+    const n = calls.length;
+    await post('/sharing/everything', { word: 'нет' });
+    assert.equal(calls.length, n, 'без слова запроса нет');
+    await post('/sharing/everything', { word: ' Раздать ' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/share-everything') && c.includes('"confirm":true')));
+    assert.ok((await req('GET', '/sharing', { cookie })).text.includes('новых доступов открыто: 3'));
+    assert.equal((await req('POST', '/sharing/3/all', { cookie, form: { csrf: 'wrong' } })).status, 403);
+  });
+
+  it('страница «Копия»: способы, ключ для SSH, запуск только кнопкой, ход, ошибки сервера', async () => {
+    const cookie = await login();
+    let page = await req('GET', '/backup', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Диск или папка') && page.text.includes('Другой сервер по SSH') && page.text.includes('Сделать копию сейчас'));
+    assert.ok(page.text.includes('Последняя удачная') && page.text.includes('расхождений нет'));
+    assert.ok(!page.text.includes('<script') && !page.text.includes('http-equiv="refresh"'));
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/backup/ssh', { host: 'backup.example.org', port: '2222', user: 'dv', path: '/srv/dv' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/backup/config') && c.includes('"kind":"ssh"') && c.includes('"port":2222') && c.includes('"host":"backup.example.org"')));
+    page = await req('GET', '/backup', { cookie });
+    assert.ok(page.text.includes('ssh-ed25519 AAAATESTKEY'), 'открытый ключ показан');
+    assert.ok(!page.text.includes('PRIVATE'));
+    await post('/backup/ssh', { host: 'плохо', port: '22', user: 'dv', path: '/srv/dv' });
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('Сервер: адрес или имя'), 'ошибка сервера видна');
+    await post('/backup/options', { withFiles: '1', readable: '1', folders: 'month', names: 'date', withAlbums: '1', withDerived: '1', limitMbit: '20' });
+    const o = calls.filter((c) => c.startsWith('PATCH /internal/backup/config')).pop();
+    for (const frag of ['"withFiles":true', '"withDb":false', '"mirror":false', '"readable":true', '"folders":"month"', '"names":"date"', '"withAlbums":true', '"withDerived":true', '"withTrash":false', '"limitMbit":20']) assert.ok(o.includes(frag), `${frag} в ${o}`);
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('name="readable" value="1"'), 'флажки состава копии показаны');
+    await post('/backup/folder', { folder: 'dvcloud' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/backup/config') && c.includes('"kind":"folder"') && c.includes('"folder":"dvcloud"')));
+    await post('/backup/check', {});
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('Место доступно'));
+    const n = calls.length;
+    await req('GET', '/backup', { cookie });
+    assert.ok(!calls.slice(n).some((c) => c.includes('/backup/start')), 'открытие страницы копию не запускает');
+    await post('/backup/start', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/start')));
+    page = await req('GET', '/backup', { cookie });
+    assert.ok(page.text.includes('<progress') && page.text.includes('42%') && page.text.includes('http-equiv="refresh"'), 'идёт: ход и автообновление');
+    assert.ok(/<button class="primary" type="submit" disabled>/.test(page.text), 'кнопка запуска на время копии выключена');
+    assert.equal((await req('POST', '/backup/start', { cookie, form: { csrf: 'wrong' } })).status, 403);
+    backupJob = null;
   });
 
   it('удаление аккаунта требует ввести логин; «с файлами» передаётся как force', async () => {

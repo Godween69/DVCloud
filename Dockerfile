@@ -17,7 +17,9 @@ RUN npm run build --workspace @dvcloud/server \
 FROM node:22.23.1-alpine AS server
 ENV NODE_ENV=production DVCLOUD_HOST=0.0.0.0 DVCLOUD_INTERNAL_HOST=0.0.0.0
 # ffmpeg нужен для кадра-постера видео; запускается отдельным процессом, в код проекта не входит.
-RUN apk add --no-cache ffmpeg
+# Для резервной копии из админки (docs/BACKUP.md): rsync переносит файлы, openssh-client нужен для копии на другой сервер,
+# postgresql17-client выгружает базу (версия клиента должна быть не ниже версии базы: в примере postgres:17).
+RUN apk add --no-cache ffmpeg rsync openssh-client postgresql17-client
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/

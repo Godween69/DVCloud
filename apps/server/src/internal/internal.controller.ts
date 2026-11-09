@@ -1,14 +1,15 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { DvAuthClient } from '../auth/dvauth.client';
 import { AuditService } from '../db/audit.service';
 import { asObject, optStrField, requireJson, strField } from '../http';
 import { PublicUser, toPublic, UsersService } from '../users/users.service';
-import { AdminAlbum, AdminStorageService, QuotaRequest } from '../files/admin-storage.service';
+import { AdminAlbum, AdminFile, AdminStorageService, QuotaRequest } from '../files/admin-storage.service';
 import { InternalTokenGuard } from './internal-token.guard';
 import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
 import { FaceJob, PeopleService } from '../files/people.service';
+import { BackupJob, BackupService, BackupStatus, parseBackupPatch } from '../files/backup.service';
 
 @Controller('internal/health')
 export class InternalHealthController {
@@ -171,6 +172,85 @@ export class InternalStorageController {
     return r;
   }
 
+  // ── Просмотр всех файлов (только чтение, без журнала: так решил владелец) ──
+
+  @Get('browse/files')
+  async browse(@Query('login') login?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('q') q?: string, @Query('album') album?: string, @Query('limit') limit?: string, @Query('before') before?: string): Promise<{ files: AdminFile[]; next: string | null; total: number }> {
+    const n = limit === undefined ? 60 : Number(limit);
+    if (!Number.isInteger(n) || n < 1 || n > 200) throw new BadRequestException('limit: от 1 до 200');
+    const s = (v?: string) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
+    return this.admin.browse({ login: s(login), from: s(from), to: s(to), q: s(q)?.slice(0, 100), albumId: s(album), limit: n, before: s(before) });
+  }
+
+  // Миниатюра, если она уже построена людьми (новых не строим: внутренний порт не запускает фоновых работ). Иначе 404.
+  @Get('browse/files/:id/thumb')
+  async browseThumb(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    const b = await this.admin.blobOf(id);
+    if (!b) throw new NotFoundException('Файл не найден');
+    res.setHeader('Content-Type', 'image/webp');
+    res.sendFile(`thumbs/${b.blobId}.webp`, { root: this.admin.root, dotfiles: 'deny', headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' } }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Миниатюры нет' });
+    });
+  }
+
+  // Сам файл целиком (фото или видео), как он лежит на диске.
+  @Get('browse/files/:id/original')
+  async browseOriginal(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    const b = await this.admin.blobOf(id);
+    if (!b) throw new NotFoundException('Файл не найден');
+    if (!/^(image|video)\/[a-z0-9.+-]+$/i.test(b.mime)) throw new BadRequestException('Показываются только фото и видео');
+    res.setHeader('Content-Type', b.mime);
+    res.sendFile(b.path, { root: this.admin.root, dotfiles: 'deny', headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'no-store' } }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Файла нет на диске' });
+    });
+  }
+
+  // ── Раздача альбомов ──
+
+  @Get('albums/:id/shares')
+  async albumShares(@Param('id') id: string): Promise<{ logins: string[] }> {
+    return { logins: await this.admin.albumShares(id) };
+  }
+
+  @Put('albums/:id/shares/:login')
+  async share(@Param('id') id: string, @Param('login') login: string): Promise<{ ok: true }> {
+    await this.admin.setShare(id, login, true);
+    await this.audit.write('album.share', id, { login });
+    return { ok: true };
+  }
+
+  @Delete('albums/:id/shares/:login')
+  async unshare(@Param('id') id: string, @Param('login') login: string): Promise<{ ok: true }> {
+    await this.admin.setShare(id, login, false);
+    await this.audit.write('album.unshare', id, { login });
+    return { ok: true };
+  }
+
+  @Delete('albums/:id/shares')
+  async unshareAll(@Param('id') id: string): Promise<{ removed: number }> {
+    const removed = await this.admin.unshareAll(id);
+    await this.audit.write('album.unshare-all', id, { removed });
+    return { removed };
+  }
+
+  @Post('albums/:id/share-all')
+  @HttpCode(200)
+  async shareAll(@Param('id') id: string): Promise<{ added: number }> {
+    const added = await this.admin.shareWithAll(id);
+    await this.audit.write('album.share-all', id, { added });
+    return { added };
+  }
+
+  @Post('share-everything')
+  @HttpCode(200)
+  async shareEverything(@Body() body: unknown, @Req() req: Request): Promise<{ albums: number; links: number }> {
+    requireJson(req);
+    if (asObject(body).confirm !== true) throw new BadRequestException('confirm: true');
+    const r = await this.admin.shareEverything();
+    await this.audit.write('album.share-everything', 'all', r);
+    return r;
+  }
+
   @Delete('albums/:id')
   async deleteAlbum(@Param('id') id: string): Promise<{ ok: true }> {
     await this.admin.deleteAlbum(id);
@@ -267,5 +347,43 @@ export class InternalMediaController {
     const r = await this.media.clear(what);
     await this.audit.write('media.clear', what, { files: r.files, bytes: r.bytes });
     return r;
+  }
+}
+
+// Резервная копия: настройки места, проверка связи, запуск по кнопке и ход.
+@Controller('internal/backup')
+@UseGuards(InternalTokenGuard)
+export class InternalBackupController {
+  constructor(
+    private readonly backup: BackupService,
+    private readonly audit: AuditService,
+  ) {}
+
+  @Get()
+  status(): Promise<BackupStatus> {
+    return this.backup.status();
+  }
+
+  @Patch('config')
+  async save(@Body() body: unknown, @Req() req: Request): Promise<BackupStatus> {
+    requireJson(req);
+    const next = await this.backup.saveConfig(parseBackupPatch(body));
+    await this.audit.write('backup.config', next.kind, { kind: next.kind, host: next.host, path: next.path, folder: next.folder });
+    return this.backup.status();
+  }
+
+  // Проверка места назначения, ничего не копирует.
+  @Post('check')
+  @HttpCode(200)
+  async check(): Promise<{ where: string; freeBytes: number | null }> {
+    return this.backup.check(await this.backup.getConfig());
+  }
+
+  @Post('start')
+  @HttpCode(200)
+  async start(): Promise<{ job: BackupJob }> {
+    const job = await this.backup.start();
+    await this.audit.write('backup.start', 'backup', {});
+    return { job };
   }
 }

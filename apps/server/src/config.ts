@@ -18,6 +18,7 @@ export interface Config {
   yandexLoginUrl: string; // адрес помощника входа по QR (отдельный контейнер); пусто = раздел выключен
   yandexLoginToken: string; // общий секрет сервера и помощника входа
   yandexBase: string; // адрес Диска (меняется только в тестах)
+  backupDir: string; // куда в контейнере подключён диск для копий (папка, USB, сетевая папка); пусто = копия «в папку» недоступна
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -78,5 +79,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     yandexLoginUrl,
     yandexLoginToken,
     yandexBase,
+    backupDir: (env.DVCLOUD_BACKUP_DIR ?? '/backup').replace(/\/+$/, ''),
   };
 }

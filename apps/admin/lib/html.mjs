@@ -18,8 +18,8 @@ export function parseQuotaGb(text) {
 }
 
 export const CSS = `
-:root { color-scheme: light dark; --bg:#eef1f5; --fg:#18202b; --mut:#5d6878; --card:#ffffff; --line:#dbe1ea; --soft:#f3f5f9; --acc:#2d5bd0; --acc-fg:#ffffff; --bad:#b3261e; --ok:#17692b; --warn:#9a5b00; --shadow:0 1px 2px rgba(20,30,50,.06), 0 6px 20px rgba(20,30,50,.06); }
-@media (prefers-color-scheme: dark) { :root { --bg:#0e1218; --fg:#e7ebf2; --mut:#98a3b5; --card:#171c25; --line:#2a3240; --soft:#1e2531; --acc:#86a8ff; --acc-fg:#0e1218; --bad:#ff8a80; --ok:#7bd88f; --warn:#f0b35a; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35); } }
+:root { color-scheme: light dark; --bg:#eef1f5; --fg:#18202b; --mut:#5d6878; --card:#ffffff; --line:#dbe1ea; --soft:#f3f5f9; --acc:#2d5bd0; --acc-fg:#ffffff; --bad:#b3261e; --ok:#17692b; --warn:#9a5b00; --shadow:0 0 22px -8px rgba(20,30,50,.28); }
+@media (prefers-color-scheme: dark) { :root { --bg:#0e1218; --fg:#e7ebf2; --mut:#98a3b5; --card:#171c25; --line:#2a3240; --soft:#1e2531; --acc:#86a8ff; --acc-fg:#0e1218; --bad:#ff8a80; --ok:#7bd88f; --warn:#f0b35a; --shadow:0 0 24px -8px rgba(0,0,0,.6); } }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric:tabular-nums; }
 main { max-width:1040px; margin:0 auto; padding:20px 16px 56px; }
@@ -34,7 +34,7 @@ p { margin:6px 0; }
 nav.tabs { display:inline-flex; gap:2px; padding:3px; background:var(--soft); border:1px solid var(--line); border-radius:999px; }
 nav.tabs a { padding:7px 16px; border-radius:999px; color:var(--mut); text-decoration:none; font-weight:500; }
 nav.tabs a:hover { color:var(--fg); }
-nav.tabs a[aria-current] { background:var(--card); color:var(--fg); box-shadow:0 1px 3px rgba(20,30,50,.18); }
+nav.tabs a[aria-current] { background:var(--card); color:var(--fg); box-shadow:0 0 10px -2px rgba(20,30,50,.3); }
 nav.tabs a:focus-visible, .btn:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
 .panel, .card { background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); padding:18px 20px; margin:0 0 18px; }
 .card { padding:16px 18px; margin:12px 0 18px; }
@@ -106,7 +106,49 @@ progress::-webkit-progress-value { background:var(--ok); border-radius:6px; } pr
   .setting { grid-template-columns:1fr; }
   table, thead, tbody, tr, th, td { display:block; } thead { display:none; } tr { padding:8px 0; border-bottom:1px solid var(--line); } td { border:0; padding:3px 0; }
 }
-@media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition:none; } }
+@media (prefers-reduced-motion: reduce) { .switch input, .switch input::after, .info .tip, .tile, nav.tabs a, button { transition:none; animation:none; } }
+
+/* ── Вид 0.9: сияние на фоне, стеклянные панели, подсказки «Инфо» ── */
+body { background:var(--bg); background-image:radial-gradient(60vmax 60vmax at 0% -10%, var(--aur-a), transparent 70%), radial-gradient(55vmax 55vmax at 105% 110%, var(--aur-b), transparent 70%); background-attachment:fixed; }
+:root { --aur-a:rgba(124,92,255,.22); --aur-b:rgba(45,160,210,.18); --glass:rgba(255,255,255,.72); --glass-line:rgba(120,130,160,.22); }
+@media (prefers-color-scheme: dark) { :root { --aur-a:rgba(124,92,255,.26); --aur-b:rgba(20,150,190,.2); --glass:rgba(23,28,37,.66); --glass-line:rgba(255,255,255,.1); } }
+.panel, .card { background:var(--glass); border-color:var(--glass-line); border-radius:18px; box-shadow:inset 0 1px 0 rgba(255,255,255,.18), var(--shadow); }
+nav.tabs { background:var(--glass); flex-wrap:wrap; }
+nav.tabs a { transition:background .15s, color .15s; }
+nav.tabs a[aria-current] { background:linear-gradient(135deg, var(--acc), #7c5cff); color:#fff; box-shadow:0 0 16px -2px var(--acc); }
+button.primary, .btn.primary { background:linear-gradient(135deg, var(--acc), #7c5cff); border-color:transparent; color:#fff; }
+.btn, button { transition:border-color .15s, transform .1s, box-shadow .2s; } button:active { transform:scale(.97); }
+.btn:hover, button:hover:not(:disabled) { box-shadow:0 0 14px -3px var(--acc); }
+button.primary:hover:not(:disabled), .btn.primary:hover { box-shadow:0 0 18px -2px var(--acc); }
+button.danger:hover:not(:disabled) { box-shadow:0 0 14px -3px var(--bad); }
+h2 { display:flex; align-items:center; gap:8px; }
+/* Кнопочка «Инфо»: раскрывающийся блок без скриптов */
+.info { position:relative; display:inline-block; vertical-align:middle; }
+.info > summary { list-style:none; cursor:pointer; width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font:italic 700 13px/1 Georgia, serif; color:var(--mut); border:1px solid var(--line); user-select:none; background:transparent; }
+.info > summary::-webkit-details-marker { display:none; }
+.info > summary:hover, .info[open] > summary { color:#fff; background:var(--acc); border-color:var(--acc); }
+.info[open] > summary::before { content:""; position:fixed; inset:0; z-index:8; cursor:default; }
+.info .tip { position:absolute; left:0; top:30px; z-index:9; width:min(380px, 84vw); padding:12px 14px; border-radius:14px; background:var(--card); border:1px solid var(--line); box-shadow:0 0 30px -6px rgba(0,0,0,.5); font-size:14px; font-weight:400; line-height:1.5; color:var(--fg); text-align:left; animation:dv-pop .16s ease-out; }
+.info.right .tip { left:auto; right:0; }
+.info .tip p { margin:0 0 6px; } .info .tip p:last-child { margin:0; }
+@keyframes dv-pop { from { opacity:0; transform:translateY(-4px) scale(.98); } to { opacity:1; transform:none; } }
+/* Файлы: плитки с превью */
+.filters { display:flex; flex-wrap:wrap; gap:10px 12px; align-items:flex-end; }
+.filters label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--mut); }
+input[type=date], input[type=search] { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; max-width:100%; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; margin-top:14px; }
+.tile { position:relative; display:block; aspect-ratio:1; border-radius:14px; overflow:hidden; background:var(--soft); border:1px solid var(--line); color:inherit; text-decoration:none; transition:transform .15s, box-shadow .15s; }
+.tile:hover { transform:translateY(-2px); box-shadow:0 0 22px -4px var(--acc); }
+.tile .th { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.tile .ext { position:absolute; inset:0; width:100%; height:100%; inset:0; display:grid; place-items:center; font-weight:700; color:var(--mut); font-size:15px; }
+.tile .cap { position:absolute; left:0; right:0; bottom:0; padding:18px 8px 6px; font-size:12px; color:#fff; background:linear-gradient(transparent, rgba(0,0,0,.72)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tile .cap small { display:block; opacity:.8; }
+.pager { display:flex; justify-content:center; margin-top:16px; }
+.share-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.chip form { display:inline; margin:0; } .chip button { padding:0 0 0 6px; border:0; background:transparent; color:var(--mut); font-size:14px; line-height:1; } .chip button:hover { color:var(--bad); }
+@media (max-width:720px) { .panel { position:relative; } .info { position:static; } .info .tip { position:absolute; left:12px; right:12px; top:auto; width:auto; margin-top:8px; } }
+.dest { display:grid; gap:10px; margin-top:10px; }
+.setting b { display:inline; } .setting b + .info { margin-left:6px; }
 `;
 
 const layout = (title, body, head = '') => `<!doctype html>
@@ -126,7 +168,10 @@ ${error ? `<div class="msg error">${esc(error)}</div>` : ''}
 </form>`);
 }
 
-const TABS = [['users', '/', 'Люди'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа']];
+// «Инфо»: ненавязчивая кнопка с пояснением. text: один или несколько абзацев (строки/HTML из этого файла, не от людей).
+export const info = (text, side = '') => `<details class="info${side ? ' ' + side : ''}"><summary aria-label="Инфо" title="Инфо">i</summary><div class="tip">${[].concat(text).map((t) => `<p>${t}</p>`).join('')}</div></details>`;
+
+const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['sharing', '/sharing', 'Альбомы людям'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['backup', '/backup', 'Копия']];
 const nav = (current) => `<nav class="tabs" aria-label="Разделы">${TABS.map(([k, href, label]) => `<a href="${href}"${current === k ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const topBar = (current, csrf) => `<div class="bar"><div class="brand"><b>DV Cloud</b><span class="muted">админка</span></div>${nav(current)}
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit" class="ghost">Выйти</button></form></div>`;
@@ -180,7 +225,7 @@ export function usersPage({ users, csrf, flash, loadError }) {
 ${topBar('users', csrf)}
 ${flashHtml(flash, loadError)}
 <section class="panel">
-<div class="panel-head"><div><h2>Люди</h2><p class="muted">Пароль показывается один раз при создании и сбросе.</p></div>
+<div class="panel-head"><div><h2>Люди ${info(['Здесь заводятся люди облака, меняется место для каждого и закрывается доступ.','<b>Квота</b> — сколько места разрешено человеку; пусто — без лимита.','<b>Отключить</b> закрывает вход и сессии, файлы остаются. <b>Сбросить пароль</b> показывает новый пароль один раз: передайте его человеку.','<b>Удалить</b> просит ввести логин; галочка «с файлами» убирает и его записи о файлах.'])}</h2><p class="muted">Пароль показывается один раз при создании и сбросе.</p></div>
 <details class="add"><summary class="btn primary">Добавить человека</summary>
 <form method="post" action="/users">${csrfInput(csrf)}
 <input type="text" name="login" placeholder="логин (a-z, 0-9, _)" pattern="[a-z0-9_]{2,32}" required aria-label="Логин">
@@ -207,13 +252,12 @@ ${topBar('storage', csrf)}
 ${flashHtml(flash, loadError)}
 ${stats ? `<section class="panel"><div class="summary"><div><b>${stats.files}</b><span>записей людей</span></div><div><b>${stats.blobs}</b><span>файлов на диске</span></div><div><b>${esc(formatSize(stats.bytes))}</b><span>занято на диске</span></div><div><b>${stats.orphans}</b><span>без владельца</span></div><div><b>${stats.extraCopies}</b><span>лишних копий</span></div></div>${stats.yandex && stats.yandex.accounts > 0 ? `<p class="hint">Яндекс Диск подключён у людей: ${esc(stats.yandex.accounts)}${stats.yandex.expired > 0 ? ` (вход истёк: ${esc(stats.yandex.expired)})` : ''}. Файлов в списках: ${esc(stats.yandex.items)}, забрано: ${esc(stats.yandex.done)}.</p>` : ''}</section>` : ''}
 
-<section class="panel"><h2>Просьбы о месте</h2>
+<section class="panel"><h2>Просьбы о месте ${info('Люди могут попросить больше места прямо на сайте. «Задать квоту» ставит новый лимит в гигабайтах и закрывает просьбу, «Закрыть без изменений» просто убирает её из списка.')}</h2>
 <table><thead><tr><th>Кто</th><th>Нужно</th><th>Сейчас</th><th>Комментарий</th><th>Действия</th></tr></thead>
 <tbody>${reqRows || '<tr><td colspan="5" class="muted">Просьб нет.</td></tr>'}</tbody></table>
 
 </section>
-<section class="panel"><h2>Файлы без владельца</h2>
-<p class="muted">Остаются, когда человек убрал файл насовсем или аккаунт удалён. На диске лежат, пока вы их не отдадите или не сотрёте.</p>
+<section class="panel"><h2>Файлы без владельца ${info(['Остаются, когда человек убрал файл насовсем или аккаунт удалён. На диске лежат, пока вы их не отдадите или не сотрёте.','«Отдать» делает файл файлом выбранного человека (место идёт в его квоту). «Стереть с диска» необратимо.'])}</h2>
 ${stats && stats.orphans > 0 ? `<form class="bulk" method="post" action="/storage/orphans/purge">${csrfInput(csrf)}<input type="hidden" name="count" value="${esc(stats.orphans)}">
 <p>Всего таких файлов: <b>${esc(stats.orphans)}</b>, они занимают <b>${esc(formatSize(stats.orphanBytes ?? 0))}</b>${orphans.length < stats.orphans ? ` (в таблице ниже только первые ${orphans.length})` : ''}. Стирание необратимо.</p>
 <input type="text" name="word" placeholder="впишите: стереть" autocomplete="off" required aria-label="Подтверждение: впишите слово стереть"> <button class="danger" type="submit">Стереть с диска все ${esc(stats.orphans)}</button></form>` : ''}
@@ -221,14 +265,12 @@ ${stats && stats.orphans > 0 ? `<form class="bulk" method="post" action="/storag
 <tbody>${orphanRows || '<tr><td colspan="4" class="muted">Таких файлов нет.</td></tr>'}</tbody></table>
 
 </section>
-<section class="panel"><h2>Лишние копии на диске</h2>
-<p class="muted">Остались от старой версии, когда один файл мог лежать на диске несколько раз. Каждая копия сверяется по SHA-256 перед стиранием.</p>
+<section class="panel"><h2>Лишние копии на диске ${info(['Остались от старой версии, когда один файл мог лежать на диске несколько раз. Каждая копия сверяется по SHA-256 перед стиранием.','«Только проверить» ничего не меняет и показывает, сколько места можно освободить.'])}</h2>
 ${dedupe ? `<div class="msg ok">Проверено: ${dedupe.checked}, удалено: ${dedupe.removed}, освобождено: ${esc(formatSize(dedupe.freedBytes))}${dedupe.mismatched.length ? `, не совпали: ${dedupe.mismatched.length}` : ''}</div>` : ''}
 <p>${post(csrf, '/storage/dedupe', { apply: '0' }, 'Только проверить')} ${post(csrf, '/storage/dedupe', { apply: '1' }, 'Удалить лишние копии', 'danger')}</p>
 
 </section>
-<section class="panel"><h2>Альбомы</h2>
-<p class="muted">«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту. «Удалить» убирает только сам альбом (и общий доступ к нему), файлы людей остаются.</p>
+<section class="panel"><h2>Альбомы ${info(['«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту.','«Удалить» убирает только сам альбом (и общий доступ к нему), файлы людей остаются.','Показать альбом другим без копирования можно на вкладке «Альбомы людям».'])}</h2>
 <table><thead><tr><th>Альбом</th><th>Владелец</th><th>Файлов</th><th>Общий</th><th>Действия</th></tr></thead>
 <tbody>${albumRows || '<tr><td colspan="5" class="muted">Альбомов нет.</td></tr>'}</tbody></table></section>`);
 }
@@ -243,7 +285,7 @@ const datesPanel = (dates, csrf) => {
     : `<p>${dates.running ? 'Идёт' : 'Закончено'}: ${dates.apply ? 'пересчёт' : 'проверка'}. Просмотрено ${dates.checked} из ${dates.total}, дат ${dates.apply ? 'исправлено' : 'будет исправлено'}: <b>${dates.changed}</b>.</p>
 ${dates.running ? `<progress max="${Math.max(dates.total, 1)}" value="${dates.checked}" aria-label="Ход пересчёта"></progress>` : ''}
 ${dates.examples.length ? `<table><thead><tr><th>Файл</th><th>Было</th><th>Станет</th></tr></thead><tbody>${dates.examples.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.before.replace('T', ' ').slice(0, 16))}</td><td>${esc(x.after.replace('T', ' ').slice(0, 16))}</td></tr>`).join('')}</tbody></table>` : ''}`;
-  return `<section class="panel"><div class="panel-head"><div><h2>Даты у загруженных файлов</h2><p class="muted">Облако берёт дату съёмки из метаданных файла (EXIF у фото, время создания у видео), если их нет, из имени файла (например «2020-05-25 18-55-28.jpg»), и только потом из даты изменения. У файлов, загруженных раньше, дата могла быть взята из даты изменения. «Проверить» показывает, сколько дат изменится, и ничего не меняет.</p></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Даты у загруженных файлов ${info(['Облако берёт дату съёмки из метаданных файла (EXIF у фото, время создания у видео), если их нет, из имени файла (например «2020-05-25 18-55-28.jpg»), и только потом из даты изменения.','У файлов, загруженных раньше, дата могла быть взята из даты изменения. «Проверить» показывает, сколько дат изменится, и ничего не меняет.'])}</h2></div>
 <div>${run(false, 'Проверить')}${run(true, 'Пересчитать', 'primary')}</div></div>${status}</section>`;
 };
 
@@ -257,7 +299,7 @@ const mlState = (x) =>
 const searchPanel = (x, s, csrf) => {
   const clear = (what, label, cls, hint) =>
     `<form class="inline" method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="${what}"><button class="${cls}" type="submit" title="${esc(hint)}">${label}</button></form>`;
-  return `<section class="panel"><div class="panel-head"><div><h2>Поиск по смыслу</h2><p class="muted">Служба: ${mlState(x)}.</p></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Поиск по смыслу ${info('Показывает, работает ли служба ML и сколько файлов уже «просмотрено». «Повторить неудачные» пробует ещё раз то, что не прочиталось; «Пересчитать всё» стирает все векторы, и они считаются заново несколько часов.')}</h2><p class="muted">Служба: ${mlState(x)}.</p></div>
 <div>${x.failed ? clear('index-failed', 'Повторить неудачные', '', 'Файлы, которые не удалось прочитать, попробуются снова') : ''}${clear('index', 'Пересчитать всё', 'danger', 'Стереть все векторы: они посчитаются заново, это займёт часы')}</div></div>
 <p>Готово ${x.ready} из ${x.total}${x.failed ? `, не удалось прочитать: ${x.failed}` : ''}${x.pending ? `, в очереди: ${x.pending}` : ''}. Векторы занимают ${esc(formatSize(x.sizeBytes))} в базе.</p>
 <progress max="${Math.max(x.total, 1)}" value="${x.ready + x.failed}" aria-label="Ход построения векторов"></progress>
@@ -294,11 +336,11 @@ const peoplePanel = (p, s, csrf, up, job) => {
     return `<p><b>${label}:</b> ${state}. Готово ${x.done} из ${x.total}${x.failed ? `, не удалось прочитать: ${x.failed}` : ''}${x.pending ? `, в очереди: ${x.pending}` : ''}.</p>
 <progress max="${Math.max(x.total, 1)}" value="${x.done + x.failed}" aria-label="Ход просмотра: ${label}"></progress>`;
   };
-  return `<section class="panel"><div class="panel-head"><div><h2>Люди и питомцы</h2><p class="muted">Найдено лиц: ${p.detections.faces}, питомцев: ${p.detections.pets}. Групп: ${p.groups}, из них названо людьми: ${p.named}.</p></div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Люди и питомцы ${info('Ход распознавания лиц и питомцев, пересборка групп и полная очистка данных. Фото при этом не затрагиваются.')}</h2><p class="muted">Найдено лиц: ${p.detections.faces}, питомцев: ${p.detections.pets}. Групп: ${p.groups}, из них названо людьми: ${p.named}.</p></div></div>
 ${row('Лица', p.faces)}
 ${row('Питомцы', p.pets)}
 ${jobBlock(job)}
-<div class="setting"><div><b>Пересобрать группы</b><p class="muted">Стирает только безымянные группы людей, которые сделала сама программа, и собирает лица заново по текущей строгости (сохраните её выше). <b>Остаются как есть:</b> группы с именем, скрытые группы и группы, где вы что-то правили вручную; к названным группам при этом присоединятся и подходящие лица из стёртых. Объединённая вами группа без имени считается безымянной и будет пересобрана: если хотите сохранить её, назовите. Фото и имена не страдают. Работа идёт в фоне: ход и итог видны ниже в этой панели, страница обновляется сама.</p></div>
+<div class="setting"><div><b>Пересобрать группы</b> ${info(`Стирает только безымянные группы людей, которые сделала сама программа, и собирает лица заново по текущей строгости (сохраните её выше). <b>Остаются как есть:</b> группы с именем, скрытые группы и группы, где вы что-то правили вручную; к названным группам при этом присоединятся и подходящие лица из стёртых. Объединённая вами группа без имени считается безымянной и будет пересобрана: если хотите сохранить её, назовите. Фото и имена не страдают. Работа идёт в фоне: ход и итог видны ниже в этой панели, страница обновляется сама.`)}</div>
 <span><form method="post" action="/media/people/hint" class="inline">${csrfInput(csrf)}<button type="submit"${busy ? ' disabled' : ''} title="Только посчитать, ничего не меняется">Показать, сколько групп получится</button></form> <form method="post" action="/media/people/rebuild" class="inline">${csrfInput(csrf)}<button class="danger" type="submit"${busy ? ' disabled' : ''}>Пересобрать группы</button></form></span></div>
 <form method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="people">
 <p class="muted">Стереть все находки, группы и имена людей и питомцев у всех. Фото не затрагиваются. Если распознавание включено, просмотр начнётся заново, а названия придётся давать снова.</p>
@@ -310,7 +352,7 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
   const clear = (what, label, hint) =>
     `<form method="post" action="/media/clear">${csrfInput(csrf)}<input type="hidden" name="what" value="${what}"><button class="danger" type="submit" title="${esc(hint)}">${label}</button></form>`;
   const stats = media
-    ? `<section class="panel"><div class="panel-head"><div><h2>Что лежит на диске</h2><p class="muted">Это производные файлы. Оригиналы они не затрагивают, всё можно очистить: построится заново.</p></div></div>
+    ? `<section class="panel"><div class="panel-head"><div><h2>Что лежит на диске ${info('Это производные файлы: миниатюры, превью и копии видео. Оригиналы они не затрагивают, всё можно очистить, и оно построится заново.')}</h2></div></div>
 <div class="stats">
 <div class="stat"><span class="muted">Миниатюры</span><b>${esc(formatSize(media.thumbs.bytes))}</b><span class="muted">${media.thumbs.files} шт., плитки в ленте</span>${clear('thumbs', 'Очистить', 'Построятся при открытии ленты')}</div>
 <div class="stat"><span class="muted">Превью фото</span><b>${esc(formatSize(media.previews.bytes))}</b><span class="muted">${media.previews.files} шт., для просмотра на весь экран</span>${clear('previews', 'Очистить', 'Построятся при просмотре')}</div>
@@ -324,26 +366,26 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
   const form = s
     ? `<form method="post" action="/media/settings">${csrfInput(csrf)}
 <section class="panel"><h2>Фото</h2>
-<div class="setting"><div><b>Превью для просмотра</b><p class="muted">Облегчённая копия, которую сайт открывает вместо оригинала. Выключено: сайт открывает оригинал, скачивание всегда отдаёт оригинал.</p></div>${sw('previewEnabled', s.previewEnabled, 'Использовать')}</div>
-<div class="setting"><div><b>Размер превью</b><p class="muted">Длинная сторона в пикселях, от 600 до 4000. Для телефона и ноутбука хватает 1600–2000.</p></div><input class="narrow" type="number" name="previewMaxSide" min="600" max="4000" step="100" value="${s.previewMaxSide}" aria-label="Размер превью, px"></div>
-<div class="setting"><div><b>Качество превью</b><p class="muted">От 30 до 95. Выше число: чище картинка и больше файл. Обычно 75–85.</p></div><input class="narrow" type="number" name="previewQuality" min="30" max="95" step="1" value="${s.previewQuality}" aria-label="Качество превью"></div>
+<div class="setting"><div><b>Превью для просмотра</b> ${info(`Облегчённая копия, которую сайт открывает вместо оригинала. Выключено: сайт открывает оригинал, скачивание всегда отдаёт оригинал.`)}</div>${sw('previewEnabled', s.previewEnabled, 'Использовать')}</div>
+<div class="setting"><div><b>Размер превью</b> ${info(`Длинная сторона в пикселях, от 600 до 4000. Для телефона и ноутбука хватает 1600–2000.`)}</div><input class="narrow" type="number" name="previewMaxSide" min="600" max="4000" step="100" value="${s.previewMaxSide}" aria-label="Размер превью, px"></div>
+<div class="setting"><div><b>Качество превью</b> ${info(`От 30 до 95. Выше число: чище картинка и больше файл. Обычно 75–85.`)}</div><input class="narrow" type="number" name="previewQuality" min="30" max="95" step="1" value="${s.previewQuality}" aria-label="Качество превью"></div>
 </section>
 <section class="panel"><h2>Видео</h2>
-<div class="setting"><div><b>Копии для просмотра</b><p class="muted">Облако в фоне делает из видео уменьшенную копию (H.264), по одному ролику, с низким приоритетом и только когда нет загрузок. Плеер на сайте берёт копию, а скачивание отдаёт оригинал. Нагружает процессор сервера, поэтому по умолчанию выключено.</p></div>${sw('videoEnabled', s.videoEnabled, 'Делать и использовать')}</div>
-<div class="setting"><div><b>Размер кадра копии</b><p class="muted">Высота по вертикали. Кадр не увеличивается: ролик меньше выбранного остаётся как есть по размеру.</p></div><select name="videoHeight" aria-label="Высота кадра">${[480, 720, 1080].map((h) => `<option value="${h}"${h === s.videoHeight ? ' selected' : ''}>${h}p</option>`).join('')}</select></div>
-<div class="setting"><div><b>Качество копии</b><p class="muted">Выше качество: лучше картинка, больше файл и дольше работа. Если копия получается не меньше оригинала, она не сохраняется.</p></div><select name="videoCrf" aria-label="Качество видео">${crfOptions.map(([v, l]) => `<option value="${v}"${v === s.videoCrf ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+<div class="setting"><div><b>Копии для просмотра</b> ${info(`Облако в фоне делает из видео уменьшенную копию (H.264), по одному ролику, с низким приоритетом и только когда нет загрузок. Плеер на сайте берёт копию, а скачивание отдаёт оригинал. Нагружает процессор сервера, поэтому по умолчанию выключено.`)}</div>${sw('videoEnabled', s.videoEnabled, 'Делать и использовать')}</div>
+<div class="setting"><div><b>Размер кадра копии</b> ${info(`Высота по вертикали. Кадр не увеличивается: ролик меньше выбранного остаётся как есть по размеру.`)}</div><select name="videoHeight" aria-label="Высота кадра">${[480, 720, 1080].map((h) => `<option value="${h}"${h === s.videoHeight ? ' selected' : ''}>${h}p</option>`).join('')}</select></div>
+<div class="setting"><div><b>Качество копии</b> ${info(`Выше качество: лучше картинка, больше файл и дольше работа. Если копия получается не меньше оригинала, она не сохраняется.`)}</div><select name="videoCrf" aria-label="Качество видео">${crfOptions.map(([v, l]) => `<option value="${v}"${v === s.videoCrf ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
 </section>
 <section class="panel"><h2>Поиск по смыслу</h2>
-<div class="setting"><div><b>Искать фото и видео по описанию</b><p class="muted">Облако в фоне «просматривает» каждое фото (для видео один кадр) нейросетью и запоминает его смысл, поэтому на сайте можно искать словами: «собака на пляже», «скриншот переписки». Работает по-русски. Фото не покидают ваш сервер. Нагружает процессор часами (разово), поэтому по умолчанию выключено.</p></div>${sw('searchEnabled', s.searchEnabled, 'Включить поиск')}</div>
-<div class="setting"><div><b>Строгость выдачи</b><p class="muted">В результатах остаются файлы, которые подходят не хуже этого процента от лучшего совпадения, от 50 до 95. Больше число: короче и точнее выдача. Меньше: больше находок, но и больше лишнего.</p></div><input class="narrow" type="number" name="searchCutoff" min="50" max="95" step="1" value="${s.searchCutoff}" aria-label="Строгость выдачи, проценты"></div>
+<div class="setting"><div><b>Искать фото и видео по описанию</b> ${info(`Облако в фоне «просматривает» каждое фото (для видео один кадр) нейросетью и запоминает его смысл, поэтому на сайте можно искать словами: «собака на пляже», «скриншот переписки». Работает по-русски. Фото не покидают ваш сервер. Нагружает процессор часами (разово), поэтому по умолчанию выключено.`)}</div>${sw('searchEnabled', s.searchEnabled, 'Включить поиск')}</div>
+<div class="setting"><div><b>Строгость выдачи</b> ${info(`В результатах остаются файлы, которые подходят не хуже этого процента от лучшего совпадения, от 50 до 95. Больше число: короче и точнее выдача. Меньше: больше находок, но и больше лишнего.`)}</div><input class="narrow" type="number" name="searchCutoff" min="50" max="95" step="1" value="${s.searchCutoff}" aria-label="Строгость выдачи, проценты"></div>
 </section>
 <section class="panel"><h2>Люди и питомцы</h2>
-<div class="setting"><div><b>Узнавать лица на фото</b><p class="muted">Облако в фоне находит лица нейросетью и собирает их в группы «один человек»; каждый член семьи называет своих людей сам, чужих названий не видит, а на сайте можно искать «фото с Валей». Лица считаются в вашем облаке и никуда не отправляются. Это биометрические данные: включайте, только если все, кто пользуется облаком, согласны. Нагружает процессор часами (разово), поэтому по умолчанию выключено.</p></div>${sw('facesEnabled', s.facesEnabled, 'Включить лица')}</div>
-<div class="setting"><div><b>Строгость объединения лиц</b><p class="muted">От 30 до 55 (процентов сходства), по умолчанию 45. Меньше число: лица объединяются охотнее, групп меньше и они крупнее, но среди них чаще попадаются чужие люди. Больше число: группы чище, но один человек распадается на много групп. Для семьи обычно подходит 38–42. Новое значение действует на лица, которые ещё не разобраны; уже собранные группы сами не меняются: чтобы применить его к ним, нажмите «Пересобрать группы» ниже. Сначала сохраните настройки.</p></div><input class="narrow" type="number" name="facesSim" min="30" max="55" step="1" value="${s.facesSim}" aria-label="Строгость объединения лиц, проценты"></div>
-<div class="setting"><div><b>Узнавать питомцев</b><p class="muted">Так же находит кошек и собак. Узнавание по снимку питомца заметно грубее, чем для людей: группы можно объединять и править вручную.</p></div>${sw('petsEnabled', s.petsEnabled, 'Включить питомцев')}</div>
+<div class="setting"><div><b>Узнавать лица на фото</b> ${info(`Облако в фоне находит лица нейросетью и собирает их в группы «один человек»; каждый член семьи называет своих людей сам, чужих названий не видит, а на сайте можно искать «фото с Валей». Лица считаются в вашем облаке и никуда не отправляются. Это биометрические данные: включайте, только если все, кто пользуется облаком, согласны. Нагружает процессор часами (разово), поэтому по умолчанию выключено.`)}</div>${sw('facesEnabled', s.facesEnabled, 'Включить лица')}</div>
+<div class="setting"><div><b>Строгость объединения лиц</b> ${info(`От 30 до 55 (процентов сходства), по умолчанию 45. Меньше число: лица объединяются охотнее, групп меньше и они крупнее, но среди них чаще попадаются чужие люди. Больше число: группы чище, но один человек распадается на много групп. Для семьи обычно подходит 38–42. Новое значение действует на лица, которые ещё не разобраны; уже собранные группы сами не меняются: чтобы применить его к ним, нажмите «Пересобрать группы» ниже. Сначала сохраните настройки.`)}</div><input class="narrow" type="number" name="facesSim" min="30" max="55" step="1" value="${s.facesSim}" aria-label="Строгость объединения лиц, проценты"></div>
+<div class="setting"><div><b>Узнавать питомцев</b> ${info(`Так же находит кошек и собак. Узнавание по снимку питомца заметно грубее, чем для людей: группы можно объединять и править вручную.`)}</div>${sw('petsEnabled', s.petsEnabled, 'Включить питомцев')}</div>
 </section>
 <section class="panel"><h2>Даты съёмки</h2>
-<div class="setting"><div><b>Часовой пояс</b><p class="muted">В нём записано время в метаданных и в именах файлов (там нет пояса). Для семьи в Москве: Europe/Moscow. Применяется к новым загрузкам и к пересчёту ниже.</p></div><span><input type="text" name="timezone" list="tz" value="${esc(s.timezone)}" maxlength="64" aria-label="Часовой пояс"><datalist id="tz">${TIMEZONES.map((z) => `<option value="${z}">`).join('')}</datalist></span></div>
+<div class="setting"><div><b>Часовой пояс</b> ${info(`В нём записано время в метаданных и в именах файлов (там нет пояса). Для семьи в Москве: Europe/Moscow. Применяется к новым загрузкам и к пересчёту ниже.`)}</div><span><input type="text" name="timezone" list="tz" value="${esc(s.timezone)}" maxlength="64" aria-label="Часовой пояс"><datalist id="tz">${TIMEZONES.map((z) => `<option value="${z}">`).join('')}</datalist></span></div>
 </section>
 <section class="panel"><div class="panel-head"><p class="muted">Смена размера или качества стирает готовые превью и копии: они построятся заново с новыми настройками.</p><button class="primary" type="submit">Сохранить настройки</button></div></section>
 </form>`
@@ -356,6 +398,108 @@ ${media ? searchPanel(media.search, s, csrf) : ''}
 ${media ? peoplePanel(media.people, s, csrf, media.search.up, media.peopleJob) : ''}
 ${form}
 ${media ? datesPanel(dates, csrf) : ''}`, media?.peopleJob?.state === 'running' ? '<meta http-equiv="refresh" content="3">' : '');
+}
+
+
+// ── Файлы всех людей: плитки с превью, фильтры по человеку, датам, имени и альбому (только просмотр, без журнала) ──
+const extOf = (name) => (String(name).includes('.') ? String(name).split('.').pop().slice(0, 5).toUpperCase() : 'ФАЙЛ');
+
+export function filesPage({ data, users, albums, filter, csrf, flash, loadError }) {
+  const f = filter;
+  const opt = (v, label, cur) => `<option value="${esc(v)}"${String(cur) === String(v) ? ' selected' : ''}>${esc(label)}</option>`;
+  const keep = (extra = {}) => new URLSearchParams(Object.entries({ login: f.login, from: f.from, to: f.to, q: f.q, album: f.album, ...extra }).filter(([, v]) => v)).toString();
+  const tiles = (data?.files ?? []).map((x) => `<a class="tile" href="/files/${esc(x.id)}/view" target="_blank" rel="noopener" title="${esc(x.name)}">
+<object class="th" data="/files/${esc(x.id)}/thumb" type="image/webp" aria-label="${esc(x.name)}"><span class="ext">${esc(extOf(x.name))}</span></object>
+<span class="cap">${esc(x.name)}<small>${esc(x.owner)} · ${esc(x.takenAt.slice(0, 10))} · ${esc(formatSize(x.size))}</small></span></a>`).join('');
+  return layout('DV Cloud: файлы', `
+${topBar('files', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Файлы всех людей ${info(['Здесь видны все фото и видео, которые лежат в облаке, от новых к старым по дате съёмки. Можно отобрать по человеку, по датам, по части имени или по альбому.','Нажмите на плитку, чтобы открыть файл целиком в новой вкладке. Видео открывается встроенным плеером браузера.','Серая плитка с буквами вместо картинки: миниатюра ещё не построена (она строится, когда человек открывает свою ленту). Сам файл всё равно открывается.','Это только просмотр: ничего не удаляется и не меняется. Корзины людей сюда не попадают.'])}</h2>
+<p class="muted">Только просмотр. Найдено: <b>${data ? esc(data.total) : 0}</b></p></div></div>
+<form class="filters" method="get" action="/files">
+<label>Человек<select name="login"><option value="">все</option>${users.map((u) => opt(u.login, u.displayName ? `${u.displayName} (${u.login})` : u.login, f.login)).join('')}</select></label>
+<label>С даты<input type="date" name="from" value="${esc(f.from ?? '')}"></label>
+<label>По дату<input type="date" name="to" value="${esc(f.to ?? '')}"></label>
+<label>Часть имени<input type="search" name="q" value="${esc(f.q ?? '')}" maxlength="100" placeholder="например IMG_"></label>
+<label>Альбом<select name="album"><option value="">любой</option>${albums.map((a) => opt(a.id, `${a.name} — ${a.owner}`, f.album)).join('')}</select></label>
+<button class="primary" type="submit">Показать</button> <a class="btn" href="/files">Сбросить</a></form>
+<div class="tiles">${tiles || '<p class="muted">Ничего не найдено. Попробуйте убрать часть условий.</p>'}</div>
+${data?.next ? `<div class="pager"><a class="btn" href="/files?${esc(keep({ before: data.next }))}">Показать ещё</a></div>` : ''}
+</section>`);
+}
+
+// ── Раздача альбомов: кому открыт каждый альбом, открыть одному, всем или всё всем ──
+export function sharingPage({ albums, users, csrf, flash, loadError }) {
+  const rows = albums.map((a) => {
+    const others = users.filter((u) => u.login !== a.owner && !u.disabled && !a.logins.includes(u.login));
+    const chips = a.logins.map((l) => `<span class="chip">${esc(l)}<form method="post" action="/sharing/${encodeURIComponent(a.id)}/remove">${csrfInput(csrf)}<input type="hidden" name="login" value="${esc(l)}"><button type="submit" aria-label="Закрыть доступ: ${esc(l)}" title="Закрыть доступ">×</button></form></span>`).join('');
+    return `<li class="person" style="grid-template-columns:minmax(150px,1fr) minmax(170px,1.6fr) auto">
+<div class="who"><b>${esc(a.name)}</b><span>владелец: ${esc(a.owner)} · файлов: ${esc(a.count)}</span></div>
+<div class="share-chips">${chips || '<span class="muted">пока никому</span>'}</div>
+<div>${others.length ? `<form class="inline" method="post" action="/sharing/${encodeURIComponent(a.id)}/add">${csrfInput(csrf)}<select name="login" aria-label="Кому открыть">${others.map((u) => `<option value="${esc(u.login)}">${esc(u.displayName || u.login)}</option>`).join('')}</select><button type="submit">Открыть</button></form>${post(csrf, `/sharing/${encodeURIComponent(a.id)}/all`, {}, 'Всем', 'primary')}` : '<span class="muted">открыт всем</span>'}${a.logins.length ? post(csrf, `/sharing/${encodeURIComponent(a.id)}/hide`, {}, 'Скрыть у всех', 'danger') : ''}</div></li>`;
+  }).join('');
+  return layout('DV Cloud: альбомы людям', `
+${topBar('sharing', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Раздать всё всем ${info(['Каждый альбом каждого человека откроется всем остальным людям. Люди увидят чужие альбомы у себя и смогут сохранить файлы себе, но не смогут их менять.','Место на диске при этом не тратится: файл остаётся в одном экземпляре.','Действие можно отменить только вручную, снимая доступ по альбомам ниже. Поэтому нужно ввести слово.'])}</h2><p class="muted">Чтобы в семье все видели альбомы друг друга.</p></div></div>
+<form method="post" action="/sharing/everything">${csrfInput(csrf)}<input type="text" name="word" placeholder="впишите: раздать" autocomplete="off" required aria-label="Подтверждение: впишите слово раздать"> <button class="primary" type="submit">Открыть все альбомы всем</button></form></section>
+<section class="panel"><div class="panel-head"><div><h2>Альбомы ${info(['Для каждого альбома показано, кому он открыт. Крестик возле имени закрывает доступ этому человеку.','«Открыть» даёт доступ выбранному человеку, «Всем» — всем, кому ещё не открыт.','«Скрыть у всех» снимает доступ у всех сразу: альбом остаётся у хозяина, люди его больше не видят. Включить обратно можно в любой момент.','Новые файлы, добавленные в альбом позже, видны тем, кому он открыт, сразу. Это не копия: изменить чужой альбом люди не могут.'])}</h2><p class="muted">Кому открыт каждый альбом.</p></div></div>
+<ul class="people">${rows || '<li class="muted">Альбомов пока нет.</li>'}</ul></section>`);
+}
+
+// ── Резервная копия: куда, что копировать, запуск по кнопке, ход ──
+const when = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '—');
+
+export function backupPage({ b, csrf, flash, loadError }) {
+  const c = b?.config;
+  const job = b?.job;
+  const last = b?.last;
+  const running = job?.state === 'running';
+  const res = (j) => { const r = j?.result; if (!r) return ''; const parts = []; if (r.bytes > 0 || r.files > 0) parts.push(`точная копия: передано файлов ${esc(r.files)}, всего ${esc(formatSize(r.bytes))}${r.pending ? `, ещё не догнано (новое за время копии): ${esc(r.pending)}` : ', проверено: расхождений нет'}`); if (r.readable > 0) parts.push(`по людям: ${esc(r.readable)} файлов`); if (r.dumpBytes > 0) parts.push(`база: ${esc(formatSize(r.dumpBytes))}`); return parts.join('; ') || 'готово'; };
+  const statusPanel = b ? `<section class="panel"><div class="panel-head"><div><h2>Состояние ${info(['Копия запускается только вашей кнопкой, сама по расписанию не идёт.','Во время копирования облако работает как обычно: копия идёт в фоне с самым низким приоритетом. Страница обновляется сама, её можно закрыть.','Каждый раз копируются только новые и изменённые файлы, поэтому повторная копия быстрая. Удалённые вами файлы из копии не стираются: это страховка от случайного удаления.','После копирования выполняется проверка: файлы на месте назначения сверяются с облаком по размеру.'])}</h2>
+<p class="muted">${running ? 'Идёт копирование.' : last ? 'Последний запуск закончен.' : 'Копия ещё не делалась.'}</p></div>
+<div>${post(csrf, '/backup/check', {}, 'Проверить место')}<form class="inline" method="post" action="/backup/start">${csrfInput(csrf)}<button class="primary" type="submit"${running ? ' disabled' : ''}>${running ? 'Идёт…' : 'Сделать копию сейчас'}</button></form></div></div>
+${running ? `<p role="status"><b>${esc(job.step)}</b>${job.percent !== null ? `, ${esc(job.percent)}%` : ''}. Начато ${esc(when(job.startedAt))}.</p><progress max="100" value="${esc(job.percent ?? 0)}" aria-label="Ход копирования"></progress>` : ''}
+${!running && job?.state === 'error' ? `<div class="msg error" role="alert"><b>Копия не получилась.</b> ${esc(job.error ?? '')}</div>` : ''}
+${!running && last?.state === 'done' ? `<p>Последняя удачная: <b>${esc(when(last.finishedAt))}</b>, ${res(last)}. Место: ${esc(last.result?.destination ?? '')}.</p>` : ''}
+${!running && last?.state === 'error' && !job ? `<div class="msg error"><b>Прошлая копия не получилась</b> (${esc(when(last.finishedAt))}): ${esc(last.error ?? '')}</div>` : ''}
+</section>` : '';
+  const chip = (on) => (on ? '<span class="chip ok">выбрано</span>' : '');
+  const folderCard = c ? `<section class="panel"><form method="post" action="/backup/folder">${csrfInput(csrf)}<div class="panel-head"><div><h2>Диск или папка ${chip(c.kind === 'folder')} ${info(['Подходит для внешнего диска (USB), второго диска в компьютере и сетевой папки (NAS, другой компьютер дома).','Облако видит одну папку, куда подключён такой диск. Подключить диск к облаку нужно один раз на самом сервере (это делается через настройки сервера, не из админки): в инструкции по копии это раздел «Подключить диск».','Здесь можно указать подпапку на этом диске, например <b>dvcloud</b>. Пусто — копия ляжет в корень диска, в папку <b>dvcloud-backup</b>.','Если ниже написано, что диск не подключён, сначала подключите его, и только потом запускайте копию.'])}</h2>
+<p class="muted">USB-диск, второй диск или сетевая папка, подключённые к серверу.</p></div></div>
+${b.rootAvailable ? '<p class="muted">Диск для копий подключён.</p>' : c.kind !== 'folder' ? '' : '<div class="msg error">Диск для копий не подключён к облаку. Подробнее в «Инфо» выше.</div>'}
+<div class="setting"><div><b>Подпапка на диске</b> ${info('Необязательно. Латиница, цифры, пробел, точка и дефис. Например: dvcloud')}</div><input type="text" name="folder" value="${esc(c.folder)}" maxlength="64" placeholder="например dvcloud" aria-label="Подпапка на диске"></div>
+<p><button class="primary" type="submit">Выбрать этот способ</button></p></form></section>
+<section class="panel"><form method="post" action="/backup/ssh">${csrfInput(csrf)}<div class="panel-head"><div><h2>Другой сервер по SSH ${chip(c.kind === 'ssh')} ${info(['Копия уходит на другой компьютер или сервер через SSH — защищённое соединение по ключу, пароль нигде не вводится.','<b>Адрес сервера</b> — IP или имя компьютера, куда копировать. <b>Порт</b> — обычно 22. <b>Пользователь</b> — под кем входить на том сервере. <b>Папка на сервере</b> — полный путь, например /srv/dvcloud-backup; её создадут сами.','Ниже показан <b>открытый ключ</b> облака. Его нужно один раз добавить на том сервере в файл ~/.ssh/authorized_keys пользователя. Открытый ключ не секрет, его можно копировать.','Закрытый ключ остаётся внутри облака и нигде не показывается. Первое подключение запоминает отпечаток сервера; если он потом изменится, копирование остановится.'])}</h2>
+<p class="muted">Другой компьютер или удалённый сервер.</p></div></div>
+<div class="setting"><div><b>Адрес сервера</b> ${info('IP-адрес (например 192.168.1.20) или имя (например backup.example.org).')}</div><input type="text" name="host" value="${esc(c.host)}" maxlength="253" aria-label="Адрес сервера"></div>
+<div class="setting"><div><b>Порт</b> ${info('Обычно 22. Другой, если на сервере SSH настроен иначе.')}</div><input class="narrow" type="number" name="port" min="1" max="65535" value="${esc(c.port)}" aria-label="Порт"></div>
+<div class="setting"><div><b>Пользователь</b> ${info('Под каким пользователем входить на сервер. Ему нужно право записи в папку ниже.')}</div><input type="text" name="user" value="${esc(c.user)}" maxlength="32" aria-label="Пользователь"></div>
+<div class="setting"><div><b>Папка на сервере</b> ${info('Полный путь: латиница, цифры и . _ / ~ + @ -, без пробелов. Папка создаётся сама.')}</div><input type="text" name="path" value="${esc(c.path)}" maxlength="200" placeholder="/srv/dvcloud-backup" aria-label="Папка на сервере"></div>
+<div class="setting"><div><b>Открытый ключ облака</b> ${info('Скопируйте эту строку целиком и добавьте новой строкой в файл ~/.ssh/authorized_keys пользователя на сервере назначения. Это открытая часть ключа: показывать её безопасно.')}</div></div>
+${b.publicKey ? `<div class="secret" style="font-size:13px">${esc(b.publicKey)}</div>` : '<p class="muted">Ключ появится после сохранения этого способа.</p>'}
+<p><button class="primary" type="submit">Выбрать этот способ</button></p></form></section>
+<section class="panel"><form method="post" action="/backup/options">${csrfInput(csrf)}<h2>Что копировать ${info(['Отметьте, что входит в копию. Можно взять только файлы, только базу или всё вместе.','<b>Файлы</b> — ваши фото и видео. <b>База данных</b> — люди, альбомы, группы людей, настройки: без неё после восстановления файлы лежат, но облако не знает, чьи они и в каких альбомах.','Для полного восстановления облака нужны и файлы (точная копия), и база.'])}</h2>
+<div class="setting"><div><b>Фото и видео</b></div><label class="switch"><input type="checkbox" name="withFiles" value="1"${c.withFiles ? ' checked' : ''}><span>Да</span></label></div>
+<div class="setting"><div><b>База данных</b></div><label class="switch"><input type="checkbox" name="withDb" value="1"${c.withDb ? ' checked' : ''}><span>Да</span></label></div>
+<h2 style="margin-top:14px">Как копировать файлы ${info(['<b>Точная копия</b> — файлы лежат так же, как в облаке (папка files). Из неё облако восстанавливается целиком. Это основной вариант.','<b>Копия по людям</b> — понятная раскладка для человека: папка на каждого, внутри годы и месяцы, нормальные имена. Её можно открыть без облака, например на компьютере. Для восстановления облака она не нужна. Файлы в ней настоящие, места нужно столько же, сколько и под точную копию, ведь одинаковые фото разных людей повторяются.','Можно включить обе.','Если вы позже поменяете раскладку или имена, прежняя раскладка в копии останется: старые папки сами не стираются.'])}</h2>
+<div class="setting"><div><b>Точная копия (для восстановления)</b></div><label class="switch"><input type="checkbox" name="mirror" value="1"${c.mirror ? ' checked' : ''}><span>Да</span></label></div>
+<div class="setting"><div><b>Копия по людям (смотреть без облака)</b></div><label class="switch"><input type="checkbox" name="readable" value="1"${c.readable ? ' checked' : ''}><span>Да</span></label></div>
+<div class="setting"><div><b>Подпапки в копии по людям</b> ${info(`Как раскладывать файлы каждого человека: все в одной папке, по годам (2026) или по годам и месяцам (2026/05). Для больших библиотек удобнее месяцы.`)}</div><select name="folders" aria-label="Подпапки в копии по людям"><option value="none"${c.folders === 'none' ? ' selected' : ''}>без подпапок</option><option value="year"${c.folders === 'year' ? ' selected' : ''}>по годам</option><option value="month"${c.folders === 'month' ? ' selected' : ''}>по годам и месяцам</option></select></div>
+<div class="setting"><div><b>Имена файлов в копии по людям</b> ${info(`«С датой впереди» делает имена вида 2026-05-10_123000_IMG_1.jpg: они сортируются по времени съёмки даже в самой простой программе. Одинаковые имена получают « (2)».`)}</div><select name="names" aria-label="Имена файлов в копии по людям"><option value="original"${c.names === 'original' ? ' selected' : ''}>как в облаке</option><option value="date"${c.names === 'date' ? ' selected' : ''}>с датой впереди</option></select></div>
+<div class="setting"><div><b>Папки по альбомам в копии по людям</b> ${info(`Рядом с папкой people появится папка albums: для каждого альбома своя папка с его файлами.`)}</div><label class="switch"><input type="checkbox" name="withAlbums" value="1"${c.withAlbums ? ' checked' : ''}><span>Да</span></label></div>
+<h2 style="margin-top:14px">Дополнительно</h2>
+<div class="setting"><div><b>Точная копия: и то, что в корзинах</b> ${info(`Если выключить, файлы, удалённые людьми в корзину, в точную копию не попадут.`)}</div><label class="switch"><input type="checkbox" name="withTrash" value="1"${c.withTrash ? ' checked' : ''}><span>Да</span></label></div>
+<div class="setting"><div><b>Точная копия: миниатюры и копии видео</b> ${info(`Облако строит их само, обычно их не копируют: это сильно экономит место. После восстановления они построятся заново.`)}</div><label class="switch"><input type="checkbox" name="withDerived" value="1"${c.withDerived ? ' checked' : ''}><span>Да</span></label></div>
+<div class="setting"><div><b>Ограничение скорости, Мбит/с</b> ${info('0 — без ограничения. Для копии на другой сервер по интернету разумно поставить, например, 20.')}</div><input class="narrow" type="number" name="limitMbit" min="0" max="10000" value="${esc(c.limitMbit)}" aria-label="Ограничение скорости, Мбит/с"></div>
+<p><button class="primary" type="submit">Сохранить</button></p></form></section>` : '';
+  return layout('DV Cloud: копия', `
+${topBar('backup', csrf)}
+${flashHtml(flash, loadError)}
+${statusPanel}
+${folderCard}
+<section class="panel"><h2>Как восстановить из копии ${info(['В копии лежат две части: папка <b>files</b> (все фото и видео как они лежат в облаке) и папка <b>db</b> (выгрузки базы данных, последние семь).','Восстановление делается на сервере и описано по шагам в файле docs/BACKUP.md в репозитории облака.','Проверить, что выгрузка читается, можно командой pg_restore --list на файле из папки db.'])}</h2>
+<p class="muted">Пошаговая инструкция лежит в docs/BACKUP.md.</p></section>`, running ? '<meta http-equiv="refresh" content="3">' : '');
 }
 
 export function secretPage({ title, login, password }) {

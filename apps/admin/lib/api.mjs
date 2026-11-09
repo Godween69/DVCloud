@@ -60,6 +60,32 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     // Пересборка и подсчёт групп идут в фоне: сервер отвечает сразу, ход виден в обзоре медиа (peopleJob).
     rebuildPeople: () => call('POST', '/internal/media/people/rebuild', {}),
     peopleHint: () => call('POST', '/internal/media/people/hint', {}),
+    // Просмотр файлов: только чтение. Фильтры: login, from, to (YYYY-MM-DD), q, album, before, limit.
+    browse: (f) => call('GET', '/internal/browse/files?' + new URLSearchParams(Object.entries(f).filter(([, v]) => v !== undefined && v !== '')).toString()),
+    // Раздача альбомов.
+    albumShares: async (id) => (await call('GET', `/internal/albums/${encodeURIComponent(id)}/shares`)).logins,
+    share: (id, login) => call('PUT', `/internal/albums/${encodeURIComponent(id)}/shares/${encodeURIComponent(login)}`, undefined),
+    unshare: (id, login) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}/shares/${encodeURIComponent(login)}`),
+    unshareAll: (id) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}/shares`),
+    shareAll: (id) => call('POST', `/internal/albums/${encodeURIComponent(id)}/share-all`, {}),
+    shareEverything: () => call('POST', '/internal/share-everything', { confirm: true }),
+    // Сырой ответ (миниатюра или сам файл) для передачи в браузер как есть; Range пробрасывается, чтобы видео перематывалось.
+    raw: async (path, range) => {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10000);
+      try {
+        return await fetchImpl(baseUrl + path, { headers: { authorization: `Bearer ${token}`, ...(range ? { range } : {}) }, signal: ctl.signal });
+      } catch {
+        throw new ApiError(0, 'Сервер DVCloud недоступен');
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    // Резервная копия: настройки места, проверка, запуск по кнопке и ход.
+    backup: () => call('GET', '/internal/backup'),
+    saveBackup: (patch) => call('PATCH', '/internal/backup/config', patch),
+    checkBackup: () => call('POST', '/internal/backup/check', {}),
+    startBackup: () => call('POST', '/internal/backup/start', {}),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };

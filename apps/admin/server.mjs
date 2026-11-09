@@ -3,14 +3,14 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, storagePage, usersPage } from './lib/html.mjs';
+import { CSS, backupPage, filesPage, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
 
 const COOKIE = 'dvcloud_admin';
 const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; object-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
   'referrer-policy': 'no-referrer',
@@ -155,9 +155,90 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     return redirect(res, '/storage');
   }
 
+  // Раздача альбомов. Ошибки сервера (например «нет такого человека») показываются как есть.
+  async function sharingAction(session, res, path, form) {
+    const ok = (text) => { session.flash = { kind: 'ok', text }; };
+    try {
+      let m;
+      if (path === '/sharing/everything') {
+        if ((form.get('word') ?? '').trim().toLowerCase() !== 'раздать') throw new ApiError(400, 'Чтобы раздать всё, впишите слово «раздать»');
+        const r = await api.shareEverything();
+        ok(`Готово: альбомов ${r.albums}, новых доступов открыто: ${r.links}`);
+      } else if ((m = /^\/sharing\/(\d{1,18})\/(add|remove|all|hide)$/.exec(path))) {
+        const login = form.get('login') ?? '';
+        if (m[2] === 'add') { await api.share(m[1], login); ok(`Альбом открыт: ${login}`); }
+        else if (m[2] === 'remove') { await api.unshare(m[1], login); ok(`Доступ закрыт: ${login}`); }
+        else if (m[2] === 'hide') { const r = await api.unshareAll(m[1]); ok(`Альбом скрыт у всех, снято доступов: ${r.removed}`); }
+        else { const r = await api.shareAll(m[1]); ok(`Альбом открыт всем, новых доступов: ${r.added}`); }
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/sharing');
+  }
+
+  // Миниатюра или файл целиком: берётся с внутреннего порта и отдаётся как есть (Range для перемотки видео).
+  async function proxyFile(req, res, id, what) {
+    let r;
+    try {
+      r = await api.raw(`/internal/browse/files/${id}/${what}`, req.headers.range);
+    } catch {
+      return send(res, 502, 'text/plain; charset=utf-8', 'Сервер DVCloud недоступен');
+    }
+    if (!r.ok && r.status !== 206) return send(res, r.status === 404 ? 404 : 502, 'text/plain; charset=utf-8', r.status === 404 ? 'Нет такого файла или миниатюры' : 'Ошибка сервера');
+    const head = { 'content-type': r.headers.get('content-type') ?? 'application/octet-stream', ...SECURITY_HEADERS, 'cache-control': what === 'thumb' ? 'private, max-age=3600' : 'no-store' };
+    for (const h of ['content-length', 'content-range', 'accept-ranges']) if (r.headers.get(h)) head[h] = r.headers.get(h);
+    res.writeHead(r.status, head);
+    if (!r.body) return res.end();
+    const { Readable } = await import('node:stream');
+    const body = Readable.fromWeb(r.body);
+    res.on('close', () => body.destroy());
+    body.on('error', () => res.destroy());
+    body.pipe(res);
+  }
+
+  // Резервная копия. Значения проверяет сервер DVCloud, его текст ошибки показывается как есть.
+  async function backupAction(session, res, path, form) {
+    try {
+      if (path === '/backup/folder') {
+        await api.saveBackup({ kind: 'folder', folder: (form.get('folder') ?? '').trim() });
+        session.flash = { kind: 'ok', text: 'Выбрано: диск или папка' };
+      } else if (path === '/backup/ssh') {
+        const port = Number(form.get('port') ?? '22');
+        await api.saveBackup({ kind: 'ssh', host: (form.get('host') ?? '').trim(), port, user: (form.get('user') ?? '').trim(), path: (form.get('path') ?? '').trim() });
+        session.flash = { kind: 'ok', text: 'Выбрано: другой сервер по SSH. Добавьте открытый ключ на сервер назначения и нажмите «Проверить место»' };
+      } else if (path === '/backup/options') {
+        const on = (k) => form.get(k) === '1';
+        await api.saveBackup({
+          withFiles: on('withFiles'), withDb: on('withDb'), withTrash: on('withTrash'), withDerived: on('withDerived'),
+          mirror: on('mirror'), readable: on('readable'), withAlbums: on('withAlbums'),
+          folders: form.get('folders') ?? 'year', names: form.get('names') ?? 'original', limitMbit: Number(form.get('limitMbit') || 0),
+        });
+        session.flash = { kind: 'ok', text: 'Настройки копии сохранены' };
+      } else if (path === '/backup/check') {
+        const r = await api.checkBackup();
+        session.flash = { kind: 'ok', text: `Место доступно: ${r.where}${r.freeBytes === null ? '' : `, свободно ${formatSize(r.freeBytes)}`}` };
+      } else if (path === '/backup/start') {
+        await api.startBackup();
+        session.flash = { kind: 'ok', text: 'Копирование запущено. Ход виден ниже, страница обновляется сама' };
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/backup');
+  }
+
   async function doAction(session, req, res, path, form) {
     if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
     if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
+    if (path.startsWith('/sharing/')) return sharingAction(session, res, path, form);
+    if (path.startsWith('/backup/')) return backupAction(session, res, path, form);
     const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
     try {
       if (path === '/users') {
@@ -241,6 +322,60 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
       }
       return html(res, 200, usersPage({ users, csrf: session.csrf, flash, loadError }));
+    }
+
+    let fm;
+    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})\/(thumb|view)$/.exec(path))) return proxyFile(req, res, fm[1], fm[2] === 'thumb' ? 'thumb' : 'original');
+
+    if (req.method === 'GET' && path === '/files') {
+      const flash = session.flash;
+      session.flash = null;
+      const q = new URL(req.url, 'http://x').searchParams;
+      const get = (k) => (q.get(k) ?? '').trim();
+      const filter = { login: get('login'), from: get('from'), to: get('to'), q: get('q'), album: get('album'), before: get('before') };
+      let data = null;
+      let users = [];
+      let albums = [];
+      let loadError = null;
+      try {
+        [users, albums] = await Promise.all([api.list(), api.albums()]);
+        data = await api.browse({ ...filter, limit: 60 });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, filesPage({ data, users, albums, filter, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/sharing') {
+      const flash = session.flash;
+      session.flash = null;
+      let albums = [];
+      let users = [];
+      let loadError = null;
+      try {
+        [albums, users] = await Promise.all([api.albums(), api.list()]);
+        albums = await Promise.all(albums.map(async (a) => ({ ...a, logins: await api.albumShares(a.id) })));
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+        albums = [];
+      }
+      return html(res, 200, sharingPage({ albums, users, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && path === '/backup') {
+      const flash = session.flash;
+      session.flash = null;
+      let b = null;
+      let loadError = null;
+      try {
+        b = await api.backup();
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, backupPage({ b, csrf: session.csrf, flash, loadError }));
     }
 
     if (req.method === 'GET' && path === '/media') {

@@ -34,8 +34,9 @@ import { YandexController } from './yandex/yandex.controller';
 import { YandexService } from './yandex/yandex.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
-import { InternalHealthController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
+import { InternalHealthController, InternalBackupController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
 import { AdminStorageService } from './files/admin-storage.service';
+import { BackupService } from './files/backup.service';
 import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
 import { UsersService } from './users/users.service';
@@ -70,8 +71,8 @@ export class InternalModule {
     return {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, PeopleService, AdminMediaService],
+      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController, InternalBackupController],
+      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, PeopleService, AdminMediaService, BackupService],
     };
   }
 }
