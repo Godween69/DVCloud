@@ -91,7 +91,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { 
       ) : (
         <img src={thumbUrl(file.id, !!box)} alt="" loading="lazy" decoding="async" onLoad={() => setReady(true)} onError={() => setBroken(true)}
           ref={(el) => { if (el && !ready && el.complete && el.naturalWidth > 0) setReady(true); }}
-          className={`size-full object-cover will-change-[opacity] transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none group-hover:scale-[1.04] ${ready ? 'opacity-100' : 'opacity-0'}`} />
+          className={`size-full object-cover will-change-[opacity] transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.25,0.8,0.25,1)] motion-reduce:transition-none group-hover:scale-[1.025] group-hover:delay-[250ms] ${ready ? 'opacity-100' : 'opacity-0'}`} />
       )}
       {video && <FilmFrame />}
       {selecting && (
