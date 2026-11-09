@@ -9,6 +9,7 @@ import { FileRow } from './files.service';
 import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 import { MediaSettings, MediaSettingsService } from './media-settings';
+import { readableImage } from './heic';
 
 const run = promisify(execFile);
 
@@ -32,11 +33,13 @@ async function videoFrame(path: string): Promise<Buffer> {
 // Сторона квадратной миниатюры в пикселях. Самая крупная плитка: 240 px на ПК и около 185 px на телефоне;
 // 560 хватает с запасом для экранов с плотностью 2-3 и весит десятки килобайт.
 export const THUMB_SIZE = 560;
+// «Умная плитка» показывает снимки в их пропорциях, поэтому для неё строится ещё одна миниатюра: целиком, без обрезки, длинная сторона до FIT_SIZE.
+export const FIT_SIZE = 640;
 
 // Превью (миниатюры) фото: маленькие WebP, лежат в thumbs/<id файла-оригинала>.webp. Они общие: если один и тот же файл
 // лежит у нескольких людей, миниатюра одна. Доступ по-прежнему проверяется по записи человека (см. FilesController),
 // а стирается миниатюра только вместе с файлом-оригиналом. Строятся при первом запросе и сразу после загрузки;
-// оригиналы не трогаются. Если картинку не разобрать (HEIC, видео, битый файл), миниатюры нет, и сайт показывает значок.
+// оригиналы не трогаются. HEIC перед этим переводится в JPEG (см. heic.ts). Если картинку не разобрать (битый файл), миниатюры нет, и сайт показывает значок.
 // Старые миниатюры (thumbs/<id человека>/<id записи>.webp) переносятся на новое место один раз при запуске.
 @Injectable()
 export class ThumbsService implements OnModuleInit {
@@ -59,6 +62,11 @@ export class ThumbsService implements OnModuleInit {
   // Общий путь по файлу-оригиналу. У записи без оригинала (очень старые данные) остаётся путь по записи.
   rel(f: Pick<FileRow, 'owner_id' | 'id' | 'blob_id'>): string {
     return f.blob_id ? `thumbs/${f.blob_id}.webp` : this.legacyRel(f);
+  }
+
+  // Миниатюра целиком (в пропорциях снимка) для «Умной плитки».
+  fitRel(f: Pick<FileRow, 'owner_id' | 'id' | 'blob_id'>): string {
+    return f.blob_id ? `thumbs-fit/${f.blob_id}.webp` : `thumbs-fit/${f.owner_id}-${f.id}.webp`;
   }
 
   previewRel(f: Pick<FileRow, 'owner_id' | 'id' | 'blob_id'>): string {
@@ -120,6 +128,25 @@ export class ThumbsService implements OnModuleInit {
     return p;
   }
 
+  // Миниатюра целиком (не квадрат) для «Умной плитки». Строится при первом запросе, потом берётся с диска.
+  async ensureFit(f: FileRow): Promise<string | null> {
+    const key = `f${this.key(f)}`;
+    if (!ThumbsService.supportsThumb(f.mime) || this.failed.has(key)) return null;
+    const rel = this.fitRel(f);
+    try {
+      await stat(this.storage.abs(rel));
+      return rel;
+    } catch {
+      /* ещё нет */
+    }
+    let p = this.inflight.get(key);
+    if (!p) {
+      p = this.build(f, rel, 'fit').finally(() => this.inflight.delete(key));
+      this.inflight.set(key, p);
+    }
+    return p;
+  }
+
   // Превью для просмотра: строится при первом открытии, потом берётся с диска. null: сделать нельзя, сайт откроет оригинал.
   async ensurePreview(f: FileRow): Promise<string | null> {
     const key = `p${this.key(f)}`;
@@ -160,6 +187,7 @@ export class ThumbsService implements OnModuleInit {
   // Файл-оригинал стёрт: миниатюра и превью уходят вместе с ним.
   async removeBlob(blobId: string): Promise<void> {
     await this.storage.remove(`thumbs/${blobId}.webp`);
+    await this.storage.remove(`thumbs-fit/${blobId}.webp`);
     await this.storage.remove(`previews/${blobId}.webp`);
   }
 
@@ -232,23 +260,25 @@ export class ThumbsService implements OnModuleInit {
     }
   }
 
-  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' = 'thumb', st?: MediaSettings): Promise<string | null> {
+  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' | 'fit' = 'thumb', st?: MediaSettings): Promise<string | null> {
     return this.slot(async () => {
       const out = this.storage.abs(rel);
       const tmp = `${out}.${process.pid}.tmp`;
       try {
         await mkdir(dirname(out), { recursive: true });
-        const src = f.mime.startsWith('video/') ? await videoFrame(this.storage.abs(f.path)) : this.storage.abs(f.path);
+        const src = f.mime.startsWith('video/') ? await videoFrame(this.storage.abs(f.path)) : await readableImage(this.storage.abs(f.path)); // HEIC сначала превращается в JPEG
         const img = sharp(src, { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: typeof src === 'string' }).rotate(); // поворот по метке камеры (EXIF)
         await (kind === 'thumb'
           ? img.resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover', position: 'centre' }).webp({ quality: 70, effort: 2 })
-          : img.resize(st!.previewMaxSide, st!.previewMaxSide, { fit: 'inside', withoutEnlargement: true }).webp({ quality: st!.previewQuality, effort: 3 })
+          : kind === 'fit'
+            ? img.resize(FIT_SIZE, FIT_SIZE, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 70, effort: 2 })
+            : img.resize(st!.previewMaxSide, st!.previewMaxSide, { fit: 'inside', withoutEnlargement: true }).webp({ quality: st!.previewQuality, effort: 3 })
         ).toFile(tmp);
         await rename(tmp, out);
         return rel;
       } catch {
         await rm(tmp, { force: true });
-        this.failed.add(kind === 'thumb' ? this.key(f) : `p${this.key(f)}`);
+        this.failed.add(kind === 'thumb' ? this.key(f) : kind === 'fit' ? `f${this.key(f)}` : `p${this.key(f)}`);
         return null;
       }
     });

@@ -126,11 +126,12 @@ export class FilesController {
   }
 
   // Миниатюра фото (маленький WebP). id неизменен и содержимое тоже, поэтому браузер может хранить её год.
-  // Если миниатюру сделать нельзя (видео, HEIC, битый файл), отвечаем 404, и сайт показывает значок.
+  // Если миниатюру сделать нельзя (битый файл), отвечаем 404, и сайт показывает значок.
   @Get(':id/thumb')
-  async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
+  async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string, @Query('fit') fit?: string): Promise<void> {
     const f = await this.files.getReadable(req.user.id, id);
-    const rel = await this.thumbs.ensure(f); // скрытые файлы тоже: они остаются на месте
+    // fit=1: миниатюра целиком в пропорциях снимка (для «Умной плитки»), иначе квадрат
+    const rel = fit === '1' ? await this.thumbs.ensureFit(f) : await this.thumbs.ensure(f); // скрытые файлы тоже: они остаются на месте
     if (!rel) {
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.status(404).json({ message: 'Миниатюры нет' });
@@ -150,7 +151,7 @@ export class FilesController {
     });
   }
 
-  // Превью для просмотра (WebP до 2000 px). Если сделать нельзя (видео, HEIC), 404, и сайт открывает оригинал.
+  // Превью для просмотра (WebP до 2000 px). Если сделать нельзя (видео, битый файл), 404, и сайт открывает оригинал.
   @Get(':id/preview')
   async preview(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
     const f = await this.files.getReadable(req.user.id, id);

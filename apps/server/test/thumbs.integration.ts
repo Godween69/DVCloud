@@ -7,10 +7,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { startEnv } from './helpers/filesenv';
+import { TINY_HEIC } from './helpers/heic-fixture';
 
 // Настоящая картинка: 1200x800 с меткой поворота «на 90 градусов», после поворота должна стать 800x1200.
 async function photo(color: string): Promise<Buffer> {
   return sharp({ create: { width: 1200, height: 800, channels: 3, background: color } }).jpeg({ quality: 90 }).withMetadata({ orientation: 6 }).toBuffer();
+}
+
+function hasHeif(): boolean {
+  for (const c of ['heif-dec', 'heif-convert']) {
+    try {
+      execFileSync(c, ['--version'], { stdio: 'ignore' });
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+    }
+  }
+  return false;
 }
 
 describe('миниатюры (настоящий Postgres и диск)', () => {
@@ -78,6 +91,40 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('у HEIC-фото есть миниатюра и превью (раньше было 404), оригинал отдаётся как был', { skip: !hasHeif() && 'нет libheif-tools' }, async () => {
+    const up = await upload(e.anna, 'IMG_0001.heic', TINY_HEIC);
+    assert.equal(up.status, 201);
+    const id = up.json.file.id;
+    const t = await api('GET', `/api/files/${id}/thumb`, { cookie: e.anna });
+    assert.equal(t.status, 200, 'миниатюра HEIC');
+    assert.equal(t.headers.get('content-type'), 'image/webp');
+    assert.equal((await sharp(t.buf).metadata()).width, 560);
+    const p = await api('GET', `/api/files/${id}/preview`, { cookie: e.anna });
+    assert.equal(p.status, 200, 'превью HEIC для просмотра');
+    assert.equal((await sharp(p.buf).metadata()).format, 'webp');
+    const o = await api('GET', `/api/files/${id}`, { cookie: e.anna });
+    assert.equal(o.status, 200);
+    assert.deepEqual(o.buf, TINY_HEIC, 'оригинал не изменён');
+  });
+
+  it('миниатюра «вписанная» (?fit=1) сохраняет пропорции, лежит отдельно, а в списке есть поля width и height', async () => {
+    const wide = await sharp({ create: { width: 1200, height: 300, channels: 3, background: '#2266dd' } }).jpeg().toBuffer();
+    const up = await upload(e.anna, 'wide-fit.jpg', wide);
+    assert.equal(up.status, 201);
+    const id = up.json.file.id;
+    const t = await api('GET', `/api/files/${id}/thumb?fit=1`, { cookie: e.anna });
+    assert.equal(t.status, 200);
+    const m = await sharp(t.buf).metadata();
+    assert.equal(m.width, 640, 'длинная сторона 640');
+    assert.equal(m.height, 160, 'пропорции 4:1 сохранены');
+    assert.ok((await e.walk(join(e.dataDir, 'thumbs-fit'))).length >= 1, 'лежит в своей папке');
+    const sq = await api('GET', `/api/files/${id}/thumb`, { cookie: e.anna });
+    assert.equal((await sharp(sq.buf).metadata()).width, 560, 'обычная миниатюра прежняя');
+    const list = await api('GET', '/api/files?limit=200', { cookie: e.anna });
+    const item = (list.json.files ?? list.json.items).find((x: { id: string }) => x.id === id);
+    assert.ok(item && 'width' in item && 'height' in item, 'поля есть (число или null, пока отпечаток не посчитан)');
   });
 
   it('окончательное удаление записи не трогает общую миниатюру: она уходит вместе с файлом-оригиналом', async () => {
