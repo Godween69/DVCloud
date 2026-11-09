@@ -24,6 +24,8 @@ body {
   --glass: rgba(255, 255, 255, 0.058);     /* заливка стеклянных панелей */
   --glass-strong: rgba(18, 22, 38, 0.82);  /* для меню и окон, где нужен читаемый фон */
   --glass-line: rgba(255, 255, 255, 0.11);
+  --bar-bg: rgba(14, 17, 30, 0.9);          /* верхняя и нижняя панели: плотные, чтобы значки читались над любым фото */
+  --lens-base: rgba(30, 34, 54, 1);
   --glass-shine: rgba(255, 255, 255, 0.14);
   transition: --aur-a 1.4s ease, --aur-b 1.4s ease;
 }
@@ -32,6 +34,8 @@ body {
   --glass: rgba(255, 255, 255, 0.62);
   --glass-strong: rgba(255, 255, 255, 0.9);
   --glass-line: rgba(15, 23, 42, 0.09);
+  --bar-bg: rgba(255, 255, 255, 0.94);
+  --lens-base: rgba(255, 255, 255, 1);
   --glass-shine: rgba(255, 255, 255, 0.9);
 }
 :root[data-section='library']     { --aur-a: #7c3aed; --aur-b: #4f46e5; }
@@ -78,6 +82,8 @@ body {
   -webkit-backdrop-filter: blur(24px) saturate(1.5);
   backdrop-filter: blur(24px) saturate(1.5);
 }
+/* Панели навигации: почти сплошной фон, лёгкое размытие только как мягкий переход */
+.glass.glass-bar { background: var(--bar-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 /* Если браузер не умеет размывать фон, панели остаются читаемыми */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass { background: var(--glass-strong); }

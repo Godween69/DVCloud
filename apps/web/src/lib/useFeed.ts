@@ -24,13 +24,13 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   useEffect(() => { atRef.current = null; setAt(null); }, [albumId, person]);
 
   const loadMore = useCallback(
-    async (reset = false) => {
+    async (reset = false, clear = false) => {
       if (!reset && (busy.current || done.current)) return;
       const my = reset ? ++gen.current : gen.current;
       if (reset) {
         cursor.current = null;
         done.current = false;
-        if (albumId || person) {
+        if (albumId || person || clear) {
           setFiles([]);
           setLoaded(false);
         }
@@ -90,7 +90,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const jump = useCallback(async (to: string | null) => {
     atRef.current = to;
     setAt(to);
-    await loadMore(true);
+    await loadMore(true, true); // старая лента убирается сразу: экран откликается на нажатие, а новые данные приходят следом
   }, [loadMore]);
 
   // Новый файл попадает наверх ленты; пока выше есть ещё не загруженные новые файлы, он покажется при догрузке.

@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
+import type { Album, AlbumRef, AlbumShow, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -117,6 +117,7 @@ export const api = {
   albums: () => request<{ albums: Album[] }>('GET', '/api/albums').then((r) => r.albums),
   albumCreate: (name: string) => request<{ album: Album }>('POST', '/api/albums', { name }).then((r) => r.album),
   albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
+  albumShow: (id: string, show: Partial<AlbumShow>) => request<{ album: Album }>('PATCH', `/api/albums/${id}/show`, show).then((r) => r.album),
   albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
   albumFiles: (id: string, before?: string, at?: string, after?: string) => {
     const q = new URLSearchParams({ limit: '200' });
@@ -144,7 +145,8 @@ export const api = {
 };
 
 // Миниатюра для плиток: маленький WebP, который сервер строит сам (для видео и неразбираемых форматов её нет).
-export const thumbUrl = (id: string): string => `/api/files/${id}/thumb`;
+// fit: миниатюра целиком в пропорциях снимка (для «Умной плитки»), иначе квадрат
+export const thumbUrl = (id: string, fit = false): string => `/api/files/${id}/thumb${fit ? '?fit=1' : ''}`;
 
 // Превью для просмотра (WebP до 2000 px): грузится в разы быстрее оригинала.
 export const previewUrl = (id: string): string => `/api/files/${id}/preview`;

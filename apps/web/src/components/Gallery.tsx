@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, LayoutDashboard, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { thumbUrl } from '../api';
 import { prefetchThumbs } from '../lib/prefetch';
@@ -7,13 +7,14 @@ import { currentKey, monthKey, type Month } from '../lib/timeline';
 import { TimeRail } from './TimeRail';
 import { countFiles, formatDateTime } from '../lib/format';
 import { groupByMonth } from '../lib/group';
+import { bento, ratioOf, targetHeight } from '../lib/smart';
 import { isVideo } from '../lib/media';
 import { usePref } from '../lib/prefs';
 import type { FileItem } from '../types';
 
-type Layout = 'months' | 'wall';
+type Layout = 'smart' | 'months' | 'wall';
 type Density = 's' | 'm' | 'l';
-const LAYOUTS = ['months', 'wall'] as const;
+const LAYOUTS = ['smart', 'months', 'wall'] as const;
 const DENSITIES = ['s', 'm', 'l'] as const;
 
 // Размер плиток: на телефоне 4, 3 или 2 в ряд, на широком экране фиксированная сторона плитки.
@@ -51,7 +52,7 @@ export interface QuickView {
   toggle: (id: string) => void;
 }
 
-export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null }) {
+export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null; box?: { w: number; h: number } }) {
   const [broken, setBroken] = useState(false);
   const [ready, setReady] = useState(false); // миниатюра пришла: плавно проявляем её поверх мерцающей заглушки
   // Долгое нажатие пальцем включает выбор (как в Google Фото); следующий за ним «клик» не открывает просмотр.
@@ -60,7 +61,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
   const video = isVideo(file.mime);
   const inQuick = !!quick && quick.has(file.id);
   return (
-    <div data-tile={file.id} className={`group relative aspect-square w-full overflow-hidden rounded-md bg-paper-200 [contain-intrinsic-size:8rem] [content-visibility:auto] dark:bg-gray-800 ${ready || broken ? '' : 'dv-shimmer'}`}>
+    <div data-tile={file.id} style={box ? { width: box.w, height: box.h } : undefined} className={`group relative ${box ? 'shrink-0' : 'aspect-square w-full [contain-intrinsic-size:8rem]'} overflow-hidden rounded-md bg-paper-200 [content-visibility:auto] dark:bg-gray-800 ${ready || broken ? '' : 'dv-shimmer'}`}>
     <button type="button" onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } onOpen(file.id); }}
       onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
       onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
@@ -71,7 +72,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
           <span className="line-clamp-2 w-full break-all text-center text-xs">{file.name}</span>
         </div>
       ) : (
-        <img src={thumbUrl(file.id)} alt="" loading="lazy" decoding="async" onLoad={() => setReady(true)} onError={() => setBroken(true)}
+        <img src={thumbUrl(file.id, !!box)} alt="" loading="lazy" decoding="async" onLoad={() => setReady(true)} onError={() => setBroken(true)}
           ref={(el) => { if (el && !ready && el.complete && el.naturalWidth > 0) setReady(true); }}
           className={`size-full object-cover transition-[transform,opacity] duration-300 motion-reduce:transition-none group-hover:scale-[1.04] ${ready ? 'opacity-100' : 'opacity-0'}`} />
       )}
@@ -100,9 +101,43 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
   );
 }
 
+// «Умная плитка» одного месяца: сетка одинаковых клеток, снимки занимают одну или несколько клеток по своей форме.
+// Ширина берётся у самого блока и пересчитывается при изменении окна.
+function SmartRows({ items, density, render }: { items: FileItem[]; density: Density; render: (f: FileItem, box: { w: number; h: number }) => ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(Math.floor(el.getBoundingClientRect().width));
+    const ro = new ResizeObserver((entries) => setWidth(Math.floor(entries[0].contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const b = useMemo(
+    () => bento(items.map((f) => ({ id: f.id, ratio: ratioOf(f.width, f.height, isVideo(f.mime)) })), width, targetHeight(density, width), 4),
+    [items, width, density],
+  );
+  const byId = useMemo(() => new Map(items.map((f) => [f.id, f])), [items]);
+  return (
+    <div ref={ref} className="min-w-0">
+      {width > 0 && (
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${b.cols}, ${b.cell}px)`, gridAutoRows: `${b.cell}px`, gridAutoFlow: 'dense' }}>
+          {b.items.map((x) => (
+            <div key={x.id} style={{ gridColumn: `span ${x.cs}`, gridRow: `span ${x.rs}` }}>
+              {render(byId.get(x.id) as FileItem, x)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen, onAdd, selecting, selected, onSelecting, onToggle, onToggleMany, empty, quick, chip, onQuickOn, onPickQuick, rail }: Props) {
   const groups = useMemo(() => groupByMonth(files), [files]);
-  const [layout, setLayout] = usePref<Layout>('layout', 'months', LAYOUTS);
+  const [layout, setLayout] = usePref<Layout>('layout', 'smart', LAYOUTS);
+  const [jumping, setJumping] = useState<string | null>(null); // месяц, к которому идёт переход: показываем сразу, не дожидаясь ответа сервера
   const [density, setDensity] = usePref<Density>('density', 'm', DENSITIES);
   const di = DENSITIES.indexOf(density);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -155,7 +190,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
 
   // Какой месяц сейчас на экране: по положению секций месяцев при прокрутке (раз в кадр).
   useEffect(() => {
-    if (!railMonths || layout !== 'months') return;
+    if (!railMonths || layout === 'wall') return;
     let raf = 0;
     const calc = () => {
       raf = 0;
@@ -181,7 +216,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
         else if (r.top >= h * 3) break;
         if (ids.length >= 120) break;
       }
-      if (ids.length) prefetchThumbs(ids);
+      if (ids.length) prefetchThumbs(ids, layout === 'smart');
     };
     const onScroll = () => { if (t) clearTimeout(t); t = setTimeout(run, 400); };
     onScroll();
@@ -189,9 +224,29 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
     return () => { window.removeEventListener('scroll', onScroll); if (t) clearTimeout(t); };
   }, [loaded, files, layout, density]);
 
+  const railEl = railMonths ? (
+        <TimeRail months={railMonths} current={jumping ?? cur ?? (at ?? monthKey(railMonths[0].y, railMonths[0].m))} onPick={(i) => {
+          const x = railMonths[i];
+          const key = monthKey(x.y, x.m);
+          // Месяц уже загружен: просто прокручиваем к нему, ничего не перезагружая.
+          const sec = layout !== 'wall' ? document.querySelector<HTMLElement>(`section[data-month="${key}"]`) : null;
+          if (sec) {
+            const top = sec.getBoundingClientRect().top + window.scrollY - 120;
+            window.scrollTo({ top: Math.max(0, top), behavior: Math.abs(top - window.scrollY) < 4000 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
+            return;
+          }
+          // Месяц ещё не загружен: полоса и экран реагируют сразу (наверх, заглушка вместо старой ленты), а данные приходят в фоне.
+          setJumping(key);
+          window.scrollTo({ top: 0 });
+          void rail?.onJump(i === 0 ? null : key).finally(() => setJumping(null));
+        }} />
+  ) : null;
+
   if (!loaded) {
     return (
-      <div className="mx-auto max-w-[1600px] px-3 py-6 sm:px-6" aria-busy="true" aria-label="Загружаем библиотеку">
+      <div className={`mx-auto max-w-[1600px] px-3 py-6 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`} aria-busy="true" aria-label={jumping ? 'Открываем выбранный месяц' : 'Загружаем библиотеку'}>
+        {railEl}
+        {jumping && <p role="status" className="mb-3 flex items-center gap-2 text-sm text-gray-500"><Loader2 className="size-4 animate-spin" aria-hidden />Открываем выбранный месяц…</p>}
         <div className={`grid gap-1 ${GRID.m}`}>
           {Array.from({ length: 18 }, (_, i) => (
             <div key={i} className="aspect-square animate-pulse rounded-md bg-paper-200 dark:bg-gray-900" />
@@ -224,20 +279,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
 
   return (
     <div className={`mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`}>
-      {railMonths && (
-        <TimeRail months={railMonths} current={cur ?? (at ?? monthKey(railMonths[0].y, railMonths[0].m))} onPick={(i) => {
-          const x = railMonths[i];
-          const key = monthKey(x.y, x.m);
-          // Месяц уже загружен: просто прокручиваем к нему, ничего не перезагружая.
-          const sec = layout === 'months' ? document.querySelector<HTMLElement>(`section[data-month="${key}"]`) : null;
-          if (sec) {
-            const top = sec.getBoundingClientRect().top + window.scrollY - 120;
-            window.scrollTo({ top: Math.max(0, top), behavior: Math.abs(top - window.scrollY) < 4000 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
-            return;
-          }
-          void rail?.onJump(i === 0 ? null : key).then(() => window.scrollTo({ top: 0 }));
-        }} />
-      )}
+      {railEl}
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
         {selecting ? (
           <div className="mr-auto flex items-center gap-1">
@@ -268,6 +310,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
           <button type="button" className={step} disabled={di === DENSITIES.length - 1} onClick={() => setDensity(DENSITIES[di + 1])} aria-label="Крупнее" title="Крупнее"><ZoomIn className="size-4" aria-hidden /></button>
         </div>
         <div className="flex items-center rounded-lg border border-paper-300 p-0.5 dark:border-gray-800" role="group" aria-label="Режим показа">
+          <button type="button" className={seg(layout === 'smart')} aria-pressed={layout === 'smart'} onClick={() => setLayout('smart')}><LayoutDashboard className="size-4" aria-hidden /><span className="hidden sm:inline">Умная плитка</span></button>
           <button type="button" className={seg(layout === 'months')} aria-pressed={layout === 'months'} onClick={() => setLayout('months')}><CalendarDays className="size-4" aria-hidden /><span className="hidden sm:inline">По месяцам</span></button>
           <button type="button" className={seg(layout === 'wall')} aria-pressed={layout === 'wall'} onClick={() => setLayout('wall')}><LayoutGrid className="size-4" aria-hidden /><span className="hidden sm:inline">Сплошная лента</span></button>
         </div>
@@ -290,11 +333,15 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
                 return <button type="button" onClick={() => onToggleMany(g.items.map((f) => f.id), !all)} className="mt-1 text-sm text-violet-700 hover:underline dark:text-violet-300">{all ? 'Снять месяц' : 'Выбрать месяц'}</button>;
               })()}
             </div>
-            <div className={`grid gap-1 ${GRID[density]}`}>
-              {g.items.map((f) => (
-                <Tile key={f.id} file={f} onOpen={tap} onPick={pick} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
-              ))}
-            </div>
+            {layout === 'smart' ? (
+              <SmartRows items={g.items} density={density} render={(f, box) => <Tile key={f.id} file={f} box={box} onOpen={tap} onPick={pick} selecting={selecting} picked={selected.has(f.id)} quick={quick} />} />
+            ) : (
+              <div className={`grid gap-1 ${GRID[density]}`}>
+                {g.items.map((f) => (
+                  <Tile key={f.id} file={f} onOpen={tap} onPick={pick} selecting={selecting} picked={selected.has(f.id)} quick={quick} />
+                ))}
+              </div>
+            )}
           </section>
         ))
       )}

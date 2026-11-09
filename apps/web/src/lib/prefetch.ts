@@ -15,9 +15,11 @@ function saveData(): boolean {
 
 function pump(): void {
   while (active < 2 && queue.length > 0) {
-    const id = queue.shift() as string;
+    const key = queue.shift() as string;
+    const fit = key.startsWith('f:');
+    const id = fit ? key.slice(2) : key;
     if (done.size > LIMIT) done.clear();
-    done.add(id);
+    done.add(key);
     active++;
     const img = new Image();
     img.decoding = 'async';
@@ -25,14 +27,14 @@ function pump(): void {
     const fin = () => { active--; pump(); };
     img.onload = fin;
     img.onerror = fin;
-    img.src = thumbUrl(id);
+    img.src = thumbUrl(id, fit);
   }
 }
 
 // Ставит миниатюры в очередь; прежняя очередь сбрасывается (человек уже листает дальше). Старт после паузы в 600 мс.
-export function prefetchThumbs(ids: string[]): void {
+export function prefetchThumbs(ids: string[], fit = false): void {
   if (saveData() || typeof Image === 'undefined') return;
-  queue = ids.filter((id) => !done.has(id));
+  queue = ids.map((id) => (fit ? `f:${id}` : id)).filter((k) => !done.has(k));
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     const idle = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;

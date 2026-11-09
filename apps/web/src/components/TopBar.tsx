@@ -67,7 +67,8 @@ function AddMenu({ onAdd, onAddFolder }: { onAdd: () => void; onAddFolder: () =>
 
 // Значки разделов; цвет подсветки берётся у текущего раздела (--aur-a, --aur-b задаёт сайт через data-section).
 const NAV_ICON: Record<string, typeof Cloud> = { library: LayoutGrid, photos: Images, videos: Film, screenshots: Smartphone, albums: FolderOpen, people: Users, similar: Copy, trash: Trash2, yandex: CloudDownload };
-const LENS = { background: 'linear-gradient(135deg, color-mix(in srgb, var(--aur-a) 34%, transparent), color-mix(in srgb, var(--aur-b) 26%, transparent))', boxShadow: '0 0 22px -6px var(--aur-a), inset 0 1px 0 rgba(255,255,255,0.18)' };
+// Выбранный раздел: ровная «таблетка» без свечения и размытых краёв — сплошной мягкий оттенок цвета раздела и тонкая чёткая рамка.
+const LENS = { background: 'color-mix(in srgb, var(--aur-a) 22%, var(--lens-base))', boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--aur-a) 38%, transparent)' };
 
 export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, peopleOn, yandexOn, theme, onToggleTheme, onLogout, onHelp, hideDock }: Props) {
   const items = [['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ...(peopleOn ? [['people', 'Люди'] as const] : []), ['similar', 'Похожие'], ['trash', 'Корзина'], ...(yandexOn ? [['yandex', 'Яндекс Диск'] as const] : [])] as const;
@@ -77,7 +78,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
 
   return (
     <>
-    <header className="glass sticky top-0 z-20 rounded-none border-x-0 border-t-0">
+    <header className="glass glass-bar sticky top-0 z-20 rounded-none border-x-0 border-t-0">
       <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-3 px-3 sm:px-6">
         <div className="flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-xl text-white" style={{ background: 'linear-gradient(135deg, var(--aur-a), var(--aur-b))', boxShadow: '0 0 12px -2px color-mix(in srgb, var(--aur-a) 60%, transparent)' }}>
@@ -91,9 +92,9 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
             const Icon = NAV_ICON[id];
             const on = view === id;
             return (
-              <button key={id} type="button" onClick={() => onView(id)} aria-current={on ? 'page' : undefined} title={label} className="group relative flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:text-white">
-                {on && <motion.span layoutId="nav-lens" className="absolute inset-0 rounded-xl" style={LENS} transition={{ type: 'spring', stiffness: 520, damping: 38 }} />}
-                <Icon className="relative size-[18px] transition-transform duration-200 group-hover:scale-110" aria-hidden />
+              <button key={id} type="button" onClick={() => onView(id)} aria-current={on ? 'page' : undefined} title={label} className="group relative flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:text-white">
+                {on && <motion.span layoutId="nav-lens" className="absolute inset-0 rounded-full" style={LENS} transition={{ type: 'spring', stiffness: 520, damping: 38 }} />}
+                <Icon className="relative size-[22px] transition-transform duration-200 group-hover:scale-110" aria-hidden />
                 <span className={`relative ${on ? '' : 'hidden 2xl:inline'}`}>{label}</span>
               </button>
             );
@@ -132,14 +133,14 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
     </header>
       {/* Телефон: разделы внизу, как в мобильных приложениях. Активный раздел подсвечен цветом раздела. */}
       {!hideDock && (
-        <nav aria-label="Разделы" className="glass fixed inset-x-0 bottom-0 z-30 flex gap-0.5 overflow-x-auto rounded-none border-x-0 border-b-0 px-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] pt-1.5 sm:hidden">
+        <nav aria-label="Разделы" className="glass glass-bar fixed inset-x-0 bottom-0 z-30 flex gap-0.5 overflow-x-auto rounded-none border-x-0 border-b-0 px-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] pt-1.5 sm:hidden">
           {items.map(([id, label]) => {
             const Icon = NAV_ICON[id];
             const on = view === id;
             return (
-              <button key={id} type="button" onClick={() => onView(id)} aria-current={on ? 'page' : undefined} className="relative flex min-w-[4.25rem] flex-1 flex-col items-center gap-0.5 rounded-xl px-1.5 py-1.5 text-[11px] font-medium text-gray-600 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:aria-[current=page]:text-white">
-                {on && <motion.span layoutId="dock-lens" className="absolute inset-0 rounded-xl" style={LENS} transition={{ type: 'spring', stiffness: 520, damping: 38 }} />}
-                <Icon className="relative size-5" aria-hidden />
+              <button key={id} type="button" onClick={() => onView(id)} aria-current={on ? 'page' : undefined} className="relative flex min-w-[4.25rem] flex-1 flex-col items-center gap-0.5 rounded-2xl px-1.5 py-1.5 text-[11px] font-medium text-gray-600 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:aria-[current=page]:text-white">
+                {on && <motion.span layoutId="dock-lens" className="absolute inset-0 rounded-full" style={LENS} transition={{ type: 'spring', stiffness: 520, damping: 38 }} />}
+                <Icon className="relative size-6" strokeWidth={1.9} aria-hidden />
                 <span className="relative whitespace-nowrap">{label}</span>
               </button>
             );

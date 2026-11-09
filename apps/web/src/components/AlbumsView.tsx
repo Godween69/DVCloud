@@ -1,10 +1,10 @@
 import { motion } from 'framer-motion';
-import { ArrowLeft, Download, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Trash2, Users, Zap } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowLeft, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Trash2, Users, Zap } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, thumbUrl } from '../api';
 import { albumZipHref } from '../lib/albums';
 import { countFiles } from '../lib/format';
-import type { Album } from '../types';
+import type { Album, AlbumShow } from '../types';
 
 interface ListProps {
   albums: Album[] | null;
@@ -13,6 +13,63 @@ interface ListProps {
   onError: (m: string) => void;
   quickId?: string; // какой альбом сейчас «быстрый»
   onQuick: (a: Album | null) => void; // сделать быстрым или выключить (null)
+}
+
+const SHOW_LABELS: { key: keyof AlbumShow; label: string }[] = [
+  { key: 'library', label: 'Библиотека' },
+  { key: 'photos', label: 'Фото' },
+  { key: 'videos', label: 'Видео' },
+  { key: 'screenshots', label: 'Скриншоты' },
+];
+const hiddenIn = (s: AlbumShow): string[] => SHOW_LABELS.filter((x) => !s[x.key]).map((x) => x.label.toLowerCase());
+
+// Где показывать файлы альбома: выключенный раздел не показывает эти файлы в своей ленте, внутри альбома они видны всегда.
+function ShowMenu({ album, onChanged, onError }: { album: Album; onChanged: (a: Album) => void; onError: (m: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  const hidden = hiddenIn(album.show);
+  async function toggle(key: keyof AlbumShow) {
+    setBusy(true);
+    try {
+      onChanged(await api.albumShow(album.id, { [key]: !album.show[key] }));
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось изменить');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div ref={box} className="relative">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true" title="В каких разделах показывать фото этого альбома" className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-paper-200 dark:hover:bg-gray-800 ${hidden.length ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>
+        {hidden.length ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}<span className="hidden sm:inline">{hidden.length ? 'Скрыт частично' : 'Где виден'}</span>
+      </button>
+      {open && (
+        <div role="group" aria-label="Где показывать альбом" className="glass-strong absolute right-0 top-full z-30 mt-2 w-72 rounded-2xl p-4 shadow-xl">
+          <p className="mb-1 text-sm font-semibold text-gray-900 dark:text-white">Где показывать фото альбома</p>
+          <p className="mb-3 text-xs text-gray-600 dark:text-gray-400">Выключите раздел, и фото из этого альбома пропадут из него. Внутри самого альбома они видны всегда. Файлы не удаляются.</p>
+          <ul className="space-y-1">
+            {SHOW_LABELS.map((x) => (
+              <li key={x.key}>
+                <button type="button" role="switch" aria-checked={album.show[x.key]} disabled={busy} onClick={() => void toggle(x.key)} className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-sm text-gray-800 transition-colors hover:bg-paper-200/70 disabled:opacity-60 dark:text-gray-100 dark:hover:bg-white/5">
+                  <span>{x.label}</span>
+                  <span className={`relative h-5 w-9 rounded-full transition-colors ${album.show[x.key] ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-700'}`}><span className={`absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow transition-transform ${album.show[x.key] ? 'translate-x-4' : ''}`} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Список альбомов: карточки с обложкой и кнопка «Новый альбом».
@@ -70,6 +127,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
                     <p className="truncate text-base font-semibold drop-shadow">{a.name}</p>
                     <p className="text-sm text-white/80">{countFiles(a.count)}</p>
                     {!a.mine && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><Users className="size-3.5 shrink-0" aria-hidden />Поделился: {a.ownerName}</p>}
+                    {a.mine && hiddenIn(a.show).length > 0 && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><EyeOff className="size-3.5 shrink-0" aria-hidden />Скрыт: {hiddenIn(a.show).join(', ')}</p>}
                     {a.mine && a.sharedWith > 0 && <p className="mt-0.5 flex items-center gap-1 text-xs text-white/80"><Share2 className="size-3.5 shrink-0" aria-hidden />Общий, людей: {a.sharedWith}</p>}
                   </div>
                 </button>
@@ -170,6 +228,7 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
         </div>
       ) : (
       <div className="ml-auto flex flex-wrap items-center gap-1">
+        <ShowMenu album={album} onChanged={onRenamed} onError={onError} />
         <button type="button" onClick={onShare} className={ghost}><Share2 className="size-4" aria-hidden /><span className="hidden sm:inline">{album.sharedWith > 0 ? `Общий (${album.sharedWith})` : 'Поделиться'}</span></button>
         <button type="button" onClick={onQuick} aria-pressed={isQuick} title={isQuick ? 'Фото из библиотеки кладутся сюда одним нажатием «+». Нажмите, чтобы выключить' : 'Фото из библиотеки будут кладываться сюда одним нажатием «+»'} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isQuick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'text-violet-700 hover:bg-violet-600/10 dark:text-violet-300'}`}><Zap className="size-4" aria-hidden /><span className="hidden sm:inline">{isQuick ? 'Быстрый альбом' : 'Набирать сюда'}</span></button>
         {!editing && <button type="button" onClick={() => setEditing(true)} className={ghost}><Pencil className="size-4" aria-hidden /><span className="hidden sm:inline">Переименовать</span></button>}

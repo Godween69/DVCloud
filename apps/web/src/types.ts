@@ -8,6 +8,8 @@ export interface FileItem {
   takenAt: string;
   createdAt: string;
   trashedAt: string | null;
+  width?: number | null; // размеры снимка (нужны «Умной плитке»), могут быть неизвестны
+  height?: number | null;
 }
 
 // Похожие фото (см. docs/SIMILAR.md): группа, лучший снимок первым
@@ -50,6 +52,14 @@ export interface Album {
   mine: boolean; // false: альбом чужой, им поделились
   ownerName: string | null;
   sharedWith: number;
+  show: AlbumShow; // где файлы альбома видны в ленте (внутри самого альбома видны всегда)
+}
+
+export interface AlbumShow {
+  library: boolean;
+  photos: boolean;
+  videos: boolean;
+  screenshots: boolean;
 }
 
 export interface Person {

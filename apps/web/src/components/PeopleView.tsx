@@ -9,7 +9,7 @@ const msg = (e: unknown, fallback: string): string => (e instanceof ApiError ? e
 
 function Cover({ p, size }: { p: PeopleGroup; size: string }) {
   return (
-    <span className={`relative block shrink-0 overflow-hidden rounded-full bg-paper-200 dark:bg-gray-800 ${size}`}>
+    <span className={`relative block shrink-0 overflow-hidden rounded-full bg-paper-200 shadow-[0_2px_14px_-4px_rgba(15,23,42,0.35)] ring-1 ring-black/5 dark:bg-gray-800 dark:ring-white/10 ${size}`}>
       <img src={cropUrl(p.cover)} alt="" loading="lazy" draggable={false} className="size-full object-cover" />
     </span>
   );
@@ -83,7 +83,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
           <li key={p.id}>
             <button type="button" onClick={() => (selecting ? toggle(p.id) : onOpen(p))} aria-pressed={selecting ? picked.has(p.id) : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden ? 'opacity-50' : ''}`}>
               <span className="relative block w-full max-w-32">
-                <Cover p={p} size={`aspect-square w-full transition-transform group-hover:scale-105 ${picked.has(p.id) ? 'ring-4 ring-violet-500' : ''}`} />
+                <Cover p={p} size={`aspect-square w-full transition-transform group-hover:scale-105 ${picked.has(p.id) ? 'ring-[3px] ring-violet-400/80' : ''}`} />
                 {selecting && <span className={`absolute right-1 top-1 flex size-6 items-center justify-center rounded-full border-2 border-white ${picked.has(p.id) ? 'bg-violet-600 text-white' : 'bg-black/30'}`}>{picked.has(p.id) && <Check className="size-4" aria-hidden />}</span>}
               </span>
               <span className="w-full min-w-0">
