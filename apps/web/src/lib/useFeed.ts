@@ -4,7 +4,7 @@ import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
 // Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
-export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'videos' | 'screenshots', person?: string) {
+export function useFeed(trashed: boolean, albumId?: string, kind?: 'library' | 'photos' | 'videos' | 'screenshots', person?: string) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -97,5 +97,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const add = useCallback((f: FileItem) => { if (prevRef.current === null) setFiles((prev) => insertSorted(prev, f)); }, []);
   const remove = useCallback((id: string) => setFiles((prev) => prev.filter((f) => f.id !== id)), []);
 
-  return { files, hasMore, loading, loaded, error, loadMore, add, remove, at, jump, hasNewer, loadNewer };
+  const patch = useCallback((ids: Set<string>, change: Partial<FileItem>) => setFiles((prev) => prev.map((f) => (ids.has(f.id) ? { ...f, ...change } : f))), []);
+
+  return { files, hasMore, loading, loaded, error, loadMore, add, remove, patch, at, jump, hasNewer, loadNewer };
 }

@@ -52,6 +52,23 @@ export interface QuickView {
   toggle: (id: string) => void;
 }
 
+// Видео в ленте выглядит как кадр киноплёнки: по бокам тёмные полосы с перфорацией и крупный значок «играть» по центру.
+const HOLES = { backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0 3px, rgba(255,255,255,0.85) 3px 9px, transparent 9px 12px)' };
+function FilmFrame() {
+  const strip = 'pointer-events-none absolute inset-y-0 z-[1] w-4 bg-black/80';
+  return (
+    <>
+      <span className={`${strip} left-0`} aria-hidden><span className="absolute inset-y-0 left-1 w-2 rounded-[1px] opacity-90" style={HOLES} /></span>
+      <span className={`${strip} right-0`} aria-hidden><span className="absolute inset-y-0 right-1 w-2 rounded-[1px] opacity-90" style={HOLES} /></span>
+      <span className="pointer-events-none absolute inset-x-4 top-0 z-[1] h-px bg-white/20" aria-hidden />
+      <span className="pointer-events-none absolute inset-x-4 bottom-0 z-[1] h-px bg-white/20" aria-hidden />
+      <span className="pointer-events-none absolute left-1/2 top-1/2 z-[1] flex size-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white ring-1 ring-white/50">
+        <Play className="size-5 fill-current" aria-hidden />
+      </span>
+    </>
+  );
+}
+
 export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { file: FileItem; onOpen: (id: string) => void; onPick: (id: string) => void; selecting: boolean; picked: boolean; quick: QuickView | null; box?: { w: number; h: number } }) {
   const [broken, setBroken] = useState(false);
   const [ready, setReady] = useState(false); // миниатюра пришла: плавно проявляем её поверх мерцающей заглушки
@@ -61,7 +78,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { 
   const video = isVideo(file.mime);
   const inQuick = !!quick && quick.has(file.id);
   return (
-    <div data-tile={file.id} style={box ? { width: box.w, height: box.h } : undefined} className={`group relative ${box ? 'shrink-0' : 'aspect-square w-full [contain-intrinsic-size:8rem]'} overflow-hidden rounded-md bg-paper-200 [content-visibility:auto] dark:bg-gray-800 ${ready || broken ? '' : 'dv-shimmer'}`}>
+    <div data-tile={file.id} style={box ? { width: box.w, height: box.h } : undefined} className={`group relative ${box ? 'shrink-0' : 'aspect-square w-full [contain-intrinsic-size:8rem]'} isolate transform-gpu overflow-hidden rounded-xl bg-paper-200 shadow-[0_1px_8px_-3px_rgba(15,23,42,0.35)] ring-1 ring-black/5 [content-visibility:auto] dark:bg-gray-800 dark:ring-white/10 ${ready || broken ? '' : 'dv-shimmer'}`}>
     <button type="button" onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } onOpen(file.id); }}
       onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
       onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
@@ -74,13 +91,9 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { 
       ) : (
         <img src={thumbUrl(file.id, !!box)} alt="" loading="lazy" decoding="async" onLoad={() => setReady(true)} onError={() => setBroken(true)}
           ref={(el) => { if (el && !ready && el.complete && el.naturalWidth > 0) setReady(true); }}
-          className={`size-full object-cover transition-[transform,opacity] duration-300 motion-reduce:transition-none group-hover:scale-[1.04] ${ready ? 'opacity-100' : 'opacity-0'}`} />
+          className={`size-full object-cover will-change-[opacity] transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none group-hover:scale-[1.04] ${ready ? 'opacity-100' : 'opacity-0'}`} />
       )}
-      {video && (
-        <span className="pointer-events-none absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-black/50 text-white">
-          <Play className="size-3 fill-current" aria-hidden />
-        </span>
-      )}
+      {video && <FilmFrame />}
       {selecting && (
         <>
           <span className={`pointer-events-none absolute inset-0 transition-colors ${picked ? 'bg-violet-600/25 ring-2 ring-inset ring-violet-500' : 'bg-black/0 group-hover:bg-black/10'}`} />
@@ -280,7 +293,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   return (
     <div className={`mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`}>
       {railEl}
-      <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/90 px-3 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:bg-gray-950/90">
+      <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/95 px-3 py-2 sm:-mx-6 sm:px-6 dark:bg-gray-950/95">
         {selecting ? (
           <div className="mr-auto flex items-center gap-1">
             <button type="button" onClick={() => onSelecting(false)} aria-label="Отменить выбор" title="Отменить выбор" className="flex size-9 items-center justify-center rounded-full text-gray-700 transition-colors hover:bg-paper-200 dark:text-gray-200 dark:hover:bg-gray-800"><X className="size-5" aria-hidden /></button>

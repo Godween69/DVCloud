@@ -48,5 +48,7 @@ export function useSearch() {
 
   const remove = useCallback((id: string) => setFiles((prev) => prev.filter((f) => f.id !== id)), []);
 
-  return { query, setQuery, asked, files, people, loading, error, run, clear, remove };
+  const patch = useCallback((ids: Set<string>, change: Partial<FileItem>) => setFiles((prev) => prev.map((f) => (ids.has(f.id) ? { ...f, ...change } : f))), []);
+
+  return { query, setQuery, asked, files, people, loading, error, run, clear, remove, patch };
 }

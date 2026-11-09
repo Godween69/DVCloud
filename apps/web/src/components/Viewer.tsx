@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Smartphone, Image as ImageIcon, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
-import { api, fileUrl, previewUrl, videoViewUrl } from '../api';
+import { api, fileUrl, previewUrl, thumbUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
 import { isVideo } from '../lib/media';
 import { usePref } from '../lib/prefs';
@@ -16,6 +16,7 @@ interface Props {
   onIndex: (i: number) => void;
   onClose: () => void;
   onTrash?: (f: FileItem) => void; // нет у файлов чужого общего альбома
+  onKind?: (f: FileItem, kind: 'screenshot' | 'photo') => void; // ручная смена «фото» / «скриншот» (только картинки)
   readOnly?: boolean;
   onAlbumChanged: (f: FileItem, r: PickResult) => void;
   onError: (message: string) => void;
@@ -61,7 +62,7 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
@@ -77,6 +78,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const [dragging, setDragging] = useState(false);
   const [faces, setFaces] = usePref<'on' | 'off'>('faces', 'off', ['on', 'off'] as const); // рамки лиц поверх фото
   const [imgTick, setImgTick] = useState(0);
+  const [shown, setShown] = useState(false); // настоящее фото пришло; до этого видна готовая миниатюра, а не пустой экран
   // Альбом каждого файла запоминается (и подгружается для соседних фото заранее), поэтому при листании кнопки не мигают.
   const albums = useRef(new Map<string, AlbumRef[]>());
   const [, bump] = useState(0);
@@ -88,7 +90,15 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
 
   // Новое фото: масштаб сбрасывается.
-  useEffect(() => { setBroken(false); setNoPreview(false); setCopyReady(false); setView(NO_ZOOM); }, [file?.id]);
+  useEffect(() => { setBroken(false); setNoPreview(false); setCopyReady(false); setShown(false); setView(NO_ZOOM); }, [file?.id]);
+  useEffect(() => { setShown(false); }, [noPreview]);
+
+  // Соседние фото подгружаются заранее (и сервер успевает построить их превью), поэтому листание не ждёт.
+  useEffect(() => {
+    for (const n of [files[index + 1], files[index - 1]]) {
+      if (n && !isVideo(n.mime)) { const im = new Image(); im.decoding = 'async'; im.src = previewUrl(n.id); }
+    }
+  }, [files, index]);
 
   // Ролик идёт оригиналом (копии ещё нет): раз в 15 секунд спрашиваем, не готова ли копия. Сервер делает её вне очереди.
   const id = file?.id;
@@ -234,6 +244,11 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
         {people && !video && <button type="button" className={`${btn} ${faces === 'on' ? '!bg-violet-600' : ''}`} onClick={() => setFaces(faces === 'on' ? 'off' : 'on')} aria-pressed={faces === 'on'} aria-label="Показать, кто на фото" title="Кто на фото"><ScanFace className="size-5" aria-hidden /></button>}
         {video && <button type="button" className={btn} onClick={() => setVfit(vfit === 'fit' ? 'orig' : 'fit')} aria-label={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по окну'} title={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по размеру окна'}>{vfit === 'fit' ? <Minimize2 className="size-5" aria-hidden /> : <Maximize2 className="size-5" aria-hidden />}</button>}
+        {onKind && !video && !readOnly && (
+          <button type="button" className={btn} onClick={() => onKind(file, file.screenshot ? 'photo' : 'screenshot')} aria-label={file.screenshot ? 'Это фото, не скриншот' : 'Это скриншот'} title={file.screenshot ? 'Сейчас это скриншот. Нажмите, чтобы считать фото' : 'Сейчас это фото. Нажмите, чтобы считать скриншотом'}>
+            {file.screenshot ? <ImageIcon className="size-5" aria-hidden /> : <Smartphone className="size-5" aria-hidden />}
+          </button>
+        )}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
         {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
       </div>
@@ -242,9 +257,9 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
         {index > 0 && <button type="button" className={`${btn} absolute left-2 z-10 hidden sm:flex`} onClick={() => onIndex(index - 1)} aria-label="Предыдущий"><ChevronLeft className="size-6" aria-hidden /></button>}
         {index < files.length - 1 && <button type="button" className={`${btn} absolute right-2 z-10 hidden sm:flex`} onClick={() => onIndex(index + 1)} aria-label="Следующий"><ChevronRight className="size-6" aria-hidden /></button>}
         <AnimatePresence mode="wait" initial={false}>
-          <motion.div key={file.id} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex size-full items-center justify-center">
+          <motion.div key={file.id} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="relative flex size-full items-center justify-center">
             {video ? (
-              <video key={`${file.id}${noPreview ? 'o' : 'v'}`} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))}
+              <video key={`${file.id}${noPreview ? 'o' : 'v'}`} poster={thumbUrl(file.id, true)} src={noPreview ? fileUrl(file.id) : videoViewUrl(file.id)} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))}
                 onCanPlay={(e) => { if (e.currentTarget.paused && e.currentTarget.currentTime === 0) e.currentTarget.play().catch(() => undefined); }}
                 controls autoPlay playsInline preload="auto" className={`rounded-lg bg-black ${vfit === 'fit' ? 'size-full object-contain' : 'max-h-full max-w-full'}`} />
             ) : broken ? (
@@ -254,10 +269,13 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, readOnly, onAl
                 <a className="rounded-lg bg-violet-600 px-4 py-2 text-white hover:bg-violet-500" href={fileUrl(file.id, true)} download={file.name}>Скачать файл</a>
               </div>
             ) : (
-              <img ref={img} src={noPreview ? fileUrl(file.id) : previewUrl(file.id)} alt={file.name} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} onLoad={() => setImgTick((n) => n + 1)} draggable={false}
+              <>
+              {!shown && <img src={thumbUrl(file.id, true)} alt="" aria-hidden draggable={false} className="pointer-events-none absolute inset-0 size-full rounded-lg object-contain blur-[2px]" />}
+              <img ref={(el) => { img.current = el; if (el && !shown && el.complete && el.naturalWidth > 0) setShown(true); }} src={noPreview ? fileUrl(file.id) : previewUrl(file.id)} alt={file.name} onError={() => (noPreview ? setBroken(true) : setNoPreview(true))} onLoad={() => { setShown(true); setImgTick((n) => n + 1); }} draggable={false}
                 onClick={onImgClick} onContextMenu={onImgContext} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
                 style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transition: dragging ? 'none' : 'transform 90ms ease-out', touchAction: 'none' }}
-                className={`max-h-full max-w-full select-none rounded-lg object-contain ${view.scale > 1 ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`} />
+                className={`relative max-h-full max-w-full select-none rounded-lg object-contain transition-opacity duration-200 ${shown ? 'opacity-100' : 'opacity-0'} ${view.scale > 1 ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer'}`} />
+              </>
             )}
           </motion.div>
         </AnimatePresence>

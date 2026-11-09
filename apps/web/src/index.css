@@ -83,7 +83,7 @@ body {
   backdrop-filter: blur(24px) saturate(1.5);
 }
 /* Панели навигации: почти сплошной фон, лёгкое размытие только как мягкий переход */
-.glass.glass-bar { background: var(--bar-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.glass.glass-bar { background: var(--bar-bg); -webkit-backdrop-filter: none; backdrop-filter: none; } /* фон почти сплошной, размытие не нужно: оно перерисовывалось при каждой прокрутке и тормозило ленту */
 /* Если браузер не умеет размывать фон, панели остаются читаемыми */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass { background: var(--glass-strong); }

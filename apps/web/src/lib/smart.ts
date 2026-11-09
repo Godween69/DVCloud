@@ -44,12 +44,22 @@ export interface Bento {
 export function bento(items: SmartInput[], width: number, target: number, gap: number): Bento {
   const cols = Math.max(3, Math.min(12, Math.round((width + gap) / (target + gap))));
   const cell = width > 0 ? Math.floor((width - gap * (cols - 1)) / cols) : target;
+  let run = 0; // сколько вертикальных кадров подряд (чтобы у человека с одними вертикальными снимками не вышла стена одинаковых столбиков)
   const out = items.map((it, i): BentoItem => {
     let cs = 1;
     let rs = 1;
-    if (it.ratio < 0.8) rs = 2;
-    else if (it.ratio >= 1.35) cs = 2;
-    if (i % 9 === 4 && it.ratio >= 0.8) { cs = 2; rs = 2; }
+    if (it.ratio < 0.8) {
+      // Обычный вертикальный кадр (3:4 с телефона): два столбика, затем крупный 2x2, затем маленький квадрат, и по кругу.
+      // Узкий вертикальный (длинный скриншот) всегда остаётся столбиком, чтобы его не обрезало.
+      const k = run % 4;
+      run++;
+      if (it.ratio < 0.62 || k < 2) rs = 2;
+      else if (k === 2) { cs = 2; rs = 2; }
+    } else {
+      run = 0;
+      if (it.ratio >= 1.35) cs = 2;
+      if (i % 9 === 4) { cs = 2; rs = 2; }
+    }
     return { id: it.id, cs, rs, w: cs * cell + gap * (cs - 1), h: rs * cell + gap * (rs - 1) };
   });
   return { cols, cell, items: out };

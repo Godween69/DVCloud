@@ -10,6 +10,7 @@ export interface FileItem {
   trashedAt: string | null;
   width?: number | null; // размеры снимка (нужны «Умной плитке»), могут быть неизвестны
   height?: number | null;
+  screenshot?: boolean; // картинка считается скриншотом (автоматически или по ручной отметке)
 }
 
 // Похожие фото (см. docs/SIMILAR.md): группа, лучший снимок первым

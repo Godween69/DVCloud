@@ -16,6 +16,16 @@ test('каждый девятый снимок крупный 2x2, но узки
   for (const i of big) assert.equal(i % 9, 4);
 });
 
+test('одни вертикальные снимки не дают стену одинаковых столбиков', () => {
+  const b = bento(Array.from({ length: 40 }, (_, i) => ({ id: String(i), ratio: 0.75 })), 900, 180, 4);
+  const shapes = b.items.map((x) => `${x.cs}x${x.rs}`);
+  assert.ok(new Set(shapes).size >= 3);
+  let run = 0;
+  for (const s of shapes) { run = s === '1x2' ? run + 1 : 0; assert.ok(run <= 2); }
+  // узкий вертикальный (длинный скриншот) всегда столбиком
+  assert.deepEqual(bento(Array.from({ length: 8 }, (_, i) => ({ id: String(i), ratio: 0.56 })), 900, 180, 4).items.map((x) => `${x.cs}x${x.rs}`), Array(8).fill('1x2'));
+});
+
 test('размер плитки в пикселях сходится с клетками и промежутками', () => {
   const b = bento(mk(20), 1000, 180, 4);
   for (const x of b.items) {
