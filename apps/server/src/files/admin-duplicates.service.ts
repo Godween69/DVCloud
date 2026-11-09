@@ -33,6 +33,7 @@ export interface DupBulk {
   failed: number; // пропущено: файлы изменились или группа слишком большая
   bytes: number; // освобождено на диске
   finishedAt: string | null;
+  problems: { group: string; text: string }[]; // почему часть групп пропущена (до 30)
 }
 export interface DupReport {
   computedAt: string | null;
@@ -70,7 +71,7 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
   private groups: DupGroup[] = [];
   private total = 0;
   private reclaim = 0;
-  private bulk: DupBulk = { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null };
+  private bulk: DupBulk = { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null, problems: [] };
 
   constructor(
     @Inject(DbService) private readonly db: DbService,
@@ -177,7 +178,9 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
   // Слияние: в группе остаётся один файл (keep), записи людей на остальные переключаются на него, лишние файлы стираются с диска.
   // Ничего не пропадает у людей: названия, даты съёмки и альбомы сохраняются. Если у человека уже есть живая запись на оставляемый файл,
   // запись на лишний файл убирается, а её альбомы переходят на уцелевшую.
-  async merge(keepId: string, dropIds: unknown): Promise<{ merged: number; removedFiles: number; bytes: number }> {
+  // also: остальные оставляемые файлы той же группы. Они не стираются, но нужны для проверки: цепочка A~B, B~C связывает A и C
+  // только через B, и без B проверка «это одна группа» пропустила бы такую группу зря.
+  async merge(keepId: string, dropIds: unknown, also: string[] = []): Promise<{ merged: number; removedFiles: number; bytes: number }> {
     if (!ID_RE.test(keepId)) throw new NotFoundException('Файл не найден');
     if (!Array.isArray(dropIds) || dropIds.length < 1 || dropIds.length > MAX_MERGE || dropIds.some((x) => typeof x !== 'string' || !ID_RE.test(x))) {
       throw new BadRequestException(`drop: список от 1 до ${MAX_MERGE} номеров файлов`);
@@ -185,8 +188,9 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
     const drops = [...new Set(dropIds as string[])];
     if (drops.includes(keepId)) throw new BadRequestException('Оставляемый файл не может быть в списке удаляемых');
     // Проверяем заново, а не верим экрану: все файлы должны и сейчас считаться дубликатами друг друга.
-    const { items } = await this.load([keepId, ...drops]);
-    if (items.length !== drops.length + 1) throw new ConflictException('Часть файлов уже изменилась. Обновите список дубликатов');
+    const context = [...new Set(also)].filter((x) => x !== keepId && !drops.includes(x) && ID_RE.test(x));
+    const { items } = await this.load([keepId, ...context, ...drops]);
+    if (items.length !== drops.length + 1 + context.length) throw new ConflictException('Часть файлов уже изменилась. Обновите список дубликатов');
     const groups = findDuplicates(items, DEFAULT_DUP);
     if (groups.length !== 1 || groups[0].length !== items.length) throw new ConflictException('Эти файлы уже не считаются дубликатами. Обновите список');
 
@@ -246,7 +250,7 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
     if (this.bulk.running) throw new ConflictException('Удаление уже идёт');
     if (this.scanning) throw new ConflictException('Сейчас идёт поиск дубликатов, подождите минуту и повторите');
     if (!Array.isArray(decisions) || decisions.length < 1 || decisions.length > MAX_SHOWN) throw new BadRequestException(`decisions: список от 1 до ${MAX_SHOWN} групп`);
-    const work: { keep: string[]; drops: string[] }[] = [];
+    const work: { group: string; keep: string[]; drops: string[] }[] = [];
     const seen = new Set<string>();
     for (const d of decisions) {
       const o = (typeof d === 'object' && d !== null ? d : {}) as { group?: unknown; keep?: unknown };
@@ -258,27 +262,29 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
       const all = g.blobs.map((b) => b.blobId);
       const keep = all.filter((id) => (o.keep as string[]).includes(id)); // в порядке списка: лучший первым
       if ((o.keep as string[]).some((id) => !all.includes(id))) throw new ConflictException('Список дубликатов изменился. Обновите страницу');
-      work.push({ keep, drops: all.filter((id) => !keep.includes(id)) });
+      work.push({ group: o.group, keep, drops: all.filter((id) => !keep.includes(id)) });
     }
-    this.bulk = { running: true, total: work.length, done: 0, failed: 0, bytes: 0, finishedAt: null };
+    this.bulk = { running: true, total: work.length, done: 0, failed: 0, bytes: 0, finishedAt: null, problems: [] };
     void this.runBulk(work);
     return { started: work.length };
   }
 
-  private async runBulk(work: { keep: string[]; drops: string[] }[]): Promise<void> {
+  private async runBulk(work: { group: string; keep: string[]; drops: string[] }[]): Promise<void> {
     try {
       for (const g of work) {
         try {
-          if (g.keep.length === 0) throw new Error('ничего не отмечено, группа пропущена');
+          if (g.keep.length === 0) throw new Error('все рамки красные: ничего не оставлено, группа пропущена');
           if (g.drops.length > 0) {
             if (g.drops.length > MAX_MERGE) throw new Error('в группе слишком много файлов, удалите её отдельной кнопкой');
-            const r = await this.merge(g.keep[0], g.drops);
+            const r = await this.merge(g.keep[0], g.drops, g.keep.slice(1));
             this.bulk.bytes += r.bytes;
           }
           if (g.keep.length > 1) await this.db.query('INSERT INTO dup_keep (blob_id) SELECT id FROM blobs WHERE id = ANY($1::bigint[]) ON CONFLICT DO NOTHING', [g.keep]);
         } catch (e) {
           this.bulk.failed++;
-          this.log.warn(`группа ${g.keep} пропущена: ${(e as Error).message}`);
+          const text = (e as Error).message;
+          if (this.bulk.problems.length < 30) this.bulk.problems.push({ group: g.group, text });
+          this.log.warn(`группа ${g.group} (оставить ${g.keep.join(',') || 'ничего'}) пропущена: ${text}`);
         }
         this.bulk.done++;
         await new Promise((res) => setImmediate(res)); // не держим сервер занятым подряд

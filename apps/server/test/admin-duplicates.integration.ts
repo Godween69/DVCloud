@@ -238,4 +238,47 @@ describe('решения по группам дубликатов (настоя�
     for (const id of ids) if ((await e.api('GET', `/api/files/${id}`, { cookie: e.anna })).status === 200) alive++;
     assert.ok(alive >= 4, `живых файлов ${alive}`);
   });
+
+  it('оставлены двое, а третий связан с ними только через второго: группа не пропускается зря', async () => {
+    const S = scene(201, W, H);
+    const ids: string[] = [];
+    for (const [n, q, w] of [['ch-a.jpg', 90, 800], ['ch-b.jpg', 60, 600], ['ch-c.jpg', 40, 400]] as const) {
+      const r = await upload(e.anna, n, await img(S, W, H).resize(w, Math.round((w * H) / W)).jpeg({ quality: q }).toBuffer(), '2026-05-02T10:00:00Z');
+      assert.equal(r.status, 201, JSON.stringify(r.json));
+      ids.push(r.json.file.id);
+    }
+    // ждём, пока посчитаются отпечатки всех трёх
+    const c = new Client({ connectionString: e.dbUrl });
+    await c.connect();
+    try {
+      for (let i = 0; i < 100; i++) {
+        const n = Number((await c.query('SELECT count(*) AS n FROM file_fingerprints WHERE file_id = ANY($1::bigint[])', [ids])).rows[0].n);
+        if (n === 3) break;
+        await new Promise((ok) => setTimeout(ok, 200));
+      }
+      // цепочка: a~b (3 бита), b~c (3 бита), a и c различаются на 6 бит, напрямую не связаны
+      const base = Buffer.from((await c.query('SELECT dhash FROM file_fingerprints WHERE file_id = $1', [ids[0]])).rows[0].dhash as Buffer);
+      const flip = (b: Buffer, bits: number[]) => { const o = Buffer.from(b); for (const k of bits) o[k >> 3] ^= 1 << (k & 7); return o; };
+      await c.query('UPDATE file_fingerprints SET dhash = $2 WHERE file_id = $1', [ids[0], base]);
+      await c.query('UPDATE file_fingerprints SET dhash = $2 WHERE file_id = $1', [ids[1], flip(base, [0, 1, 2])]);
+      await c.query('UPDATE file_fingerprints SET dhash = $2 WHERE file_id = $1', [ids[2], flip(base, [0, 1, 2, 3, 4, 5])]);
+      await c.query('UPDATE file_fingerprints SET tiny = (SELECT tiny FROM file_fingerprints WHERE file_id = $1) WHERE file_id = ANY($2::bigint[])', [ids[0], ids]);
+    } finally { await c.end(); }
+    let g: any = null;
+    for (let i = 0; i < 100 && !g; i++) {
+      await ic('POST', '/internal/duplicates/scan', {});
+      await new Promise((ok) => setTimeout(ok, 300));
+      const rep = (await ic('GET', '/internal/duplicates')).json;
+      if (!rep.scanning) g = rep.groups.find((x: any) => x.blobs.length === 3);
+    }
+    assert.ok(g, 'группа из трёх найдена');
+    const byFile = new Map<string, string>(g.blobs.map((b: any) => [b.fileId, b.blobId]));
+    // оставляем двух ближних к началу цепочки (a и b), стираем c, которая связана только с b
+    const keep = [byFile.get(ids[0])!, byFile.get(ids[1])!];
+    const r = await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: g.id, keep }] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const done = await finished();
+    assert.equal(done.bulk.failed, 0, JSON.stringify(done.bulk.problems));
+    assert.ok(done.bulk.bytes > 0, 'третий файл стёрт');
+  });
 });

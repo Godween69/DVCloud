@@ -537,7 +537,16 @@ export function dupPage({ report: d, page, per, csrf, flash, loadError }) {
 <p>В каждой группе останутся кадры с зелёной рамкой, остальные (красные) будут стёрты с диска. Группа, где все рамки красные, пропускается. Это необратимо.</p>
 <button class="danger" type="submit">Да, применить</button></details>`
           : ''}${last}</div>`;
-      body = `${head}<div class="legend"><span class="g"><i></i>зелёная рамка: оставить</span><span class="r"><i></i>красная рамка: убрать</span><span class="muted">Нажмите на полосу под картинкой, чтобы сменить. Удерживайте левую кнопку на картинке, чтобы рассмотреть.</span></div>
+      // Итог последнего применения сверху страницы (а не только внизу списка): сколько обработано и почему часть групп пропущена.
+      const lastRun = (() => {
+        const k = d.bulk;
+        if (!k) return '';
+        if (k.running) return `<div class="msg ok"><b>Идёт применение:</b> ${k.done} из ${k.total} групп, освобождено ${esc(formatSize(k.bytes))}. Страница обновляется сама.</div>`;
+        if (!k.finishedAt) return '';
+        const why = (k.problems ?? []).map((p) => `<li>Группа ${esc(p.group)}: ${esc(p.text)}</li>`).join('');
+        return `<div class="msg ${k.failed ? 'error' : 'ok'}"><b>Последнее применение:</b> групп обработано ${k.done} из ${k.total}, освобождено ${esc(formatSize(k.bytes))}${k.failed ? `, не получилось: ${k.failed}` : ''}.${why ? `<ul>${why}</ul>` : ''}</div>`;
+      })();
+      body = `${head}${lastRun}<div class="legend"><span class="g"><i></i>зелёная рамка: оставить</span><span class="r"><i></i>красная рамка: убрать</span><span class="muted">Нажмите на полосу под картинкой, чтобы сменить. Удерживайте левую кнопку на картинке, чтобы рассмотреть.</span></div>
 <form method="post" action="/storage/duplicates/apply">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}">${pager}${groups}${bar}${pager}</form>`;
     }
   }
@@ -547,7 +556,7 @@ ${flashHtml(flash, loadError)}
 <section class="panel"><div class="panel-head"><div><h2>Дубликаты по всему хранилищу ${info(['Облако само ищет в фоне снимки, которые лежат в нескольких качествах: оригинал и уменьшенная копия из мессенджера. Сравниваются файлы на диске у всех людей вместе.','Рамка: зелёная оставить, красная убрать. Лучший кадр (больше пикселей) отмечен зелёным заранее; можно оставить два или три.','Оставленные вместе кадры больше не предлагаются как дубликаты. Лишние файлы стираются с диска, записи людей переключаются на оставленный; названия, даты съёмки и альбомы сохраняются. Это необратимо.','«Применить к этой странице» обрабатывает группы, которые видны сейчас. Потом откроется следующая страница или те же номера, но уже следующие группы.','Серии похожих кадров здесь не ищутся: с ними работают люди у себя на сайте.'])}</h2></div>
 <form method="post" action="/storage/duplicates/scan">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}"><button type="submit">Проверить сейчас</button></form></div>
 ${body}
-</section>`, d?.bulk?.running ? '<meta http-equiv="refresh" content="3">' : '', SCRIPT);
+</section>`, (d?.bulk?.running || d?.scanning) ? '<meta http-equiv="refresh" content="3">' : '', SCRIPT);
 }
 
 // ── Просмотр одного файла ──

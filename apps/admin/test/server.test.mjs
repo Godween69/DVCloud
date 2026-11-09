@@ -43,7 +43,7 @@ describe('админка', () => {
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
         if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
         if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z', note: 'Очистил корзину: anna. Был в альбомах: Отпуск', orphanedAt: '2026-11-02T09:00:00.000Z' }] });
-        if (req.method === 'GET' && req.url.startsWith('/internal/duplicates?')) return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, mergeable: 1, bulk: { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null }, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/duplicates?')) return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, mergeable: 1, bulk: { running: false, total: 2, done: 2, failed: 1, bytes: 14110, finishedAt: '2026-11-09T16:50:00.000Z', problems: [{ group: '7', text: 'все рамки красные: ничего не оставлено, группа пропущена' }] }, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
         if (req.method === 'POST' && req.url === '/internal/duplicates/scan') return j(200, { queued: true });
         if (req.method === 'POST' && req.url === '/internal/duplicates/merge') return j(200, { merged: 1, removedFiles: 0, bytes: 14110 });
         if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
@@ -257,6 +257,8 @@ describe('админка', () => {
     assert.ok(page.includes('class="dupstrip" for="k-1-1"') && page.includes('800×600'), 'полоса-переключатель и размеры');
     assert.ok(page.includes('class="zoomhold"') && page.includes('/files/11/zoom') && page.includes('/files/11/thumb'), 'приближение зажатием');
     assert.ok(page.includes('<script src="/viewer.js"></script>'));
+    assert.ok(page.includes('Последнее применение:') && page.includes('Группа 7: все рамки красные'), 'итог и причины пропусков видны сверху');
+    assert.ok(page.indexOf('Последнее применение:') < page.indexOf('class="dupgroup"'));
     assert.ok(!page.includes('type="checkbox" id="k-1-1" name="keep" value="1:1" checked class'), 'флажок скрыт стилем, не атрибутом');
     const mf = page.slice(page.indexOf('action="/storage/duplicates/apply"'));
     assert.ok(!mf.slice(0, mf.indexOf('</form>')).includes('name="word"'), 'слово вводить не нужно');
