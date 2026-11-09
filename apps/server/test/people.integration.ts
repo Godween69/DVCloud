@@ -117,6 +117,25 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await api('GET', '/api/files?person=abc', { cookie: e.anna })).status, 400);
   });
 
+  it('обложку группы можно выбрать самому по фото и вернуть автоматический выбор', async () => {
+    const a = (await people(e.anna)).people[0];
+    const auto = a.cover;
+    const files = (await api('GET', `/api/files?person=${a.id}`, { cookie: e.anna })).json.files;
+    const pick = files.find((f: any) => f.name === 'a2.jpg');
+    const faces = (await api('GET', `/api/people/file/${pick.id}`, { cookie: e.anna })).json.faces;
+    assert.equal(faces.length, 1);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: pick.id })).status, 200);
+    assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, faces[0].id, 'обложка стала лицом с выбранного фото');
+    // на чужом для группы фото (синий Дима) обложку не поставить; чужой человек и неверные значения отклоняются
+    const dimaFile = (await api('GET', '/api/files', { cookie: e.anna })).json.files.find((f: any) => f.name === 'b0.jpg');
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: dimaFile.id })).status, 404);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.boris, { fileId: pick.id })).status, 404);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: 5 })).status, 400);
+    assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, faces[0].id, 'неудачные попытки обложку не меняют');
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: null })).status, 200);
+    assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, auto, 'после сброса снова выбирается сама');
+  });
+
   it('чужая жизнь закрыта: другой человек не видит ни группы, ни имена, ни файлы', async () => {
     assert.deepEqual((await people(e.boris)).people, []);
     const a = (await people(e.anna)).people[0];
@@ -345,5 +364,24 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal(now.length, list.length - 1);
     assert.equal(now.find((x: any) => x.id === keep.id).name, 'Оставить');
     assert.ok(now.find((x: any) => x.id === keep.id).count >= other.count, `было ${total} файлов у двух групп, склеилось`);
+  });
+
+  it('убрать из группы сразу много фото: они уходят из группы и обратно не возвращаются', async () => {
+    const g = (await people(e.anna)).people[0];
+    const files = (await api('GET', `/api/files?person=${g.id}`, { cookie: e.anna })).json.files;
+    assert.ok(files.length >= 2, 'в группе есть что убирать');
+    const drop = files.slice(0, 2).map((f: any) => f.id);
+    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.boris, { fileIds: drop })).status, 404, 'чужую группу не тронуть');
+    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: [] })).status, 400);
+    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: ['x'] })).status, 400);
+    const ok = await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: drop });
+    assert.equal(ok.status, 201);
+    assert.equal(ok.json.removed, 2);
+    const left = (await api('GET', `/api/files?person=${g.id}`, { cookie: e.anna })).json.files.map((f: any) => f.id);
+    assert.equal(left.length, files.length - 2);
+    for (const id of drop) assert.ok(!left.includes(id));
+    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: drop })).json.removed, 0, 'повтор ничего не меняет');
+    const rej = await dbq<{ n: string }>(`SELECT count(*) AS n FROM detection_rejects WHERE person_id = ${g.id}`);
+    assert.ok(Number(rej[0].n) >= 2, 'запомнено, что их в эту группу возвращать нельзя');
   });
 });

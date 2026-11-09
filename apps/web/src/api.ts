@@ -62,7 +62,7 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
+  list: (trashed: boolean, before?: string, kind?: 'library' | 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
@@ -73,7 +73,7 @@ export const api = {
     return request<{ files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/files?${q}`);
   },
   // Оглавление ленты по месяцам для полосы времени (месяцы считаются в часовом поясе браузера, как и заголовки месяцев).
-  timeline: (kind?: 'photos' | 'videos' | 'screenshots', person?: string) => {
+  timeline: (kind?: 'library' | 'photos' | 'videos' | 'screenshots', person?: string) => {
     const q = new URLSearchParams({ tz: timeZone() });
     if (kind) q.set('kind', kind);
     if (person) q.set('person', person);
@@ -87,6 +87,9 @@ export const api = {
   createPerson: (detectionId: string, name: string) => request<{ id: string }>('POST', '/api/people', { detectionId, name }),
   renamePerson: (id: string, name: string | null) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { name }),
   hidePerson: (id: string, hidden: boolean) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { hidden }),
+  setKind: (kind: 'screenshot' | 'photo' | 'auto', ids: string[]) => request<{ changed: number }>('POST', '/api/files/kind', { kind, ids }),
+  setPersonCover: (id: string, fileId: string | null) => request<{ ok: true }>('PUT', `/api/people/${encodeURIComponent(id)}/cover`, { fileId }),
+  removeManyFromPerson: (id: string, fileIds: string[]) => request<{ removed: number }>('POST', `/api/people/${encodeURIComponent(id)}/not-them`, { fileIds }),
   mergePeople: (into: string, from: string) => request<unknown>('POST', `/api/people/${encodeURIComponent(into)}/merge`, { from }),
   mergePeopleMany: (into: string, from: string[]) => request<{ merged: number }>('POST', '/api/people/merge-many', { into, from }),
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),

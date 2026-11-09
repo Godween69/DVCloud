@@ -82,6 +82,15 @@ export class PeopleController {
     return { ok: true };
   }
 
+  // Обложка группы: {fileId: "123"} (лицо этого человека на выбранном фото) или {fileId: null} (вернуть автоматический выбор).
+  @Put(':id/cover')
+  async cover(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
+    const o = obj(body);
+    if (o.fileId !== null && typeof o.fileId !== 'string') throw new BadRequestException('fileId: номер файла или null');
+    await this.people.setCover(req.user.id, id, o.fileId);
+    return { ok: true };
+  }
+
   // Объединить: {from: "13"} переходит в :id.
   @Post(':id/merge')
   @HttpCode(200)
@@ -105,6 +114,12 @@ export class PeopleController {
   async remove(@Req() req: Req_, @Param('id') id: string): Promise<{ ok: true }> {
     await this.people.remove(req.user.id, id);
     return { ok: true };
+  }
+
+  // «Это не они» для многих файлов сразу: {fileIds: ["1","2"]}.
+  @Post(':id/not-them')
+  async notThemMany(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ removed: number }> {
+    return { removed: await this.people.notThemMany(req.user.id, id, obj(body).fileIds) };
   }
 
   // «Это не он»: убрать человека с этого файла.

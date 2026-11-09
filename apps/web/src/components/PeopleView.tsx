@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, Loader2, Pencil, PawPrint, Trash2, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, Image as ImageIcon, Loader2, Pencil, PawPrint, Trash2, UserRound, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl } from '../api';
 import { countFiles } from '../lib/format';
@@ -119,7 +119,10 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
 }
 
 // Шапка страницы человека: имя (правится на месте), скрыть, объединить с другой группой, распустить.
-export function PersonHeader({ person, others, count, onBack, onChanged, onGone, onError }: {
+export function PersonHeader({ person, others, count, coverPick, onCoverPick, onResetCover, onBack, onChanged, onGone, onError }: {
+  coverPick: boolean; // включён выбор обложки: следующее нажатие на фото делает его обложкой
+  onCoverPick: (on: boolean) => void;
+  onResetCover: () => void;
   person: PeopleGroup;
   others: PeopleGroup[]; // другие группы того же вида для объединения
   count: number | null;
@@ -179,12 +182,20 @@ export function PersonHeader({ person, others, count, onBack, onChanged, onGone,
           <p className="text-sm text-gray-600 dark:text-gray-400">{countFiles(count ?? person.count)}{person.hidden ? ' · скрыта из списка' : ''}</p>
         </div>
         <div className="flex flex-wrap gap-1">
+          <button type="button" onClick={() => onCoverPick(!coverPick)} aria-pressed={coverPick} className={small}><ImageIcon className="size-4" aria-hidden />Обложка</button>
           <button type="button" onClick={hide} disabled={busy} className={small}>{person.hidden ? <Eye className="size-4" aria-hidden /> : <EyeOff className="size-4" aria-hidden />}{person.hidden ? 'Вернуть в список' : 'Скрыть'}</button>
           {others.length > 0 && <button type="button" onClick={() => { setMerging((v) => !v); setConfirm(false); }} aria-expanded={merging} className={small}><Combine className="size-4" aria-hidden />Это тот же человек</button>}
           <button type="button" onClick={() => { setConfirm((v) => !v); setMerging(false); }} aria-expanded={confirm} className={small}><Trash2 className="size-4" aria-hidden />Распустить</button>
         </div>
       </div>
 
+      {coverPick && (
+        <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-violet-300/60 bg-violet-500/10 p-3 text-sm text-gray-800 dark:border-violet-400/30 dark:text-gray-100">
+          <span className="min-w-0 flex-1">Нажмите на фото ниже: лицо с него станет обложкой этой группы.</span>
+          <button type="button" onClick={onResetCover} className="rounded-lg px-3 py-1.5 hover:bg-black/5 dark:hover:bg-white/10">Выбирать автоматически</button>
+          <button type="button" onClick={() => onCoverPick(false)} className="rounded-lg px-3 py-1.5 hover:bg-black/5 dark:hover:bg-white/10">Отмена</button>
+        </div>
+      )}
       {merging && (
         <div className="mt-3 glass rounded-xl p-3">
           <p className="mb-2 text-sm text-gray-700 dark:text-gray-300">Выберите, к кому присоединить эти фото. Эта группа исчезнет.</p>

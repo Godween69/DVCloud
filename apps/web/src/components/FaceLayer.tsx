@@ -116,9 +116,10 @@ function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDo
         </ul>
       )}
       {text.trim() && <p className="mt-2 text-xs text-white/50">{existing ? `Это «${existing.name}», уже знакомый.` : `Новый человек: «${text.trim()}».`}</p>}
+      {face.personId && <p className="mt-3 text-xs text-white/50">Если это не тот человек, фото уйдёт из группы и туда больше не вернётся.</p>}
       {face.personId && (
         <button type="button" disabled={busy} onClick={() => void notThem()} className="mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50">
-          <UserMinus className="size-4" aria-hidden />Это не {face.name ?? 'он'}
+          <UserMinus className="size-4 shrink-0" aria-hidden />{face.name ? `Убрать из группы «${face.name}»` : 'Убрать из этой группы'}
         </button>
       )}
     </div>

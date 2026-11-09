@@ -53,7 +53,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const [sharing, setSharing] = useState(false); // окно «Поделиться альбомом»
   const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
 
-  const library = useFeed(false); // всё вместе
+  const library = useFeed(false, undefined, 'library'); // фото и видео без скриншотов
   const photos = useFeed(false, undefined, 'photos'); // картинки без скриншотов
   const videos = useFeed(false, undefined, 'videos');
   const shots = useFeed(false, undefined, 'screenshots');
@@ -61,6 +61,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const albumFeed = useFeed(false, album?.id);
   const [peopleList, setPeopleList] = useState<PeopleList | null>(null); // люди и питомцы (см. docs/PEOPLE.md)
   const [showHiddenPeople, setShowHiddenPeople] = useState(false);
+  const [coverPick, setCoverPick] = useState(false); // на странице человека: следующее нажатие на фото выбирает обложку
   const [person, setPerson] = useState<PeopleGroup | null>(null); // открытая страница человека (внутри вкладки «Люди»)
   const personFeed = useFeed(false, undefined, undefined, person?.id);
   const search = useSearch();
@@ -95,7 +96,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   useEffect(() => {
     if (!railKind) return;
     let stop = false;
-    const load = railKind.startsWith('album:') ? api.albumTimeline(railKind.slice(6)) : railKind.startsWith('person:') ? api.timeline(undefined, railKind.slice(7)) : api.timeline(railKind === 'all' ? undefined : (railKind as 'photos' | 'videos' | 'screenshots'));
+    const load = railKind.startsWith('album:') ? api.albumTimeline(railKind.slice(6)) : railKind.startsWith('person:') ? api.timeline(undefined, railKind.slice(7)) : api.timeline(railKind === 'all' ? 'library' : (railKind as 'photos' | 'videos' | 'screenshots'));
     load.then((r) => { if (!stop) setTl({ k: railKind, months: r.months }); }).catch(() => {});
     return () => { stop = true; };
   }, [railKind, usage?.count]);
@@ -296,6 +297,35 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
   }
 
+  // Ручная смена «фото» / «скриншот». Видео не меняются. Лента, где снимок теперь лишний, сразу его убирает.
+  async function changeKind(ids: string[], kind: 'screenshot' | 'photo'): Promise<void> {
+    const imgs = new Set(active.files.filter((f) => ids.includes(f.id) && f.mime.startsWith('image/')).map((f) => f.id));
+    if (imgs.size === 0) { say('Видео не меняют вид: это только для картинок'); return; }
+    try {
+      await api.setKind(kind, [...imgs]);
+      const leaves = (view === 'photos' || view === 'library') ? kind === 'screenshot' : view === 'screenshots' ? kind === 'photo' : false;
+      if (leaves) imgs.forEach((id) => active.remove(id)); else active.patch(imgs, { screenshot: kind === 'screenshot' });
+      say(kind === 'screenshot' ? `В скриншотах: ${imgs.size}` : `Теперь это фото: ${imgs.size}`);
+      endSelect();
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось');
+    }
+  }
+
+  async function removeSelectedFromPerson() {
+    if (!person) return;
+    const ids = [...selected];
+    try {
+      const n = (await api.removeManyFromPerson(person.id, ids)).removed;
+      ids.forEach((id) => personFeed.remove(id));
+      reloadPeople();
+      say(n > 0 ? `Убрано из группы: ${n}. В эту группу они больше не попадут` : 'В этой группе этих фото уже нет');
+      endSelect();
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось');
+    }
+  }
+
   function selectionPicked(r: PickResult) {
     const ids = picker ?? [];
     const a = r.album;
@@ -314,8 +344,18 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     </div>
   );
 
+  useEffect(() => { setCoverPick(false); }, [person?.id]);
+  function chooseCover(fileId: string) {
+    if (!person) return;
+    api.setPersonCover(person.id, fileId).then(() => { setCoverPick(false); reloadPeople(); say('Обложка обновлена'); }).catch((e) => say(e instanceof Error ? e.message : 'Не получилось поменять обложку'));
+  }
+  function resetCover() {
+    if (!person) return;
+    api.setPersonCover(person.id, null).then(() => { setCoverPick(false); reloadPeople(); say('Обложка снова выбирается автоматически'); }).catch((e) => say(e instanceof Error ? e.message : 'Не получилось'));
+  }
+
   const gallery = (feed: typeof library, empty?: ReactNode, timeline = false) => (
-    <Gallery rail={timeline && tl && tl.k === railKind ? { months: tl.months, at: feed.at, hasNewer: feed.hasNewer, onJump: feed.jump, onNewer: feed.loadNewer } : null} files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => setViewer({ id })} onAdd={() => input.current?.click()}
+    <Gallery rail={timeline && tl && tl.k === railKind ? { months: tl.months, at: feed.at, hasNewer: feed.hasNewer, onJump: feed.jump, onNewer: feed.loadNewer } : null} files={feed.files} loaded={feed.loaded} loading={feed.loading} hasMore={feed.hasMore} error={feed.error} onMore={() => feed.loadMore()} onOpen={(id) => (coverPick && person ? chooseCover(id) : setViewer({ id }))} onAdd={() => input.current?.click()}
       quick={quick.target ? { name: quick.target.name, has: quick.has, toggle: (id) => { void quickTile(id); } } : null} chip={quick.saved ? { name: quick.saved.name, on: quick.on } : null} onQuickOn={quick.setOn} onPickQuick={() => setTargetPicker(true)}
       selecting={selecting} selected={selected} onSelecting={(on) => (on ? setSelecting(true) : endSelect())} onToggle={(id) => setSelected((s) => toggled(s, id))} onToggleMany={(ids, on) => setSelected((s) => setMany(s, ids, on))}
       empty={empty ?? (inAlbum ? <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">В альбоме пока нет файлов. Откройте фото в библиотеке и нажмите «В альбом» или выберите сразу много кнопкой «Выбрать».</p> : undefined)} />
@@ -332,7 +372,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <TopBar onHelp={() => setHelpOpen(true)} hideDock={selecting} user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} yandexOn={yandexOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
-      <motion.main key={`${view}:${album?.id ?? ''}:${person?.id ?? ''}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease: 'easeOut' }} className="pb-16 sm:pb-0">
+      <motion.main key={`${view}:${album?.id ?? ''}:${person?.id ?? ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: 'easeOut' }} className="pb-16 sm:pb-0">
         {view === 'library' && gallery(library, undefined, true)}
         {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'), true)}
         {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'), true)}
@@ -356,8 +396,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         {view === 'people' && !person && <PeopleView list={peopleList} showHidden={showHiddenPeople} onShowHidden={setShowHiddenPeople} onOpen={(p) => { setPerson(p); endSelect(); }} onReload={() => reloadPeople()} />}
         {view === 'people' && person && (
           <>
-            <PersonHeader person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
-              onBack={() => { setPerson(null); endSelect(); reloadPeople(); }} onChanged={(p) => { setPerson(p); reloadPeople(); }} onGone={(t) => { setPerson(null); reloadPeople(); say(t); }} onError={say} />
+            <PersonHeader coverPick={coverPick} onCoverPick={setCoverPick} onResetCover={resetCover} person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
+              onBack={() => { setPerson(null); setCoverPick(false); endSelect(); reloadPeople(); }} onChanged={(p) => { setPerson(p); reloadPeople(); }} onGone={(t) => { setPerson(null); reloadPeople(); say(t); }} onError={say} />
             {gallery(personFeed, <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">Файлов с этим человеком пока нет.</p>, true)}
           </>
         )}
@@ -377,7 +417,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <AnimatePresence>
         {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum || inPerson) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
-            onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
+            onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} inPerson={inPerson} onRemoveFromPerson={() => { void removeSelectedFromPerson(); }} kinds={view === 'screenshots' ? ['photo'] : view === 'photos' || view === 'library' ? ['screenshot'] : ['screenshot', 'photo']} onKind={(k) => { void changeKind([...selected], k); }} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
         )}
       </AnimatePresence>
@@ -387,7 +427,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         onDone={(r) => { const a = r.album; setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={foreign ? undefined : (f) => toTrash(f.id)} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={foreign ? undefined : (f) => toTrash(f.id)} onKind={foreign ? undefined : (f, k) => { void changeKind([f.id], k); }} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
             quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile}
             people={peopleOn ? { groups: (peopleList?.people ?? []).filter((p) => !p.hidden), onChanged: () => { reloadPeople(); if (inPerson) personFeed.loadMore(true); } } : null} />
         )}

@@ -370,9 +370,10 @@ export class PeopleService {
        ), cov AS (
          SELECT DISTINCT ON (dp.person_id) dp.person_id, d.id AS det
          FROM detection_people dp JOIN detections d ON d.id = dp.detection_id
+         JOIN people pc ON pc.id = dp.person_id
          JOIN files f ON f.blob_id = d.blob_id AND f.owner_id = dp.owner_id AND f.trashed_at IS NULL
          WHERE dp.owner_id = $1
-         ORDER BY dp.person_id, (dp.source = 'manual') DESC, d.score * d.w * d.h DESC, d.id
+         ORDER BY dp.person_id, (pc.cover_det = d.id) DESC NULLS LAST, (dp.source = 'manual') DESC, d.score * d.w * d.h DESC, d.id
        )
        SELECT pf.id, pf.name, pf.kind, pf.hidden, pf.n, cov.det FROM pf JOIN cov ON cov.person_id = pf.id
        ORDER BY (pf.name IS NULL), pf.n DESC, pf.id`,
@@ -400,6 +401,27 @@ export class PeopleService {
     ).rows[0];
     if (!d) throw new NotFoundException('Нет такой находки');
     return d;
+  }
+
+  // Обложка группы по выбору человека: лицо этого человека на выбранном фото. fileId = null: вернуть автоматический выбор.
+  async setCover(ownerId: string, id: string, fileId: string | null): Promise<void> {
+    const p = await this.person(ownerId, id);
+    if (fileId === null) {
+      await this.db.query('UPDATE people SET cover_det = NULL WHERE id = $1', [p.id]);
+      return;
+    }
+    if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
+    const d = (
+      await this.db.query<{ id: string }>(
+        `SELECT d.id FROM files f JOIN detections d ON d.blob_id = f.blob_id
+         JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 AND dp.person_id = $3
+         WHERE f.id = $2 AND f.owner_id = $1 AND f.trashed_at IS NULL
+         ORDER BY d.score * d.w * d.h DESC, d.id LIMIT 1`,
+        [ownerId, fileId, p.id],
+      )
+    ).rows[0];
+    if (!d) throw new NotFoundException('На этом фото этого человека нет');
+    await this.db.query('UPDATE people SET cover_det = $2 WHERE id = $1', [p.id, d.id]);
   }
 
   async rename(ownerId: string, id: string, patch: { name?: string | null; hidden?: boolean }): Promise<void> {
@@ -469,6 +491,28 @@ export class PeopleService {
       );
     }
     return r.rows.length;
+  }
+
+  // То же для многих файлов сразу («Убрать из группы» при выборе на странице человека). Возвращает, на скольких файлах группа убрана.
+  // Пересчёт групп эти находки в эту группу больше не вернёт (detection_rejects).
+  async notThemMany(ownerId: string, personId: string, fileIds: unknown): Promise<number> {
+    const p = await this.person(ownerId, personId);
+    if (!Array.isArray(fileIds) || fileIds.length < 1 || fileIds.length > 1000 || fileIds.some((x) => typeof x !== 'string' || !ID_RE.test(x))) {
+      throw new BadRequestException('fileIds: список от 1 до 1000 номеров файлов');
+    }
+    const r = await this.db.query<{ detection_id: string; file_id: string }>(
+      `DELETE FROM detection_people dp USING detections d, files f
+       WHERE dp.person_id = $1 AND dp.owner_id = $2 AND d.id = dp.detection_id AND f.id = ANY($3::bigint[]) AND f.owner_id = $2 AND f.blob_id = d.blob_id
+       RETURNING dp.detection_id, f.id AS file_id`,
+      [p.id, ownerId, fileIds],
+    );
+    if (r.rows.length) {
+      await this.db.query(
+        'INSERT INTO detection_rejects (detection_id, owner_id, person_id) SELECT x, $1, $2 FROM unnest($3::bigint[]) AS x ON CONFLICT DO NOTHING',
+        [ownerId, p.id, r.rows.map((x) => x.detection_id)],
+      );
+    }
+    return new Set(r.rows.map((x) => x.file_id)).size;
   }
 
   // Назначить находку человеку (personId) или снять назначение (null). Это ручной выбор: пересчёт его не трогает.
