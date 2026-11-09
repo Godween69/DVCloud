@@ -4,7 +4,7 @@ import { SessionGuard } from '../auth/session.guard';
 import { asObject, requireJson } from '../http';
 import { UserRow } from '../users/users.service';
 import { parseIds } from './albums.service';
-import { ClaimResult, Estimate, FilesService, MAX_CLAIM, PublicFile, toPublicFile } from './files.service';
+import { ClaimResult, Estimate, FeedKind, FilesService, MAX_CLAIM, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
@@ -50,10 +50,10 @@ export class FilesController {
 
   @Get()
   async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string, @Query('at') at?: string, @Query('tz') tz?: string, @Query('after') after?: string, @Query('person') person?: string): Promise<{ files: PublicFile[]; next: string | null; prev: string | null }> {
-    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots' && kind !== 'library') throw new BadRequestException('kind: library, photos, videos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined, person: typeof person === 'string' ? person : undefined });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as FeedKind | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined, person: typeof person === 'string' ? person : undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next, prev: r.prev };
   }
@@ -61,9 +61,9 @@ export class FilesController {
   // Оглавление по месяцам для полосы времени (до маршрутов с :id).
   @Get('timeline')
   async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string, @Query('person') person?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
-    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots' && kind !== 'library') throw new BadRequestException('kind: library, photos, videos или screenshots');
     res.setHeader('Cache-Control', 'no-store');
-    return { months: await this.files.timeline(req.user.id, kind as 'photos' | 'videos' | 'screenshots' | undefined, typeof tz === 'string' ? tz : 'UTC', { person: typeof person === 'string' ? person : undefined }) };
+    return { months: await this.files.timeline(req.user.id, kind as FeedKind | undefined, typeof tz === 'string' ? tz : 'UTC', { person: typeof person === 'string' ? person : undefined }) };
   }
 
   @Get('usage')
@@ -116,6 +116,17 @@ export class FilesController {
     const o = asObject(req.body);
     if (o.action !== 'hide' && o.action !== 'restore' && o.action !== 'remove') throw new BadRequestException('action: hide, restore или remove');
     return { changed: await this.files.bulk(req.user, o.action, parseIds(o.ids)) };
+  }
+
+  // Ручная смена вида картинки: {kind: 'screenshot' | 'photo' | 'auto', ids}. Видео пропускаются.
+  @Post('kind')
+  @HttpCode(200)
+  async kind(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ changed: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (o.kind !== 'screenshot' && o.kind !== 'photo' && o.kind !== 'auto') throw new BadRequestException('kind: screenshot, photo или auto');
+    return { changed: await this.files.setKind(req.user, o.kind, parseIds(o.ids)) };
   }
 
   // Очистить корзину: записи человека исчезают, файлы на диске остаются до решения администратора.

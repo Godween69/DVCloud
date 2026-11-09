@@ -97,6 +97,30 @@ describe('настройки превью и видео в админке (на�
     }
   });
 
+  it('ручная смена «фото» и «скриншот»: выбор сильнее автоматики, видно в списке, чужое не тронуть', async () => {
+    const kinds = async (k: string) => (await api('GET', `/api/files?kind=${k}`, { cookie: e.anna })).json.files as any[];
+    const post = (cookie: string, body: unknown) => api('POST', '/api/files/kind', { cookie, body: JSON.stringify(body), type: 'application/json' });
+    const photo = (await upload(e.anna, 'plain-photo.jpg', await sharp({ create: { width: 800, height: 600, channels: 3, background: '#445566' } }).jpeg().toBuffer())).json.file.id;
+    const shot = (await upload(e.anna, 'real-shot.png', await sharp({ create: { width: 1080, height: 2340, channels: 3, background: '#665544' } }).png().toBuffer())).json.file.id;
+    assert.ok(await wait(async () => (await kinds('screenshots')).some((f) => f.id === shot)), 'автоматика нашла скриншот');
+    assert.ok((await kinds('photos')).some((f) => f.id === photo));
+    assert.equal((await post(e.anna, { kind: 'screenshot', ids: [photo] })).json.changed, 1);
+    assert.ok((await kinds('screenshots')).some((f) => f.id === photo), 'фото отнесено к скриншотам');
+    assert.ok(!(await kinds('photos')).some((f) => f.id === photo));
+    assert.equal((await kinds('screenshots')).find((f) => f.id === photo).screenshot, true, 'в списке видно, что это скриншот');
+    assert.ok(!(await kinds('library')).some((f) => f.id === photo || f.id === shot), 'в «Библиотеке» скриншотов нет, в том числе отмеченных вручную');
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [shot] })).json.changed, 1);
+    assert.ok((await kinds('photos')).some((f) => f.id === shot), 'скриншот отнесён к фото');
+    assert.ok((await kinds('library')).some((f) => f.id === shot), 'отнесённый к фото попал в «Библиотеку»');
+    assert.ok(!(await kinds('screenshots')).some((f) => f.id === shot));
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [shot] })).json.changed, 0, 'повтор ничего не меняет');
+    assert.equal((await post(e.boris, { kind: 'screenshot', ids: [shot] })).json.changed, 0, 'чужие файлы не тронуть');
+    assert.equal((await post(e.anna, { kind: 'другое', ids: [shot] })).status, 400);
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [] })).status, 400);
+    assert.equal((await post(e.anna, { kind: 'auto', ids: [photo, shot] })).json.changed, 2);
+    assert.ok((await kinds('photos')).some((f) => f.id === photo) && (await kinds('screenshots')).some((f) => f.id === shot), 'после сброса снова решает автоматика');
+  });
+
   it('дата съёмки: метаданные главнее имени файла, имя главнее даты изменения, пояс берётся из настроек', async () => {
     const img = (seed: string) => sharp({ create: { width: 64, height: 48, channels: 3, background: seed } });
     const takenOf = async (id: string) => (await api('GET', '/api/files', { cookie: e.anna })).json.files.find((f: any) => f.id === id).takenAt;

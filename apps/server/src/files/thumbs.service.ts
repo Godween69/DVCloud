@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { link, mkdir, readdir, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import sharp from 'sharp';
@@ -42,9 +42,14 @@ export const FIT_SIZE = 640;
 // оригиналы не трогаются. HEIC перед этим переводится в JPEG (см. heic.ts). Если картинку не разобрать (битый файл), миниатюры нет, и сайт показывает значок.
 // Старые миниатюры (thumbs/<id человека>/<id записи>.webp) переносятся на новое место один раз при запуске.
 @Injectable()
-export class ThumbsService implements OnModuleInit {
+export class ThumbsService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Thumbs');
   private running = 0;
+  private urgentRunning = 0; // построения по просьбе человека (открыл фото): идут вне общей очереди
+  private fitTimer: NodeJS.Timeout | null = null;
+  private fitCursor: string | null = null; // докуда дошла фоновая подготовка миниатюр
+  private fitBusy = false;
+  private fitRestAt = 0; // когда начинать новый круг подготовки
   private readonly waiting: (() => void)[] = [];
   private readonly inflight = new Map<string, Promise<string | null>>();
   private readonly failed = new Set<string>(); // id, по которым разобрать не вышло: повторно не пробуем до перезапуска
@@ -163,7 +168,7 @@ export class ThumbsService implements OnModuleInit {
     if (f.blob_id && (await this.adopt(this.legacyPreviewRel(f), rel))) return rel;
     let p = this.inflight.get(key);
     if (!p) {
-      p = this.build(f, rel, 'preview', st).finally(() => this.inflight.delete(key));
+      p = this.build(f, rel, 'preview', st, true).finally(() => this.inflight.delete(key));
       this.inflight.set(key, p);
     }
     return p;
@@ -194,6 +199,11 @@ export class ThumbsService implements OnModuleInit {
   // Разовый перенос прежних миниатюр и превью (thumbs/<человек>/<запись>.webp) на общие места.
   // Если общая уже есть (или записи больше нет), прежняя просто удаляется. Отметка в корне каталога данных не даёт повторять работу.
   onModuleInit(): void {
+    if (process.env.DVCLOUD_NO_FIT_BACKFILL !== '1') {
+      const ms = Number(process.env.DVCLOUD_FIT_BACKFILL_MS ?? 30_000);
+      this.fitTimer = setInterval(() => void this.backfillFit(), Number.isFinite(ms) && ms >= 100 ? ms : 30_000);
+      this.fitTimer.unref();
+    }
     if (process.env.DVCLOUD_NO_THUMB_MIGRATION === '1') return;
     this.activity.defer(async () => {
       try {
@@ -202,6 +212,48 @@ export class ThumbsService implements OnModuleInit {
         this.log.warn(`перенос миниатюр не завершён: ${(e as Error).message}`);
       }
     });
+  }
+
+  onModuleDestroy(): void {
+    if (this.fitTimer) clearInterval(this.fitTimer);
+  }
+
+  // Фоновая подготовка миниатюр, которых ещё нет (обычных и «вписанных» для умной плитки), от новых файлов к старым.
+  // Идёт только когда нет загрузок, порциями; круг заканчивается, и следующий начинается через 6 часов (подхватит новые и HEIC).
+  // Так плитки сразу берут готовое с диска, а открытие фото не конкурирует с сотней сборок разом.
+  async backfillFit(limit = 25): Promise<number> {
+    if (this.fitBusy || this.activity.busy() || Date.now() < this.fitRestAt) return 0;
+    this.fitBusy = true;
+    let made = 0;
+    try {
+      const r = await this.db.query<FileRow>(
+        `SELECT DISTINCT ON (f.blob_id) f.* FROM files f
+         WHERE f.blob_id IS NOT NULL AND f.trashed_at IS NULL AND (f.mime LIKE 'image/%' OR f.mime LIKE 'video/%')
+           ${this.fitCursor ? 'AND f.blob_id < $2::bigint' : ''}
+         ORDER BY f.blob_id DESC LIMIT $1`,
+        this.fitCursor ? [limit, this.fitCursor] : [limit],
+      );
+      for (const f of r.rows) {
+        if (this.activity.busy()) break; // началась загрузка: уступаем
+        this.fitCursor = f.blob_id;
+        const before = await stat(this.storage.abs(this.fitRel(f))).then(() => true, () => false);
+        if (!before) {
+          await this.ensure(f); // квадратная
+          if ((await this.ensureFit(f)) !== null) made++;
+        }
+        await new Promise((res) => setImmediate(res));
+      }
+      if (r.rows.length < limit) {
+        this.fitCursor = null; // круг закончен
+        this.fitRestAt = Date.now() + 6 * 3600_000;
+      }
+      if (made > 0) this.log.log(`миниатюры заранее: построено ${made}`);
+    } catch (e) {
+      this.log.warn(`подготовка миниатюр не удалась: ${(e as Error).message}`);
+    } finally {
+      this.fitBusy = false;
+    }
+    return made;
   }
 
   async migrateLegacy(): Promise<{ moved: number; dropped: number }> {
@@ -249,7 +301,17 @@ export class ThumbsService implements OnModuleInit {
     return { moved, dropped };
   }
 
-  private async slot<T>(run: () => Promise<T>): Promise<T> {
+  // Построение идёт в общей очереди (не больше двух сразу). Срочное (человек открыл фото) очередь не ждёт: иначе оно вставало бы
+  // позади сотен миниатюр для плиток, которые сайт просит одновременно.
+  private async slot<T>(run: () => Promise<T>, urgent = false): Promise<T> {
+    if (urgent && this.urgentRunning < 3) {
+      this.urgentRunning++;
+      try {
+        return await run();
+      } finally {
+        this.urgentRunning--;
+      }
+    }
     while (this.running >= 2) await new Promise<void>((r) => this.waiting.push(r)); // не больше двух построений одновременно
     this.running++;
     try {
@@ -260,7 +322,7 @@ export class ThumbsService implements OnModuleInit {
     }
   }
 
-  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' | 'fit' = 'thumb', st?: MediaSettings): Promise<string | null> {
+  private build(f: FileRow, rel: string, kind: 'thumb' | 'preview' | 'fit' = 'thumb', st?: MediaSettings, urgent = false): Promise<string | null> {
     return this.slot(async () => {
       const out = this.storage.abs(rel);
       const tmp = `${out}.${process.pid}.tmp`;
@@ -281,6 +343,6 @@ export class ThumbsService implements OnModuleInit {
         this.failed.add(kind === 'thumb' ? this.key(f) : kind === 'fit' ? `f${this.key(f)}` : `p${this.key(f)}`);
         return null;
       }
-    });
+    }, urgent);
   }
 }

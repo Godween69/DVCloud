@@ -222,3 +222,27 @@ describe('миниатюры (настоящий Postgres и диск)', () => {
     assert.equal((await api('GET', `/api/files/${id}/preview`)).status, 401);
   });
 });
+
+describe('миниатюры заранее, без запроса от сайта (настоящий Postgres и диск)', () => {
+  const e = startEnv();
+  const { upload } = e;
+  before(async () => {
+    process.env.DVCLOUD_FIT_BACKFILL_MS = '300';
+    await e.start();
+  });
+  after(async () => {
+    delete process.env.DVCLOUD_FIT_BACKFILL_MS;
+    await e.stop();
+  });
+
+  it('в фоне появляются «вписанные» миниатюры файлов, у которых их ещё нет, а сайт ничего не просил', async () => {
+    const buf = await sharp({ create: { width: 900, height: 500, channels: 3, background: '#aa3366' } }).jpeg({ quality: 90 }).toBuffer();
+    assert.equal((await upload(e.anna, 'pre.jpg', buf)).status, 201);
+    let n = 0;
+    for (let i = 0; i < 80 && n === 0; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      n = (await e.walk(join(e.dataDir, 'thumbs-fit')).catch(() => [])).length;
+    }
+    assert.ok(n >= 1, 'вписанная миниатюра построена фоном');
+  });
+});

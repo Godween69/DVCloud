@@ -26,6 +26,7 @@ export interface FileRow {
   created_at: Date;
   trashed_at: Date | null;
   blob_id: string | null;
+  shot_override?: boolean | null; // ручная отметка: true скриншот, false фото, пусто решает автоматика
 }
 
 export interface BlobRow {
@@ -50,9 +51,11 @@ export interface PublicFile {
   // Размеры снимка в пикселях (после поворота), если они уже посчитаны; нужны «Умной плитке». У видео и новых файлов пока null.
   width: number | null;
   height: number | null;
+  // Считается ли картинка скриншотом (ручная отметка или автоматика). Есть в списках ленты, в остальных ответах может отсутствовать.
+  screenshot?: boolean;
 }
 
-export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null }): PublicFile {
+export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null; shot?: boolean | null }): PublicFile {
   return {
     id: f.id,
     name: f.original_name,
@@ -64,12 +67,16 @@ export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null
     trashedAt: f.trashed_at ? f.trashed_at.toISOString() : null,
     width: f.w ?? null,
     height: f.h ?? null,
+    ...(f.shot !== undefined && f.shot !== null ? { screenshot: f.shot } : {}),
   };
 }
 
 // Условие SQL «файл спрятан из библиотеки допуском альбома» (для поиска и групп лиц). alias: имя таблицы файлов, owner: номер параметра хозяина.
 export const hiddenFromLibrary = (alias: string, owner: string): string =>
   `EXISTS (SELECT 1 FROM album_items hi JOIN albums ha ON ha.id = hi.album_id WHERE hi.file_id = ${alias}.id AND ha.owner_id = ${owner} AND ha.deleted_at IS NULL AND NOT ha.in_library)`;
+
+// Раздел ленты: library это «Библиотека» (фото и видео без скриншотов), остальные по названию. Без значения: всё подряд (для групп людей и альбомов).
+export type FeedKind = 'photos' | 'videos' | 'screenshots' | 'library';
 
 export const ID_RE = /^\d{1,18}$/;
 export const SHA_RE = /^[0-9a-f]{64}$/;
@@ -315,7 +322,7 @@ export class FilesService {
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
   // Условия ленты, общие для списка, оглавления и проверки «есть ли новее»: владелец, корзина, альбом, человек, раздел.
-  private feedFilter(ownerId: string, o: { trashed?: boolean; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; person?: string }): { where: string; params: unknown[] } {
+  private feedFilter(ownerId: string, o: { trashed?: boolean; albumId?: string; kind?: FeedKind; person?: string }): { where: string; params: unknown[] } {
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${o.trashed ? 'NOT NULL' : 'NULL'}`;
     if (o.albumId !== undefined) {
@@ -336,13 +343,13 @@ export class FilesService {
     }
     // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
     if (o.albumId === undefined && !o.trashed && o.kind !== undefined) {
-      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
-      where += o.kind === 'videos' ? " AND mime LIKE 'video/%'" : o.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
+      const shot = 'COALESCE(files.shot_override, EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot))'; // ручная отметка сильнее автоматики
+      where += o.kind === 'videos' ? " AND mime LIKE 'video/%'" : o.kind === 'screenshots' ? ` AND ${shot}` : o.kind === 'library' ? ` AND NOT (mime LIKE 'image/%' AND ${shot})` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
     }
     return { where, params };
   }
 
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: FeedKind; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const filt = this.feedFilter(ownerId, opts);
     const params: unknown[] = [...filt.params];
@@ -372,7 +379,7 @@ export class FilesService {
     params.push(opts.limit + 1);
     const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
     const dir = up ? 'ASC' : 'DESC';
-    const r = await this.db.query<FileRow & { w: number | null; h: number | null }>(`SELECT files.*, p.width AS w, p.height AS h FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean }>(`SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
     const more = r.rows.length > opts.limit;
     let rows = more ? r.rows.slice(0, opts.limit) : r.rows;
     if (up) rows = rows.reverse();
@@ -392,7 +399,7 @@ export class FilesService {
   }
 
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.
-  async timeline(ownerId: string, kind: 'photos' | 'videos' | 'screenshots' | undefined, tz: string, opts: { albumId?: string; person?: string } = {}): Promise<{ y: number; m: number; n: number }[]> {
+  async timeline(ownerId: string, kind: FeedKind | undefined, tz: string, opts: { albumId?: string; person?: string } = {}): Promise<{ y: number; m: number; n: number }[]> {
     if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
     const f = this.feedFilter(ownerId, { kind, albumId: opts.albumId, person: opts.person });
     const r = await this.db.query<{ y: number; m: number; n: string }>(
@@ -456,6 +463,16 @@ export class FilesService {
     const r = await this.db.query<FileRow>('SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NOT NULL AND id = ANY($2::bigint[])', [user.id, ids]);
     await this.dropLinks(r.rows, 'Убрал насовсем из корзины');
     return r.rows.length;
+  }
+
+  // Ручная отметка «скриншот» или «фото» у картинок (видео не затрагиваются). 'auto' снимает ручную отметку, снова решает автоматика.
+  async setKind(user: UserRow, kind: 'screenshot' | 'photo' | 'auto', ids: string[]): Promise<number> {
+    const v = kind === 'auto' ? null : kind === 'screenshot';
+    const r = await this.db.query(
+      "UPDATE files SET shot_override = $3 WHERE owner_id = $1 AND trashed_at IS NULL AND mime LIKE 'image/%' AND id = ANY($2::bigint[]) AND shot_override IS DISTINCT FROM $3",
+      [user.id, ids, v],
+    );
+    return r.rowCount ?? 0;
   }
 
   // why: как это произошло, попадёт в пометку «откуда» у файла без владельца (её видит админ).
