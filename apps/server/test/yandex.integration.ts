@@ -11,6 +11,9 @@ import { startEnv } from './helpers/filesenv';
 process.env.DVCLOUD_YANDEX_TICK_MS = '200';
 process.env.DVCLOUD_YANDEX_RETRY_MIN = '0.01';
 process.env.DVCLOUD_NO_THUMB_MIGRATION = '1';
+process.env.DVCLOUD_YANDEX_SYNC_CHECK_MS = '200'; // ночная сверка: проверка раз в 0,2 с, окно «ночи» на все сутки
+process.env.DVCLOUD_YANDEX_SYNC_FROM = '0';
+process.env.DVCLOUD_YANDEX_SYNC_TO = '24';
 
 const COOKIES = [
   { name: 'Session_id', value: 'sess-secret-value', domain: '.yandex.ru' },
@@ -239,6 +242,70 @@ describe('Яндекс Диск (настоящий Postgres, поддельны
     const s2 = await status(e.anna);
     assert.equal(s2.state, 'connected');
     assert.equal(s2.counts.done, 4, 'забранное осталось');
+  });
+
+  it('повторная сверка: новое находится и показывается, ночная сверка и автозабор, пауза не отменяется', async () => {
+    const s0 = await status(e.anna);
+    assert.equal(s0.sync.found, null, 'первое чтение списка не считается сверкой');
+    assert.deepEqual([s0.sync.auto, s0.sync.autoImport], [false, false]);
+    assert.equal((await jr('POST', '/api/yandex/settings', e.anna, { autoSync: 'да' })).status, 400);
+    assert.equal((await api('POST', '/api/yandex/settings', { cookie: e.anna, body: '{}', type: 'text/plain' })).status, 415);
+
+    // 1. Ручная сверка: на Диске появился файл, «Обновить список» находит ровно его
+    items.push({ name: 'IMG_0100.jpg', data: jpeg('n'), mtime: 1730000000 });
+    assert.equal((await jr('POST', '/api/yandex/list', e.anna, {})).status, 200);
+    assert.ok(await wait(async () => (await status(e.anna)).sync.found === 1));
+    const s1 = await status(e.anna);
+    assert.equal(s1.sync.found, 1);
+    assert.equal(s1.sync.foundBytes, items[items.length - 1].data.length);
+    assert.ok(s1.sync.at);
+    assert.equal(s1.sync.pending, s1.counts.new + s1.counts.queued);
+    assert.equal(s1.counts.new, 1, 'забранное повторно не стало новым');
+
+    // 2. Ночная сверка сама, без нажатия: список устарел, автосверка включена, автозабор включён
+    assert.equal((await jr('POST', '/api/yandex/settings', e.anna, { autoSync: true, autoImport: true })).status, 200);
+    items.push({ name: 'IMG_0101.jpg', data: jpeg('o'), mtime: 1731000000 });
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '2 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    assert.ok(await wait(async () => { const c = (await status(e.anna)).counts; return (await status(e.anna)).sync.found === 1 && c.done === 5; }), JSON.stringify(await status(e.anna)) + JSON.stringify(await dbq('SELECT auto_sync, auto_import, import_state, list_state, listed_at, sync_at FROM yandex_accounts')));
+    const s2 = await status(e.anna);
+    assert.equal(s2.counts.new, 1, 'IMG_0100 найден раньше, автозабор берёт только найденное в этой сверке');
+    assert.ok((await api('GET', '/api/files?limit=50', { cookie: e.anna })).json.files.some((f: any) => f.name === 'IMG_0101.jpg'));
+
+    // 3. Автозабор не отменяет вашу паузу
+    await dbq("UPDATE yandex_accounts SET import_state = 'paused', import_note = 'Остановлено вами' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')"); // как после кнопки «Приостановить»
+    items.push({ name: 'IMG_0102.jpg', data: jpeg('p'), mtime: 1732000000 });
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '2 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    assert.ok(await wait(async () => (await status(e.anna)).counts.new === 2));
+    const s3 = await status(e.anna);
+    assert.equal(s3.import.state, 'paused');
+    assert.equal(s3.counts.done, 5);
+
+    // 3б. Частота: раз в неделю и раз в месяц. Список двухдневной давности не перечитывается, недельной и месячной давности перечитывается
+    assert.equal((await jr('POST', '/api/yandex/settings', e.anna, { syncDays: 3 })).status, 400);
+    assert.equal((await jr('POST', '/api/yandex/settings', e.anna, { autoSync: true, syncDays: 7 })).status, 200);
+    assert.equal((await status(e.anna)).sync.days, 7);
+    items.push({ name: 'IMG_0104.jpg', data: jpeg('r'), mtime: 1733500000 });
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '2 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await status(e.anna)).counts.new, 2, 'раз в неделю: двухдневный список ещё не пора перечитывать');
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '8 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    assert.ok(await wait(async () => (await status(e.anna)).counts.new === 3), 'раз в неделю: недельный список перечитан');
+    assert.equal((await jr('POST', '/api/yandex/settings', e.anna, { syncDays: 30 })).status, 200);
+    items.push({ name: 'IMG_0105.jpg', data: jpeg('s'), mtime: 1733600000 });
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '10 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await status(e.anna)).counts.new, 3, 'раз в месяц: десять дней мало');
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '33 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    assert.ok(await wait(async () => (await status(e.anna)).counts.new === 4), 'раз в месяц: тридцатитрёхдневный список перечитан');
+    await jr('POST', '/api/yandex/settings', e.anna, { syncDays: 1 });
+
+    // 4. Выключили автосверку: список не читается, хотя устарел
+    await jr('POST', '/api/yandex/settings', e.anna, { autoSync: false });
+    const newBefore = (await status(e.anna)).counts.new;
+    items.push({ name: 'IMG_0103.jpg', data: jpeg('q'), mtime: 1733000000 });
+    await dbq("UPDATE yandex_accounts SET listed_at = now() - interval '2 days' WHERE owner_id = (SELECT id FROM users WHERE login = 'anna')");
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await status(e.anna)).counts.new, newBefore, 'без автосверки новое не читается');
   });
 
   it('квота: не хватает места, пауза с понятным текстом', async () => {

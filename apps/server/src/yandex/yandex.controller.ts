@@ -81,6 +81,18 @@ export class YandexController {
     return this.yandex.startImport(req.user, { years, retryFailed: o.retryFailed === true, intoAlbum: o.intoAlbum as boolean | undefined });
   }
 
+  // Тело: { autoSync?: boolean, autoImport?: boolean, syncDays?: 1 | 7 | 30 }. Ночная сверка (как часто) и автозабор нового.
+  @Post('settings')
+  @HttpCode(200)
+  async settings(@Req() req: Req_, @Body() body: unknown): Promise<{ ok: true }> {
+    requireJson(req);
+    const o = asObject(body ?? {});
+    for (const k of ['autoSync', 'autoImport']) if (o[k] !== undefined && typeof o[k] !== 'boolean') throw new BadRequestException(`${k}: да или нет`);
+    if (o.syncDays !== undefined && o.syncDays !== 1 && o.syncDays !== 7 && o.syncDays !== 30) throw new BadRequestException('syncDays: 1 (каждую ночь), 7 (раз в неделю) или 30 (раз в месяц)');
+    await this.yandex.setSettings(req.user, { autoSync: o.autoSync as boolean | undefined, autoImport: o.autoImport as boolean | undefined, syncDays: o.syncDays as number | undefined });
+    return { ok: true };
+  }
+
   @Post('resume')
   @HttpCode(200)
   async resume(@Req() req: Req_): Promise<{ ok: true }> {

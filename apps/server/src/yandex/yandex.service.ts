@@ -19,6 +19,7 @@ const NEED_COOKIES = ['Session_id', 'yandexuid', 'sessionid2'];
 const retryMin = (): number => Number(process.env.DVCLOUD_YANDEX_RETRY_MIN ?? 30); // отложенные файлы пробуем снова через столько минут (в тестах меньше)
 const MAX_ATTEMPTS = 8;
 const PENDING_TTL_MS = 10 * 60_000;
+const syncCheckMs = (): number => Number(process.env.DVCLOUD_YANDEX_SYNC_CHECK_MS ?? 60_000); // как часто тик проверяет, пора ли сверять
 
 type Counts = Record<'new' | 'queued' | 'done' | 'waiting' | 'failed' | 'skipped', number>;
 
@@ -31,6 +32,7 @@ export interface YandexStatus {
   bytes?: { total: number; done: number; remaining: number };
   years?: { year: number | null; n: number; bytes: number; todo: number }[];
   import?: { state: 'idle' | 'running' | 'paused'; note: string | null; intoAlbum: boolean; current: { name: string; size: number; got: number } | null; speed: number; etaSec: number | null };
+  sync?: { auto: boolean; autoImport: boolean; at: string | null; found: number | null; foundBytes: number | null; pending: number };
   quota?: { freeBytes: number | null; needBytes: number; fits: boolean };
 }
 
@@ -45,6 +47,12 @@ interface AccountRow {
   import_state: 'idle' | 'running' | 'paused';
   import_note: string | null;
   into_album: boolean;
+  auto_sync: boolean;
+  sync_days: number;
+  auto_import: boolean;
+  sync_at: Date | null;
+  sync_found: number | null;
+  sync_found_bytes: string | null;
 }
 
 interface ItemRow {
@@ -71,6 +79,7 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
   private running = false;
   private stopping = false;
   private coolUntil = 0;
+  private lastSyncCheck = 0;
 
   constructor(
     @Inject(CONFIG) private readonly cfg: Config,
@@ -226,7 +235,9 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
 
   private async doList(a: AccountRow): Promise<void> {
     let n = 0;
+    const resync = a.listed_at !== null; // не первое чтение: найденное новое считаем итогом сверки
     try {
+      const began = (await this.db.query<{ t: Date }>('SELECT now() AS t')).rows[0].t;
       const disk = this.diskOf(a);
       await disk.open();
       for await (const page of disk.listUnlim()) {
@@ -243,12 +254,50 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
         await this.db.query('UPDATE yandex_accounts SET list_note = $2 WHERE id = $1', [a.id, `Прочитано файлов: ${n}`]);
       }
       await this.db.query("UPDATE yandex_accounts SET list_state = 'idle', list_note = $2, listed_at = now() WHERE id = $1", [a.id, `Всего в безлимите: ${n}`]);
+      if (resync) await this.afterResync(a, began);
     } catch (e) {
       if (e instanceof YandexAuthError) await this.expire(a);
       const msg = e instanceof YandexAuthError ? 'Вход в Яндекс устарел' : e instanceof YandexRateLimit ? 'Яндекс просит не частить, повторите позже' : e instanceof YandexUnavailable ? e.message : 'Не удалось прочитать список';
       this.log.warn(`список: ${(e as Error).message}`);
       await this.db.query("UPDATE yandex_accounts SET list_state = 'error', list_note = $2 WHERE id = $1", [a.id, `${msg} (прочитано ${n})`]);
     }
+  }
+
+  // Итог сверки: сколько нового нашлось (появилось в списке после её начала). Если включён автозабор, новое сразу ставится в очередь.
+  private async afterResync(a: AccountRow, began: Date): Promise<void> {
+    const f = (await this.db.query<{ n: string; b: string }>("SELECT count(*) AS n, COALESCE(sum(size_bytes), 0) AS b FROM yandex_items WHERE account_id = $1 AND state = 'new' AND found_at >= $2", [a.id, began])).rows[0];
+    await this.db.query('UPDATE yandex_accounts SET sync_at = now(), sync_found = $2, sync_found_bytes = $3 WHERE id = $1', [a.id, Number(f.n), Number(f.b)]);
+    if (!a.auto_import || Number(f.n) === 0) return;
+    // автозабор не отменяет вашу паузу: остановленное вами остаётся остановленным, новое ждёт кнопки
+    const st = (await this.db.query<{ import_state: string }>('SELECT import_state FROM yandex_accounts WHERE id = $1', [a.id])).rows[0]?.import_state;
+    if (st === 'paused') return;
+    await this.db.query("UPDATE yandex_items SET state = 'queued', attempts = 0, error = NULL, updated_at = now() WHERE account_id = $1 AND state = 'new' AND found_at >= $2", [a.id, began]);
+    await this.db.query("UPDATE yandex_accounts SET import_state = 'running', import_note = NULL WHERE id = $1", [a.id]);
+  }
+
+  async setSettings(user: UserRow, s: { autoSync?: boolean; autoImport?: boolean; syncDays?: number }): Promise<void> {
+    const a = await this.mustAccount(user.id);
+    await this.db.query('UPDATE yandex_accounts SET auto_sync = COALESCE($2, auto_sync), auto_import = COALESCE($3, auto_import), sync_days = COALESCE($4, sync_days) WHERE id = $1', [a.id, s.autoSync ?? null, s.autoImport ?? null, s.syncDays ?? null]);
+  }
+
+  // Ночная сверка: с выбранной частотой (каждую ночь, раз в неделю, раз в месяц), в окне часов сервера (по умолчанию с 2 до 6),
+  // либо если сверка запоздала больше чем на два дня.
+  // Читается только список; сами файлы забираются, если у человека включён автозабор. Вызывается из tick раз в минуту.
+  async autoSync(now = new Date()): Promise<number> {
+    const from = Number(process.env.DVCLOUD_YANDEX_SYNC_FROM ?? 2), to = Number(process.env.DVCLOUD_YANDEX_SYNC_TO ?? 6);
+    const h = now.getHours();
+    const night = from <= to ? h >= from && h < to : h >= from || h < to;
+    const due = await this.db.query<AccountRow>(
+      `SELECT * FROM yandex_accounts WHERE auto_sync AND state = 'connected' AND list_state <> 'running' AND listed_at IS NOT NULL
+         AND (listed_at < now() - interval '1 hour' * (sync_days * 24 - 4) AND $1::boolean OR listed_at < now() - interval '1 day' * (sync_days + 2)) ORDER BY id`,
+      [night],
+    );
+    let started = 0;
+    for (const a of due.rows) {
+      const r = await this.db.query("UPDATE yandex_accounts SET list_state = 'running', list_note = 'Ночная сверка: читаю список…' WHERE id = $1 AND list_state <> 'running' RETURNING id", [a.id]);
+      if (r.rowCount) { started++; void this.doList(a); }
+    }
+    return started;
   }
 
   // ── Запуск и остановка забора ───────────────────────────────────────────
@@ -309,6 +358,7 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
     const cur = this.current.get(a.id);
     const need = (await this.db.query<{ b: string }>("SELECT COALESCE(sum(size_bytes), 0) AS b FROM yandex_items WHERE account_id = $1 AND state IN ('new', 'queued', 'waiting', 'failed')", [a.id])).rows[0].b;
     const est = await this.files.estimate(user, Number(need));
+    const sync = { auto: a.auto_sync, days: a.sync_days, autoImport: a.auto_import, at: a.sync_at?.toISOString() ?? null, found: a.sync_found, foundBytes: a.sync_found_bytes === null ? null : Number(a.sync_found_bytes), pending: counts.new + counts.queued };
     return {
       enabled: true,
       connected: true,
@@ -318,6 +368,7 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
       bytes: { total, done, remaining },
       years,
       import: { state: a.import_state, note: a.import_note, intoAlbum: a.into_album, current: cur ? { name: cur.name, size: cur.size, got: cur.got() } : null, speed, etaSec: speed > 0 && a.import_state === 'running' ? Math.round(remaining / speed) : null },
+      sync,
       quota: { freeBytes: est.freeBytes, needBytes: est.needBytes, fits: est.fits },
     };
   }
@@ -340,6 +391,10 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
     if (this.running || this.stopping) return;
     this.running = true;
     try {
+      if (Date.now() - this.lastSyncCheck >= syncCheckMs()) {
+        this.lastSyncCheck = Date.now();
+        await this.autoSync().catch((e) => this.log.warn(`автосверка: ${(e as Error).message}`));
+      }
       for (;;) {
         if (this.stopping || Date.now() < this.coolUntil) break;
         const a = (await this.db.query<AccountRow>("SELECT * FROM yandex_accounts WHERE import_state = 'running' AND state = 'connected' ORDER BY id LIMIT 1")).rows[0];
