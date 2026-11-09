@@ -82,6 +82,7 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.deepEqual(p.enabled, { faces: true, pets: false });
     assert.ok(p.people.every((x: any) => x.name === null && x.kind === 'person' && /^\d+$/.test(x.cover)));
     assert.equal(p.people[0].count, 5, 'сначала те, на ком больше файлов');
+    assert.equal((await people(e.anna, true)).people.length, 2, 'hidden=1 отдаёт и видимые группы тоже: сайт фильтрует скрытых сам');
   });
 
   it('имя группе даётся один раз, по человеку находятся его файлы, склонения в запросе понимаются', async () => {

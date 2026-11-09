@@ -224,7 +224,8 @@ export class PeopleService {
     return { faces: s.facesEnabled, pets: s.petsEnabled };
   }
 
-  async list(ownerId: string, hidden: boolean): Promise<PersonInfo[]> {
+  // withHidden=false: только видимые группы; true: все, включая скрытые (скрытые отличает поле hidden).
+  async list(ownerId: string, withHidden: boolean): Promise<PersonInfo[]> {
     const r = await this.db.query<{ id: string; name: string | null; kind: PersonKind; hidden: boolean; n: string; det: string }>(
       `WITH pf AS (
          SELECT p.id, p.name, p.kind, p.hidden, count(DISTINCT f.id) AS n
@@ -232,7 +233,7 @@ export class PeopleService {
          JOIN detection_people dp ON dp.person_id = p.id AND dp.owner_id = p.owner_id
          JOIN detections d ON d.id = dp.detection_id
          JOIN files f ON f.blob_id = d.blob_id AND f.owner_id = p.owner_id AND f.trashed_at IS NULL
-         WHERE p.owner_id = $1 AND p.hidden = $2 GROUP BY p.id
+         WHERE p.owner_id = $1 AND ($2::boolean OR NOT p.hidden) GROUP BY p.id
        ), cov AS (
          SELECT DISTINCT ON (dp.person_id) dp.person_id, d.id AS det
          FROM detection_people dp JOIN detections d ON d.id = dp.detection_id
@@ -242,7 +243,7 @@ export class PeopleService {
        )
        SELECT pf.id, pf.name, pf.kind, pf.hidden, pf.n, cov.det FROM pf JOIN cov ON cov.person_id = pf.id
        ORDER BY (pf.name IS NULL), pf.n DESC, pf.id`,
-      [ownerId, hidden],
+      [ownerId, withHidden],
     );
     return r.rows.map((x) => ({ id: x.id, name: x.name, kind: x.kind, hidden: x.hidden, count: Number(x.n), cover: x.det }));
   }
