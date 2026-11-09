@@ -92,7 +92,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick }: { file:
     )}
     {quick && !selecting && (
       <button type="button" onClick={() => quick.toggle(file.id)} aria-pressed={inQuick} aria-label={inQuick ? `Убрать из «${quick.name}»: ${file.name}` : `Добавить в «${quick.name}»: ${file.name}`} title={inQuick ? `Уже в «${quick.name}». Нажмите, чтобы убрать` : `В «${quick.name}»`}
-        className={`absolute bottom-1.5 right-1.5 flex size-8 items-center justify-center rounded-full text-white shadow-md backdrop-blur transition-all focus-visible:opacity-100 active:scale-90 ${inQuick ? 'bg-violet-600 opacity-100 hover:bg-violet-500' : 'bg-black/45 opacity-0 hover:bg-violet-600 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+        className={`absolute bottom-1.5 right-1.5 flex size-8 items-center justify-center rounded-full text-white backdrop-blur transition-all focus-visible:opacity-100 active:scale-90 ${inQuick ? 'bg-violet-600 opacity-100 hover:bg-violet-500' : 'bg-black/45 opacity-0 hover:bg-violet-600 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
         {inQuick ? <Check className="size-4" strokeWidth={3} aria-hidden /> : <Plus className="size-4" strokeWidth={3} aria-hidden />}
       </button>
     )}

@@ -99,7 +99,7 @@ function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDo
 
   return (
     <div role="dialog" aria-label="Кто это" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} style={{ left, width: W, ...pos }}
-      className="pointer-events-auto absolute max-h-[60%] overflow-y-auto rounded-xl border border-white/15 bg-gray-900/95 p-3 text-white shadow-2xl backdrop-blur">
+      className="pointer-events-auto absolute max-h-[60%] overflow-y-auto rounded-xl border border-white/15 bg-gray-900/95 p-3 text-white shadow-[0_0_30px_-6px_rgba(0,0,0,0.6)] backdrop-blur">
       <p className="mb-2 text-sm text-white/70">{face.name ? `Сейчас: ${face.name}` : face.kind === 'face' ? 'Кто это?' : face.kind === 'cat' ? 'Как зовут кота?' : 'Как зовут собаку?'}</p>
       <form onSubmit={(e) => { e.preventDefault(); void submit(); }} className="flex gap-2">
         <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }} maxLength={60} autoComplete="off" aria-label="Имя"

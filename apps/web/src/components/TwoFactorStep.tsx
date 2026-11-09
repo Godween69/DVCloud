@@ -12,7 +12,7 @@ interface Props {
 }
 
 const field =
-  'mt-1.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-600';
+  'mt-1.5 w-full rounded-lg border border-paper-300 bg-white/70 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-white/10 dark:bg-white/5 dark:text-gray-100 dark:placeholder:text-gray-500';
 
 // Второй шаг входа: подтверждение в DVChat (основной способ) или код из приложения / запасной код.
 export function TwoFactorStep({ ticket, methods, onLogin, onCancel }: Props) {
@@ -59,7 +59,7 @@ export function TwoFactorStep({ ticket, methods, onLogin, onCancel }: Props) {
   const link = 'text-sm font-medium text-violet-700 hover:text-violet-600 dark:text-violet-300 dark:hover:text-violet-200';
 
   return (
-    <div className="rounded-2xl border border-paper-300 bg-paper-50 p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+    <div className="glass-strong rounded-3xl p-6">
       <h2 className="text-center text-lg font-semibold text-gray-900 dark:text-white">Подтвердите вход</h2>
       {mode === 'chat' ? (
         <div className="mt-4">

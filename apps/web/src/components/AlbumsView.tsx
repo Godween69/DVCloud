@@ -64,7 +64,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
             const quick = a.id === quickId;
             return (
               <li key={a.id} className="group relative">
-                <button type="button" onClick={() => onOpen(a)} aria-label={`${a.name}, ${countFiles(a.count)}`} className={`relative block aspect-[4/5] w-full overflow-hidden rounded-2xl bg-paper-200 text-left shadow-sm ring-1 ring-black/5 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-gray-800 dark:ring-white/10 ${quick ? 'ring-2 ring-violet-500 dark:ring-violet-500' : ''}`}>
+                <button type="button" onClick={() => onOpen(a)} aria-label={`${a.name}, ${countFiles(a.count)}`} className={`relative block aspect-[4/5] w-full overflow-hidden rounded-2xl bg-paper-200 text-left ring-1 ring-black/5 transition duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_26px_-4px_rgba(139,92,246,0.5)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-gray-800 dark:ring-white/10 ${quick ? 'ring-2 ring-violet-500 dark:ring-violet-500' : ''}`}>
                   {a.coverFileId ? <img src={thumbUrl(a.coverFileId)} alt="" loading="lazy" className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105" /> : <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-violet-500/20 to-paper-200 text-violet-500/60 dark:to-gray-800"><Images className="size-12" aria-hidden /></div>}
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-3.5 pb-3 pt-14 text-white">
                     <p className="truncate text-base font-semibold drop-shadow">{a.name}</p>
@@ -74,7 +74,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
                   </div>
                 </button>
                 {a.mine && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
-                  className={`absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full py-1.5 text-xs font-medium text-white shadow-md backdrop-blur transition-all ${quick ? 'bg-violet-600 pl-2.5 pr-3 opacity-100' : 'bg-black/45 px-2 opacity-0 hover:bg-violet-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+                  className={`absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full py-1.5 text-xs font-medium text-white backdrop-blur transition-all ${quick ? 'bg-violet-600 pl-2.5 pr-3 opacity-100' : 'bg-black/45 px-2 opacity-0 hover:bg-violet-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
                   <Zap className="size-3.5" aria-hidden />{quick && 'Быстрый'}
                 </button>}
               </li>

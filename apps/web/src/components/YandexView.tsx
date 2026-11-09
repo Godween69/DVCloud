@@ -1,13 +1,15 @@
-import { Cloud, Loader2, Pause, Play, RefreshCw, Unplug } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Cloud, Loader2, MoonStar, Pause, Play, RefreshCw, Unplug } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import { formatBytes } from '../lib/format';
 import { etaText, importMode, percentDone, STATE_LABEL, yearLabel, yearsToSend } from '../lib/yandex';
 import type { YandexItem, YandexItemState, YandexStatus } from '../types';
+import { InfoDot, Switch } from './ui';
 
-const primary = 'flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-70';
+const primary = 'btn-accent flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-70';
 const quiet = 'flex items-center justify-center gap-2 rounded-lg border border-paper-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-paper-200 disabled:opacity-70 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800';
-const card = 'rounded-2xl border border-paper-300 bg-paper-50 p-5 dark:border-gray-800 dark:bg-gray-900';
+const card = 'glass rounded-2xl p-5';
 const muted = 'text-sm text-gray-600 dark:text-gray-400';
 
 const msg = (e: unknown) => (e instanceof ApiError ? e.message : 'Что-то пошло не так. Попробуйте ещё раз.');
@@ -61,7 +63,7 @@ function Connect({ onDone, onError }: { onDone: () => void; onError: (m: string)
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-600/10 text-violet-700 dark:text-violet-300" aria-hidden><Cloud className="size-5" /></span>
         <div>
-          <h2 className="font-semibold text-gray-900 dark:text-white">Подключить Яндекс Диск</h2>
+          <h2 className="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-white">Подключить Яндекс Диск <InfoDot topic="yandex" /></h2>
           <p className={`${muted} mt-0.5`}>Войдите в свой аккаунт Яндекса по QR-коду с телефона. Пароль Яндекса сюда не вводится. DV Cloud только читает ваши файлы из безлимита и ничего не меняет и не удаляет на Диске.</p>
         </div>
       </div>
@@ -90,7 +92,7 @@ function Items({ onError }: { onError: (m: string) => void }) {
     <section className={card}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-semibold text-gray-900 dark:text-white">Файлы</h2>
-        <select value={filter} onChange={(e) => setFilter(e.target.value as YandexItemState | '')} aria-label="Показать файлы" className="rounded-lg border border-paper-300 bg-paper-50 px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
+        <select value={filter} onChange={(e) => setFilter(e.target.value as YandexItemState | '')} aria-label="Показать файлы" className="rounded-lg border border-paper-300 bg-white/70 px-3 py-1.5 text-sm dark:border-white/10 dark:bg-white/5 dark:text-gray-100">
           <option value="">Все</option>
           {(Object.keys(STATE_LABEL) as YandexItemState[]).map((k) => <option key={k} value={k}>{STATE_LABEL[k]}</option>)}
         </select>
@@ -107,6 +109,42 @@ function Items({ onError }: { onError: (m: string) => void }) {
         </ul>
       )}
       {data && data.total > data.items.length && <p className={`${muted} mt-2`}>Показаны первые {data.items.length} из {data.total}.</p>}
+    </section>
+  );
+}
+
+// Повторная сверка: что нашлось нового с прошлого раза и настройки ночной проверки.
+function Sync({ st, busy, act }: { st: YandexStatus; busy: boolean; act: (f: () => Promise<unknown>) => Promise<void> }) {
+  const s = st.sync!;
+  return (
+    <section className={card}>
+      <h2 className="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-white">Новое на Яндекс Диске <InfoDot topic="yandex-sync" /></h2>
+      <p className={`${muted} mt-1`}>
+        {s.at
+          ? s.found && s.found > 0
+            ? `Последняя сверка ${new Date(s.at).toLocaleString('ru-RU')}: нашлось новых файлов ${s.found}, ${formatBytes(s.foundBytes ?? 0)}.`
+            : `Последняя сверка ${new Date(s.at).toLocaleString('ru-RU')}: нового нет.`
+          : 'Нажмите «Обновить список» выше, и облако покажет, что появилось на Диске с прошлого раза.'}
+        {s.pending > 0 ? ` Ещё не забрано: ${s.pending}.` : ''}
+      </p>
+      <ul className="mt-4 space-y-3">
+        <li className="flex items-center gap-3">
+          <MoonStar className="size-5 shrink-0 text-gray-500" aria-hidden />
+          <span className="min-w-0 flex-1 text-sm text-gray-900 dark:text-gray-100">Проверять новое сами <InfoDot topic="yandex-auto" /></span>
+          <select value={s.days} disabled={busy || !s.auto} aria-label="Как часто проверять" onChange={(e) => act(() => api.yandexSettings({ syncDays: Number(e.target.value) }))} className="rounded-lg border border-[var(--glass-line)] bg-transparent px-2 py-1 text-sm text-gray-900 disabled:opacity-50 dark:text-gray-100">
+            <option value={1}>каждую ночь</option>
+            <option value={7}>раз в неделю</option>
+            <option value={30}>раз в месяц</option>
+          </select>
+          <Switch checked={s.auto} disabled={busy} label="Проверять новое сами" onChange={(v) => act(() => api.yandexSettings({ autoSync: v }))} />
+        </li>
+        <li className="flex items-center gap-3">
+          <Play className="size-5 shrink-0 text-gray-500" aria-hidden />
+          <span className="min-w-0 flex-1 text-sm text-gray-900 dark:text-gray-100">Забирать найденное сразу</span>
+          <Switch checked={s.autoImport} disabled={busy || !s.auto} label="Забирать найденное сразу" onChange={(v) => act(() => api.yandexSettings({ autoImport: v }))} />
+        </li>
+      </ul>
+      {!s.auto && <p className={`${muted} mt-3`}>Забор сразу работает вместе с автопроверкой: сначала включите её.</p>}
     </section>
   );
 }
@@ -155,7 +193,7 @@ export function YandexView({ onError }: { onError: (m: string) => void }) {
           <section className={card}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="font-semibold text-gray-900 dark:text-white">Безлимит Яндекс Диска</h2>
+                <h2 className="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-white">Безлимит Яндекс Диска <InfoDot topic="yandex" /></h2>
                 <p className={`${muted} mt-0.5`}>{total > 0 ? `${total} файлов, ${formatBytes(st.bytes?.total ?? 0)}.` : 'Список файлов ещё не прочитан.'}{st.list?.at ? ` Список обновлён ${new Date(st.list.at).toLocaleString('ru-RU')}.` : ''}</p>
                 {st.list?.state === 'error' && <p role="alert" className="mt-1 text-sm text-red-600 dark:text-red-400">{st.list.note}</p>}
               </div>
@@ -200,8 +238,8 @@ export function YandexView({ onError }: { onError: (m: string) => void }) {
             {st.import?.note && <p className={`${muted} mt-2`}>{st.import.note}</p>}
             {(mode === 'running' || mode === 'paused') && (
               <div className="mt-4">
-                <div className="h-2 overflow-hidden rounded-full bg-paper-200 dark:bg-gray-800" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Ход забора файлов">
-                  <div className="h-full bg-violet-600 transition-[width]" style={{ width: `${pct}%` }} />
+                <div className="h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Ход забора файлов">
+                  <motion.div className="h-full rounded-full" style={{ background: 'linear-gradient(90deg, var(--aur-a), var(--aur-b))' }} initial={false} animate={{ width: `${pct}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
                 </div>
                 <p className={`${muted} mt-1`}>
                   {pct}%{st.import?.speed ? `, ${formatBytes(st.import.speed)}/с` : ''}{st.import?.etaSec != null ? `, осталось около ${etaText(st.import.etaSec)}` : ''}
@@ -211,6 +249,7 @@ export function YandexView({ onError }: { onError: (m: string) => void }) {
             )}
           </section>
 
+          {total > 0 && st.sync && <Sync st={st} busy={busy} act={act} />}
           {total > 0 && <Items onError={onError} />}
         </>
       )}

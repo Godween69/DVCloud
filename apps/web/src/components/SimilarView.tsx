@@ -73,7 +73,7 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
       {data && data.groups.length === 0 && <p className="py-16 text-center text-gray-600 dark:text-gray-400">{TEXT[kind].empty}</p>}
       <ul className="space-y-4">
         {data?.groups.map((g: SimilarGroup) => (
-          <li key={g.id} className="rounded-xl border border-paper-300 bg-paper-50 p-3 dark:border-gray-800 dark:bg-gray-900">
+          <li key={g.id} className="glass rounded-xl p-3">
             <ul className="flex gap-3 overflow-x-auto pb-1">
               {g.files.map((f, i) => (
                 <li key={f.id} className="w-36 shrink-0">
@@ -91,7 +91,7 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
         ))}
       </ul>
       {total > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-paper-300 bg-paper-100/95 p-3 dark:border-gray-800 dark:bg-gray-950/95">
+        <div className="fixed inset-x-0 bottom-[3.75rem] z-30 sm:bottom-0 border-t border-paper-300 bg-paper-100/95 p-3 dark:border-gray-800 dark:bg-gray-950/95">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
             <span className="text-sm text-gray-700 dark:text-gray-300">Отмечено: {total} ({formatBytes(bytes)}). Файлы уйдут в корзину, их можно вернуть.</span>
             <button type="button" disabled={busy} onClick={trashMarked} className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60">

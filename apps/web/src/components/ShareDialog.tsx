@@ -40,7 +40,7 @@ export function ShareDialog({ album, onClose, onError, onChanged }: { album: Alb
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center sm:p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={`Поделиться альбомом «${album.name}»`} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col rounded-t-2xl bg-paper-50 text-gray-900 shadow-2xl sm:rounded-2xl dark:bg-gray-900 dark:text-gray-100">
+      <div role="dialog" aria-modal="true" aria-label={`Поделиться альбомом «${album.name}»`} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col glass-strong rounded-t-3xl text-gray-900 sm:rounded-3xl dark:text-gray-100">
         <div className="flex items-center gap-2 border-b border-paper-300 px-4 py-3 dark:border-gray-800">
           <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">Поделиться «{album.name}»</h2>
           <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 items-center justify-center rounded-lg text-gray-500 hover:bg-paper-200 dark:hover:bg-gray-800"><X className="size-5" aria-hidden /></button>

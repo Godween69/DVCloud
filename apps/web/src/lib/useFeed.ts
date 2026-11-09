@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { FileItem } from '../types';
 import { insertSorted } from './group';
@@ -20,6 +20,9 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const atRef = useRef<string | null>(null); // лента начата с выбранного месяца ("2015-03"), null: с самых новых
   const [at, setAt] = useState<string | null>(null);
 
+  // Другой альбом или другой человек: переход к месяцу из прошлого альбома не переносится.
+  useEffect(() => { atRef.current = null; setAt(null); }, [albumId, person]);
+
   const loadMore = useCallback(
     async (reset = false) => {
       if (!reset && (busy.current || done.current)) return;
@@ -37,7 +40,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
       setError(null);
       try {
         const before = reset ? undefined : (cursor.current ?? undefined);
-        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
+        const r = albumId ? await api.albumFiles(albumId, before, reset ? (atRef.current ?? undefined) : undefined) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
@@ -64,11 +67,11 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   // Догрузить файлы новее самого верхнего (лента начата с выбранного месяца). Вызывающий сам сохраняет положение прокрутки.
   const loadNewer = useCallback(async () => {
     const key = prevRef.current;
-    if (!key || newerBusy.current || trashed || albumId || person) return;
+    if (!key || newerBusy.current || trashed) return;
     const my = gen.current;
     newerBusy.current = true;
     try {
-      const r = await api.list(false, undefined, kind, undefined, key, person);
+      const r = albumId ? await api.albumFiles(albumId, undefined, undefined, key) : await api.list(false, undefined, kind, undefined, key, person);
       if (my !== gen.current) return;
       prevRef.current = r.prev ?? null;
       setHasNewer(prevRef.current !== null);

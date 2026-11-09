@@ -73,9 +73,10 @@ export const api = {
     return request<{ files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/files?${q}`);
   },
   // Оглавление ленты по месяцам для полосы времени (месяцы считаются в часовом поясе браузера, как и заголовки месяцев).
-  timeline: (kind?: 'photos' | 'videos' | 'screenshots') => {
+  timeline: (kind?: 'photos' | 'videos' | 'screenshots', person?: string) => {
     const q = new URLSearchParams({ tz: timeZone() });
     if (kind) q.set('kind', kind);
+    if (person) q.set('person', person);
     return request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/files/timeline?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
@@ -104,6 +105,7 @@ export const api = {
   yandexDisconnect: () => request<{ ok: true }>('DELETE', '/api/yandex'),
   yandexList: () => request<{ ok: true }>('POST', '/api/yandex/list', {}),
   yandexImport: (opts: { years?: (number | null)[]; retryFailed?: boolean; intoAlbum?: boolean }) => request<{ queued: number }>('POST', '/api/yandex/import', opts),
+  yandexSettings: (s: { autoSync?: boolean; autoImport?: boolean; syncDays?: number }) => request<{ ok: true }>('POST', '/api/yandex/settings', s),
   yandexPause: () => request<{ ok: true }>('POST', '/api/yandex/pause', {}),
   yandexResume: () => request<{ ok: true }>('POST', '/api/yandex/resume', {}),
   yandexItems: (state: string | null, offset: number) => request<{ items: YandexItem[]; total: number }>('GET', `/api/yandex/items?limit=50&offset=${offset}${state ? `&state=${state}` : ''}`),
@@ -116,11 +118,14 @@ export const api = {
   albumCreate: (name: string) => request<{ album: Album }>('POST', '/api/albums', { name }).then((r) => r.album),
   albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
   albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
-  albumFiles: (id: string, before?: string) => {
+  albumFiles: (id: string, before?: string, at?: string, after?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (before) q.set('before', before);
-    return request<{ album: Album; files: FileItem[]; next: string | null }>('GET', `/api/albums/${id}/files?${q}`);
+    if (at) { q.set('at', at); q.set('tz', timeZone()); }
+    if (after) q.set('after', after);
+    return request<{ album: Album; files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/albums/${id}/files?${q}`);
   },
+  albumTimeline: (id: string) => request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/albums/${id}/timeline?${new URLSearchParams({ tz: timeZone() })}`),
   albumIds: (id: string) => request<{ ids: string[] }>('GET', `/api/albums/${id}/ids`).then((r) => r.ids),
   albumAdd: (id: string, ids: string[]) => request<{ added: number }>('POST', `/api/albums/${id}/add`, { ids }).then((r) => r.added),
   albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),

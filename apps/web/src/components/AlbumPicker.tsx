@@ -70,7 +70,7 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
   const row = 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-50';
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" onClick={onClose} onTouchStart={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
-      <motion.div role="dialog" aria-modal="true" aria-label={target ? 'Быстрый альбом' : 'В альбом'} initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col rounded-t-2xl bg-paper-50 text-gray-900 shadow-2xl sm:rounded-2xl dark:bg-gray-900 dark:text-gray-100">
+      <motion.div role="dialog" aria-modal="true" aria-label={target ? 'Быстрый альбом' : 'В альбом'} initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col glass-strong rounded-t-3xl text-gray-900 sm:rounded-3xl dark:text-gray-100">
         <div className="flex items-center gap-2 border-b border-paper-300 px-4 py-3 dark:border-gray-800">
           <h2 className="flex-1 text-lg font-semibold">{target ? 'Быстрый альбом' : 'В альбом'}{!target && ids.length > 1 ? ` (${ids.length})` : ''}</h2>
           <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 items-center justify-center rounded-lg text-gray-500 hover:bg-paper-200 dark:hover:bg-gray-800"><X className="size-5" aria-hidden /></button>

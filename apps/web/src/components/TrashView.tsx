@@ -76,7 +76,7 @@ export function TrashView({ files, loaded, loading, hasMore, error, onMore, onRe
         </button>
       </div>
       <p className="mb-5 text-sm text-gray-600 dark:text-gray-400">Эти файлы ({countFiles(files.length)}{hasMore ? ' и больше' : ''}) ещё занимают место в вашей квоте. «Удалить навсегда» освобождает его.</p>
-      <ul className="divide-y divide-paper-300 overflow-hidden rounded-xl border border-paper-300 bg-paper-50 dark:divide-gray-800 dark:border-gray-800 dark:bg-gray-900">
+      <ul className="glass divide-y divide-[var(--glass-line)] overflow-hidden rounded-2xl">
         {files.map((f) => (
           <motion.li key={f.id} layout="position" className="flex items-center gap-3 p-3">
             <Thumb file={f} />

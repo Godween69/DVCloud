@@ -28,6 +28,8 @@ import { TopBar, type View } from './TopBar';
 import { SimilarView } from './SimilarView';
 import { TrashView } from './TrashView';
 import { UploadPanel } from './UploadPanel';
+import { Aurora, HelpSheet } from './ui';
+import { helpKeyFor } from '../lib/help';
 import { Viewer } from './Viewer';
 
 export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
@@ -84,14 +86,17 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const say = useCallback((text: string, action?: ToastData['action']) => setToast({ id: ++toastId.current, text, action }), []);
   const doneToast = useCallback(() => setToast(null), []);
   const quick = useQuickAlbum(say);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Оглавление для полосы времени: только в разделах библиотеки; обновляется при смене раздела и когда меняется число файлов.
-  const railKind = view === 'photos' ? 'photos' : view === 'videos' ? 'videos' : view === 'screenshots' ? 'screenshots' : view === 'library' ? 'all' : null;
+  // В альбоме и у человека полоса тоже есть: оглавление строится по их файлам. Ключ включает номер, чтобы при смене альбома оглавление перечитывалось.
+  const railKind = view === 'photos' ? 'photos' : view === 'videos' ? 'videos' : view === 'screenshots' ? 'screenshots' : view === 'library' ? 'all' : inAlbum ? `album:${album!.id}` : inPerson ? `person:${person!.id}` : null;
   const [tl, setTl] = useState<{ k: string; months: Month[] } | null>(null);
   useEffect(() => {
     if (!railKind) return;
     let stop = false;
-    api.timeline(railKind === 'all' ? undefined : railKind).then((r) => { if (!stop) setTl({ k: railKind, months: r.months }); }).catch(() => {});
+    const load = railKind.startsWith('album:') ? api.albumTimeline(railKind.slice(6)) : railKind.startsWith('person:') ? api.timeline(undefined, railKind.slice(7)) : api.timeline(railKind === 'all' ? undefined : (railKind as 'photos' | 'videos' | 'screenshots'));
+    load.then((r) => { if (!stop) setTl({ k: railKind, months: r.months }); }).catch(() => {});
     return () => { stop = true; };
   }, [railKind, usage?.count]);
 
@@ -323,10 +328,11 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   return (
     <div className="min-h-screen">
-      <TopBar user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} yandexOn={yandexOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
+      <Aurora section={view} />
+      <TopBar onHelp={() => setHelpOpen(true)} hideDock={selecting} user={user} view={view} onView={changeView} usage={usage} onAdd={() => input.current?.click()} onAddFolder={() => folderInput.current?.click()} searchOn={!!searchStatus?.enabled || named.length > 0} peopleOn={peopleOn} yandexOn={yandexOn} theme={theme} onToggleTheme={toggleTheme} onLogout={logout} />
       <input ref={input} type="file" multiple accept="image/*,video/*,.heic,.heif" className="hidden" data-testid="file-input" onChange={(e) => { void startUpload(Array.from(e.target.files ?? []).map((file) => ({ file, path: file.name }))); e.target.value = ''; }} />
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
-      <main>
+      <motion.main key={`${view}:${album?.id ?? ''}:${person?.id ?? ''}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease: 'easeOut' }} className="pb-16 sm:pb-0">
         {view === 'library' && gallery(library, undefined, true)}
         {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'), true)}
         {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'), true)}
@@ -344,7 +350,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
               onShare={() => setSharing(true)} onSaved={savedToast} onLeft={() => { say('Альбом убран из вашего списка'); changeView('albums'); }}
               isQuick={quick.target?.id === album.id} onQuick={() => { const on = quick.target?.id !== album.id; quick.set(on ? { id: album.id, name: album.name } : null); say(on ? `Быстрый альбом: «${album.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />
-            {gallery(albumFeed)}
+            {gallery(albumFeed, undefined, true)}
           </>
         )}
         {view === 'people' && !person && <PeopleView list={peopleList} showHidden={showHiddenPeople} onShowHidden={setShowHiddenPeople} onOpen={(p) => { setPerson(p); endSelect(); }} onReload={() => reloadPeople()} />}
@@ -352,7 +358,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
           <>
             <PersonHeader person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
               onBack={() => { setPerson(null); endSelect(); reloadPeople(); }} onChanged={(p) => { setPerson(p); reloadPeople(); }} onGone={(t) => { setPerson(null); reloadPeople(); say(t); }} onError={say} />
-            {gallery(personFeed, <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">Файлов с этим человеком пока нет.</p>)}
+            {gallery(personFeed, <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">Файлов с этим человеком пока нет.</p>, true)}
           </>
         )}
         {view === 'search' && <SearchView search={search} status={searchStatus} named={named} onOpen={(id) => setViewer({ id })} onPerson={(id) => { const p = peopleList?.people.find((x) => x.id === id); if (p) { setView('people'); setAlbum(null); setPerson(p); endSelect(); } }} />}
@@ -366,7 +372,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
             onEmptied={(n) => { trash.loadMore(true); refreshUsage(); say(`Убрано файлов: ${n}`); }}
             onRestoredMany={() => { trash.loadMore(true); library.loadMore(true); refreshUsage(); }} onError={say} />
         )}
-      </main>
+      </motion.main>
+      <HelpSheet topic={helpKeyFor(view)} open={helpOpen} onClose={() => setHelpOpen(false)} />
       <AnimatePresence>
         {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum || inPerson) && (
           <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}

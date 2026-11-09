@@ -156,6 +156,7 @@ export interface YandexStatus {
   bytes?: { total: number; done: number; remaining: number };
   years?: { year: number | null; n: number; bytes: number; todo: number }[];
   import?: { state: 'idle' | 'running' | 'paused'; note: string | null; intoAlbum: boolean; current: { name: string; size: number; got: number } | null; speed: number; etaSec: number | null };
+  sync?: { auto: boolean; days: number; autoImport: boolean; at: string | null; found: number | null; foundBytes: number | null; pending: number };
   quota?: { freeBytes: number | null; needBytes: number; fits: boolean };
 }
 export interface YandexItem {

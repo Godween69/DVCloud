@@ -11,9 +11,86 @@ body {
 
 /* Видимый фокус с клавиатуры везде одинаковый */
 :focus-visible {
-  outline: 2px solid #8b5cf6;
+  outline: 2px solid #a78bfa;
   outline-offset: 2px;
 }
+
+/* ── Северное сияние: два цветных пятна за всем интерфейсом. Цвет зависит от раздела (data-section на <html>) и плавно перетекает. ── */
+@property --aur-a { syntax: '<color>'; inherits: true; initial-value: #7c3aed; }
+@property --aur-b { syntax: '<color>'; inherits: true; initial-value: #4f46e5; }
+:root {
+  --aur-a: #7c3aed; --aur-b: #4f46e5;
+  --aur-power: 0.44;                       /* насколько ярко светят пятна */
+  --glass: rgba(255, 255, 255, 0.058);     /* заливка стеклянных панелей */
+  --glass-strong: rgba(18, 22, 38, 0.82);  /* для меню и окон, где нужен читаемый фон */
+  --glass-line: rgba(255, 255, 255, 0.11);
+  --glass-shine: rgba(255, 255, 255, 0.14);
+  transition: --aur-a 1.4s ease, --aur-b 1.4s ease;
+}
+:root.light {
+  --aur-power: 0.5;
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-strong: rgba(255, 255, 255, 0.9);
+  --glass-line: rgba(15, 23, 42, 0.09);
+  --glass-shine: rgba(255, 255, 255, 0.9);
+}
+:root[data-section='library']     { --aur-a: #7c3aed; --aur-b: #4f46e5; }
+:root[data-section='photos']      { --aur-a: #0ea5e9; --aur-b: #7c3aed; }
+:root[data-section='videos']      { --aur-a: #f43f5e; --aur-b: #f97316; }
+:root[data-section='screenshots'] { --aur-a: #14b8a6; --aur-b: #0ea5e9; }
+:root[data-section='albums']      { --aur-a: #f59e0b; --aur-b: #f43f5e; }
+:root[data-section='people']      { --aur-a: #10b981; --aur-b: #14b8a6; }
+:root[data-section='similar']     { --aur-a: #d946ef; --aur-b: #7c3aed; }
+:root[data-section='trash']       { --aur-a: #64748b; --aur-b: #475569; }
+:root[data-section='search']      { --aur-a: #6366f1; --aur-b: #0ea5e9; }
+:root[data-section='yandex']      { --aur-a: #f5b301; --aur-b: #ef4444; }
+:root[data-section='security']    { --aur-a: #22c55e; --aur-b: #0ea5e9; }
+
+.aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.aurora::before, .aurora::after {
+  content: ''; position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%;
+  background: radial-gradient(closest-side, var(--aur-a), transparent);
+  opacity: var(--aur-power);
+  will-change: transform;
+  animation: dv-drift-a 46s ease-in-out infinite alternate;
+}
+.aurora::before { top: -32vmax; left: -22vmax; }
+.aurora::after {
+  bottom: -38vmax; right: -24vmax;
+  background: radial-gradient(closest-side, var(--aur-b), transparent);
+  animation-name: dv-drift-b; animation-duration: 58s;
+}
+@keyframes dv-drift-a { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(12vmax, 8vmax, 0) scale(1.15); } }
+@keyframes dv-drift-b { from { transform: translate3d(0, 0, 0) scale(1.1); } to { transform: translate3d(-10vmax, -6vmax, 0) scale(0.95); } }
+
+/* ── Стеклянная панель: тонкая светящаяся кромка сверху, размытие фона. Размытие дорогое: только для панелей, не для плиток фото. ── */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: inset 0 1px 0 var(--glass-shine), 0 0 28px -10px rgba(2, 6, 23, 0.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+.glass-strong {
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-line);
+  box-shadow: inset 0 1px 0 var(--glass-shine), 0 0 40px -10px rgba(2, 6, 23, 0.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+}
+/* Если браузер не умеет размывать фон, панели остаются читаемыми */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass { background: var(--glass-strong); }
+}
+
+/* Подсветка при наведении: свет следует за курсором (координаты --mx, --my задаёт код) */
+.glow { position: relative; }
+.glow::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 0.25s;
+  background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.10), transparent 70%);
+}
+.glow:hover::after { opacity: 1; }
+:root.light .glow::after { background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), rgba(124, 58, 237, 0.10), transparent 70%); }
 
 /* Мерцание вместо серой плитки, пока миниатюра ещё грузится */
 @keyframes dv-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
@@ -22,7 +99,22 @@ body {
   background-size: 200% 100%;
   animation: dv-shimmer 1.6s linear infinite;
 }
-@media (prefers-reduced-motion: reduce) { .dv-shimmer { animation: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dv-shimmer { animation: none; }
+  .aurora::before, .aurora::after { animation: none; }
+  :root { transition: none; }
+}
 
 /* Список загрузок и корзина листаются, но без толстой полосы */
 .thin-scroll { scrollbar-width: thin; }
+
+/* Главная кнопка: цвет раздела (те же --aur-a и --aur-b, что и у сияния) */
+.btn-accent {
+  background: linear-gradient(135deg, var(--aur-a), var(--aur-b));
+  /* Только лёгкая дымка по кругу, без тени снизу */
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--aur-a) 60%, transparent);
+  transition: filter 0.15s, transform 0.15s, box-shadow 0.2s;
+}
+.btn-accent:hover:not(:disabled) { filter: brightness(1.08); box-shadow: 0 0 22px 0 color-mix(in srgb, var(--aur-a) 70%, transparent); }
+.btn-accent:active:not(:disabled) { transform: scale(0.97); }

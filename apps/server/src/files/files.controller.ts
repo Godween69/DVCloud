@@ -60,10 +60,10 @@ export class FilesController {
 
   // Оглавление по месяцам для полосы времени (до маршрутов с :id).
   @Get('timeline')
-  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
+  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string, @Query('person') person?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
     if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
     res.setHeader('Cache-Control', 'no-store');
-    return { months: await this.files.timeline(req.user.id, kind as 'photos' | 'videos' | 'screenshots' | undefined, typeof tz === 'string' ? tz : 'UTC') };
+    return { months: await this.files.timeline(req.user.id, kind as 'photos' | 'videos' | 'screenshots' | undefined, typeof tz === 'string' ? tz : 'UTC', { person: typeof person === 'string' ? person : undefined }) };
   }
 
   @Get('usage')

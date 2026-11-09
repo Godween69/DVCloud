@@ -305,15 +305,38 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
+  // Условия ленты, общие для списка, оглавления и проверки «есть ли новее»: владелец, корзина, альбом, человек, раздел.
+  private feedFilter(ownerId: string, o: { trashed?: boolean; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; person?: string }): { where: string; params: unknown[] } {
+    const params: unknown[] = [ownerId];
+    let where = `owner_id = $1 AND trashed_at IS ${o.trashed ? 'NOT NULL' : 'NULL'}`;
+    if (o.albumId !== undefined) {
+      params.push(o.albumId);
+      where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
+    }
+    // Файлы, на которых есть выбранный человек или питомец (группа принадлежит этому человеку).
+    if (o.person !== undefined) {
+      if (!ID_RE.test(o.person)) throw new BadRequestException('person: неверный номер');
+      params.push(o.person);
+      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
+    }
+    // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
+    if (o.albumId === undefined && !o.trashed && o.kind !== undefined) {
+      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
+      where += o.kind === 'videos' ? " AND mime LIKE 'video/%'" : o.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
+    }
+    return { where, params };
+  }
+
   async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
-    const params: unknown[] = [ownerId];
-    let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
+    const filt = this.feedFilter(ownerId, opts);
+    const params: unknown[] = [...filt.params];
+    let where = filt.where;
     if (opts.before !== undefined) {
       const m = CURSOR_RE.exec(opts.before);
       if (!m) throw new BadRequestException('Неверный курсор before');
       params.push(m[1], m[2]);
-      where += ` AND (${col}, id) < ($2::timestamptz, $3::bigint)`;
+      where += ` AND (${col}, id) < ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
     }
     // Лента вверх от курсора: файлы новее ключа after (для прокрутки к новым после перехода к месяцу).
     if (opts.after !== undefined) {
@@ -331,22 +354,6 @@ export class FilesService {
       params.push(`${m[1]}-${m[2]}-01`, tz);
       where += ` AND taken_at < ((($${params.length - 1}::date + interval '1 month')::timestamp) AT TIME ZONE $${params.length})`;
     }
-    if (opts.albumId !== undefined) {
-      params.push(opts.albumId);
-      where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
-    }
-    // Файлы, на которых есть выбранный человек или питомец (группа принадлежит этому человеку).
-    if (opts.person !== undefined) {
-      if (!ID_RE.test(opts.person)) throw new BadRequestException('person: неверный номер');
-      params.push(opts.person);
-      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
-    }
-    // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
-    // Разделы ленты: фото (картинки кроме скриншотов), видео, скриншоты; без kind всё вместе.
-    if (opts.albumId === undefined && !opts.trashed && opts.kind !== undefined) {
-      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
-      where += opts.kind === 'videos' ? " AND mime LIKE 'video/%'" : opts.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
-    }
     params.push(opts.limit + 1);
     const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
     const dir = up ? 'ASC' : 'DESC';
@@ -362,23 +369,20 @@ export class FilesService {
     let prev: string | null = null;
     if (up) prev = more && first ? cur(first) : null;
     else if (opts.at !== undefined && opts.before === undefined && first) {
-      const nw = await this.db.query(`SELECT 1 FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND (taken_at, id) > ($2::timestamptz, $3::bigint) LIMIT 1`, [ownerId, first.taken_at.toISOString(), first.id]);
+      // «Есть ли новее» считается в той же ленте: в альбоме, у человека и в разделе только среди их файлов
+      const nw = await this.db.query(`SELECT 1 FROM files WHERE ${filt.where} AND (taken_at, id) > ($${filt.params.length + 1}::timestamptz, $${filt.params.length + 2}::bigint) LIMIT 1`, [...filt.params, first.taken_at.toISOString(), first.id]);
       prev = nw.rowCount ? cur(first) : null;
     }
     return { files: rows, next, prev };
   }
 
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.
-  async timeline(ownerId: string, kind: 'photos' | 'videos' | 'screenshots' | undefined, tz: string): Promise<{ y: number; m: number; n: number }[]> {
+  async timeline(ownerId: string, kind: 'photos' | 'videos' | 'screenshots' | undefined, tz: string, opts: { albumId?: string; person?: string } = {}): Promise<{ y: number; m: number; n: number }[]> {
     if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
-    let where = 'owner_id = $1 AND trashed_at IS NULL';
-    if (kind !== undefined) {
-      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
-      where += kind === 'videos' ? " AND mime LIKE 'video/%'" : kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
-    }
+    const f = this.feedFilter(ownerId, { kind, albumId: opts.albumId, person: opts.person });
     const r = await this.db.query<{ y: number; m: number; n: string }>(
-      `SELECT EXTRACT(YEAR FROM taken_at AT TIME ZONE $2)::int AS y, EXTRACT(MONTH FROM taken_at AT TIME ZONE $2)::int AS m, count(*) AS n
-       FROM files WHERE ${where} GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`, [ownerId, tz]);
+      `SELECT EXTRACT(YEAR FROM taken_at AT TIME ZONE $${f.params.length + 1})::int AS y, EXTRACT(MONTH FROM taken_at AT TIME ZONE $${f.params.length + 1})::int AS m, count(*) AS n
+       FROM files WHERE ${f.where} GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`, [...f.params, tz]);
     return r.rows.map((x) => ({ y: x.y, m: x.m, n: Number(x.n) }));
   }
 

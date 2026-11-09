@@ -79,14 +79,23 @@ export class AlbumsController {
     return { ok: true };
   }
 
+  // Лента альбома. at: начать с месяца (2015-03, часовой пояс tz), after: догрузить новее ключа; prev: есть ли новее верхнего файла.
   @Get(':id/files')
-  async feed(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Query('limit') limit?: string, @Query('before') before?: string): Promise<{ album: PublicAlbum; files: PublicFile[]; next: string | null }> {
+  async feed(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('at') at?: string, @Query('tz') tz?: string, @Query('after') after?: string): Promise<{ album: PublicAlbum; files: PublicFile[]; next: string | null; prev: string | null }> {
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
     const { album, ownerId } = await this.albums.getVisible(req.user.id, id);
-    const r = await this.files.list(ownerId, { trashed: false, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id });
+    const r = await this.files.list(ownerId, { trashed: false, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined });
     res.setHeader('Cache-Control', 'no-store');
-    return { album, files: r.files.map(toPublicFile), next: r.next };
+    return { album, files: r.files.map(toPublicFile), next: r.next, prev: r.prev };
+  }
+
+  // Оглавление альбома по месяцам для полосы времени.
+  @Get(':id/timeline')
+  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string, @Query('tz') tz?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
+    const { album, ownerId } = await this.albums.getVisible(req.user.id, id);
+    res.setHeader('Cache-Control', 'no-store');
+    return { months: await this.files.timeline(ownerId, undefined, typeof tz === 'string' ? tz : 'UTC', { albumId: album.id }) };
   }
 
   @Get(':id/ids')

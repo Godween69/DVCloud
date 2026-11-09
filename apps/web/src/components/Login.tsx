@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { api, ApiError } from '../api';
 import type { User } from '../types';
 import { TwoFactorStep } from './TwoFactorStep';
+import { Aurora } from './ui';
 
 export function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [login, setLogin] = useState('');
@@ -27,22 +28,21 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
   }
 
   const field =
-    'mt-1.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-600';
+    'mt-1.5 w-full rounded-lg border border-paper-300 bg-white/70 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-white/10 dark:bg-white/5 dark:text-gray-100 dark:placeholder:text-gray-500';
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
-      {/* мягкое свечение, как в шапке лендинга */}
-      <div aria-hidden className="pointer-events-none absolute -top-40 left-1/2 h-[28rem] w-[28rem] -translate-x-1/2 rounded-full bg-violet-600/20 blur-3xl dark:bg-violet-600/25" />
+      <Aurora section="library" />
       <motion.main initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: 'easeOut' }} className="relative w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
-          <span className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-600/30">
+          <span className="mb-4 flex size-14 items-center justify-center rounded-2xl text-white" style={{ background: 'linear-gradient(135deg, var(--aur-a), var(--aur-b))', boxShadow: '0 12px 32px -10px var(--aur-a)' }}>
             <Cloud className="size-7" aria-hidden />
           </span>
           <h1 className="text-3xl font-semibold tracking-tight text-gray-900 dark:text-white">DV Cloud</h1>
           <p className="mt-1.5 text-gray-600 dark:text-gray-400">Семейный архив фото и видео</p>
         </div>
         {step ? <TwoFactorStep ticket={step.ticket} methods={step.methods} onLogin={onLogin} onCancel={() => setStep(null)} /> : (
-        <form onSubmit={submit} className="rounded-2xl border border-paper-300 bg-paper-50 p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
             Логин
             <input className={field} value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required autoFocus />
@@ -56,7 +56,7 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
               {error}
             </p>
           )}
-          <button type="submit" disabled={busy} className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-70">
+          <button type="submit" disabled={busy} className="mt-6 flex w-full items-center justify-center gap-2 btn-accent rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-70">
             {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
             Войти
           </button>

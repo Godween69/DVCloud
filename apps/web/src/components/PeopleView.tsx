@@ -98,7 +98,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
       </ul>
 
       {selecting && (
-        <div role="region" aria-label="Объединение групп" className="fixed inset-x-0 bottom-0 z-30 border-t border-paper-300 bg-paper-50/95 px-4 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95">
+        <div role="region" aria-label="Объединение групп" className="fixed inset-x-0 bottom-[3.75rem] z-30 sm:bottom-0 border-t border-paper-300 bg-paper-50/95 px-4 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95">
           <div className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-x-4 gap-y-2">
             <span className="text-sm text-gray-700 dark:text-gray-300" aria-live="polite">
               {picked.size < 2 ? 'Отметьте несколько групп одного человека' : `Выбрано групп: ${picked.size}. Соберутся в «${plan?.into.name ?? 'группу без имени'}» (${countFiles(plan?.into.count ?? 0)}).`}
@@ -186,7 +186,7 @@ export function PersonHeader({ person, others, count, onBack, onChanged, onGone,
       </div>
 
       {merging && (
-        <div className="mt-3 rounded-xl border border-paper-300 bg-paper-50 p-3 dark:border-gray-800 dark:bg-gray-900">
+        <div className="mt-3 glass rounded-xl p-3">
           <p className="mb-2 text-sm text-gray-700 dark:text-gray-300">Выберите, к кому присоединить эти фото. Эта группа исчезнет.</p>
           <ul className="flex flex-wrap gap-2">
             {sortGroups(others).map((o) => (

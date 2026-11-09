@@ -28,7 +28,7 @@ export function SelectionBar({ ids, total, zipName, inAlbum, shared, onSave, onH
   const off = 'pointer-events-none opacity-40';
   return (
     <motion.div initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }} className="fixed inset-x-0 bottom-20 z-30 flex justify-center px-3">
-      <div role="toolbar" aria-label="Действия с выбранным" className="flex max-w-full flex-wrap items-center gap-1 rounded-2xl bg-gray-900 px-2 py-1.5 text-white shadow-2xl dark:bg-paper-100 dark:text-gray-900">
+      <div role="toolbar" aria-label="Действия с выбранным" className="flex max-w-full flex-wrap items-center gap-1 rounded-2xl bg-gray-900 px-2 py-1.5 text-white shadow-[0_0_28px_-6px_rgba(0,0,0,0.5)] dark:bg-paper-100 dark:text-gray-900">
         <button type="button" onClick={onAll} disabled={ids.length >= total} className={`${btn} hover:bg-white/10 disabled:opacity-40 dark:hover:bg-black/10`}><CheckCheck className="size-4" aria-hidden /><span className="hidden sm:inline">Выбрать всё</span></button>
         {shared && <button type="button" onClick={onSave} disabled={none} className={`${btn} bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40`}><Save className="size-4" aria-hidden /><span className="hidden sm:inline">Сохранить себе</span></button>}
         {!shared && quickName && <button type="button" onClick={onQuick} disabled={none} className={`${btn} bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40`}><Zap className="size-4" aria-hidden /><span className="max-w-[9rem] truncate">В «{quickName}»</span></button>}
