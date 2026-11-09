@@ -50,7 +50,7 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     adopt: (id, login) => call('POST', `/internal/files/${encodeURIComponent(id)}/adopt`, { login }),
     dedupe: (apply) => call('POST', '/internal/files/dedupe', { limit: 100, apply }),
     albums: async () => (await call('GET', '/internal/albums')).albums,
-    duplicates: () => call('GET', '/internal/duplicates'),
+    duplicates: (offset = 0, limit = 50) => call('GET', `/internal/duplicates?offset=${offset}&limit=${limit}`),
     scanDuplicates: () => call('POST', '/internal/duplicates/scan', {}),
     mergeDuplicates: (keep, drop) => call('POST', '/internal/duplicates/merge', { keep, drop }),
     applyDuplicates: (decisions) => call('POST', '/internal/duplicates/apply', { decisions }),
@@ -59,6 +59,7 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     purgeAlbum: (id) => call('DELETE', `/internal/albums-deleted/${encodeURIComponent(id)}`),
     deleteAlbum: (id) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}`),
     transfer: (id, login, move) => call('POST', `/internal/albums/${encodeURIComponent(id)}/transfer`, { login, move }),
+    transferPreview: (id) => call('GET', `/internal/albums/${encodeURIComponent(id)}/transfer-preview`),
     media: () => call('GET', '/internal/media'),
     dates: async () => (await call('GET', '/internal/media/dates')).job,
     startDates: (apply) => call('POST', '/internal/media/dates', { apply }),
@@ -69,6 +70,8 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     peopleHint: () => call('POST', '/internal/media/people/hint', {}),
     // Просмотр файлов: только чтение. Фильтры: login, from, to (YYYY-MM-DD), q, album, before, limit.
     browse: (f) => call('GET', '/internal/browse/files?' + new URLSearchParams(Object.entries(f).filter(([, v]) => v !== undefined && v !== '')).toString()),
+    // Карточка файла и соседи под тем же фильтром.
+    fileInfo: (id, f) => call('GET', `/internal/browse/files/${encodeURIComponent(id)}/info?` + new URLSearchParams(Object.entries({ login: f.login, from: f.from, to: f.to, q: f.q, album: f.album }).filter(([, v]) => v)).toString()),
     // Раздача альбомов.
     albumShares: async (id) => (await call('GET', `/internal/albums/${encodeURIComponent(id)}/shares`)).logins,
     share: (id, login) => call('PUT', `/internal/albums/${encodeURIComponent(id)}/shares/${encodeURIComponent(login)}`, undefined),

@@ -93,6 +93,12 @@ describe('дубликаты по всему хранилищу (настоящ�
     assert.ok(g.reclaimBytes > 0 && rep.reclaimBytes === g.reclaimBytes);
     const owners = g.blobs.flatMap((b: any) => b.owners.map((o: any) => o.login)).sort();
     assert.deepEqual(owners, ['anna', 'anna', 'boris']);
+    // страницы: за пределами списка групп нет, но общее число и смещение сообщаются
+    const past = (await ic('GET', '/internal/duplicates?offset=1&limit=50')).json;
+    assert.equal(past.groups.length, 0);
+    assert.equal(past.offset, 1);
+    assert.equal(past.totalGroups, 1);
+    assert.equal((await ic('GET', '/internal/duplicates?offset=0&limit=1')).json.groups.length, 1);
   });
 
   it('слияние: чужих и несвязанных файлов не принимает', async () => {

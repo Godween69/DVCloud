@@ -61,6 +61,27 @@ describe('админ: просмотр всех файлов и раздача �
     assert.ok(!r.json.files.some((f: any) => f.name === 'a3.jpg'));
   });
 
+  it('карточка файла: сведения, соседи под тем же фильтром, скачивание', async () => {
+    // порядок сверху вниз: a1 (май), b1 (апрель), a2 (март); a3 в корзине
+    const mid = await j('GET', `/internal/browse/files/${ids['b1.jpg']}/info`);
+    assert.equal(mid.status, 200, JSON.stringify(mid.json));
+    assert.equal(mid.json.file.name, 'b1.jpg');
+    assert.equal(mid.json.file.owner, 'boris');
+    assert.equal(mid.json.prev, ids['a1.jpg']);
+    assert.equal(mid.json.next, ids['a2.jpg']);
+    assert.match(mid.json.file.sha256, /^[0-9a-f]{64}$/);
+    // под фильтром «anna» соседом b1 не будет: смотрим a1 и a2
+    const first = await j('GET', `/internal/browse/files/${ids['a1.jpg']}/info?login=anna`);
+    assert.equal(first.json.prev, null);
+    assert.equal(first.json.next, ids['a2.jpg']);
+    assert.equal((await j('GET', `/internal/browse/files/${ids['a3.jpg']}/info`)).status, 404, 'файл из корзины не показывается');
+    assert.equal((await j('GET', '/internal/browse/files/abc/info')).status, 404);
+    assert.equal((await j('GET', `/internal/browse/files/${ids['b1.jpg']}/info?from=вчера`)).status, 400);
+    const dl = await raw('GET', `/internal/browse/files/${ids['b1.jpg']}/original?dl=1`);
+    assert.match(dl.headers.get('content-disposition') ?? '', /^attachment; filename\*=UTF-8''b1\.jpg$/);
+    await dl.arrayBuffer();
+  });
+
   it('оригинал отдаётся, миниатюры без построенной нет (404), без токена нельзя', async () => {
     const o = await raw('GET', `/internal/browse/files/${ids['b1.jpg']}/original`);
     assert.equal(o.status, 200);

@@ -189,12 +189,11 @@ export class AdminStorageService {
 
   // Файлы всех людей (кроме корзины): фильтр по человеку, по датам съёмки (по часовому поясу из настроек) и по части имени.
   // Постранично по курсору «время_номер», как лента людей. total: сколько всего под фильтр.
-  async browse(o: { login?: string; from?: string; to?: string; q?: string; albumId?: string; limit: number; before?: string }): Promise<{ files: AdminFile[]; next: string | null; total: number }> {
+  private async browseWhere(o: { login?: string; from?: string; to?: string; q?: string; albumId?: string }, params: unknown[]): Promise<string> {
     const tz = (await this.settings.get()).timezone;
     const day = /^\d{4}-\d{2}-\d{2}$/;
     if ((o.from !== undefined && !day.test(o.from)) || (o.to !== undefined && !day.test(o.to))) throw new BadRequestException('Дата вида 2026-11-09');
     if (o.albumId !== undefined && !ID_RE.test(o.albumId)) throw new NotFoundException('Альбом не найден');
-    const params: unknown[] = [];
     const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
     let where = 'f.trashed_at IS NULL AND f.blob_id IS NOT NULL';
     if (o.login) where += ` AND u.login = ${add(o.login)}`;
@@ -202,6 +201,13 @@ export class AdminStorageService {
     if (o.to) where += ` AND f.taken_at < ((${add(o.to)}::date + 1)::timestamp AT TIME ZONE ${add(tz)})`;
     if (o.q) where += ` AND f.original_name ILIKE ${add('%' + o.q.replace(/[\\%_]/g, (c) => '\\' + c) + '%')}`;
     if (o.albumId) where += ` AND f.id IN (SELECT file_id FROM album_items WHERE album_id = ${add(o.albumId)})`;
+    return where;
+  }
+
+  async browse(o: { login?: string; from?: string; to?: string; q?: string; albumId?: string; limit: number; before?: string }): Promise<{ files: AdminFile[]; next: string | null; total: number }> {
+    const params: unknown[] = [];
+    const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+    const where = await this.browseWhere(o, params);
     const total = Number((await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f JOIN users u ON u.id = f.owner_id WHERE ${where}`, params)).rows[0].n);
     let page = where;
     if (o.before !== undefined) {
@@ -221,6 +227,44 @@ export class AdminStorageService {
       files: rows.map((x) => ({ id: x.id, name: x.name, mime: x.mime, size: Number(x.size_bytes), owner: x.owner, takenAt: x.taken_at.toISOString() })),
       next: more && last ? `${last.taken_at.toISOString()}_${last.id}` : null,
       total,
+    };
+  }
+
+  // Карточка файла для просмотрщика админки: сведения, альбомы, у кого ещё лежит, соседи в том же порядке и под тем же фильтром.
+  // prev: новее (стоит левее в списке), next: старее.
+  async fileInfo(fileId: string, o: { login?: string; from?: string; to?: string; q?: string; albumId?: string }): Promise<{
+    file: AdminFile & { width: number | null; height: number | null; sha256: string; createdAt: string; blobId: string };
+    albums: { id: string; name: string; owner: string }[];
+    copies: string[];
+    prev: string | null;
+    next: string | null;
+  }> {
+    if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
+    const r = (await this.db.query<{ id: string; name: string; mime: string; size_bytes: string; owner: string; taken_at: Date; created_at: Date; sha256: string; blob_id: string; width: number | null; height: number | null }>(
+      `SELECT f.id, f.original_name AS name, f.mime, b.size_bytes, u.login AS owner, f.taken_at, f.created_at, b.sha256, b.id AS blob_id, p.width, p.height
+       FROM files f JOIN users u ON u.id = f.owner_id JOIN blobs b ON b.id = f.blob_id LEFT JOIN file_fingerprints p ON p.file_id = f.id
+       WHERE f.id = $1 AND f.trashed_at IS NULL`, [fileId])).rows[0];
+    if (!r) throw new NotFoundException('Файл не найден');
+    const albums = (await this.db.query<{ id: string; name: string; owner: string }>(
+      `SELECT a.id, a.name, u.login AS owner FROM album_items ai JOIN albums a ON a.id = ai.album_id JOIN users u ON u.id = a.owner_id WHERE ai.file_id = $1 AND a.deleted_at IS NULL ORDER BY a.name`, [fileId])).rows;
+    const copies = (await this.db.query<{ login: string }>(
+      `SELECT DISTINCT u.login FROM files f JOIN users u ON u.id = f.owner_id WHERE f.blob_id = $1 AND f.id <> $2 AND f.trashed_at IS NULL ORDER BY u.login`, [r.blob_id, fileId])).rows.map((x) => x.login);
+    const side = async (cmp: '<' | '>'): Promise<string | null> => {
+      const params: unknown[] = [];
+      const where = await this.browseWhere(o, params);
+      params.push(r.taken_at.toISOString(), r.id);
+      const n = params.length;
+      const q = await this.db.query<{ id: string }>(
+        `SELECT f.id FROM files f JOIN users u ON u.id = f.owner_id WHERE ${where} AND (f.taken_at, f.id) ${cmp} ($${n - 1}::timestamptz, $${n}::bigint)
+         ORDER BY f.taken_at ${cmp === '<' ? 'DESC' : 'ASC'}, f.id ${cmp === '<' ? 'DESC' : 'ASC'} LIMIT 1`, params);
+      return q.rows[0]?.id ?? null;
+    };
+    return {
+      file: { id: r.id, name: r.name, mime: r.mime, size: Number(r.size_bytes), owner: r.owner, takenAt: r.taken_at.toISOString(), width: r.width, height: r.height, sha256: r.sha256, createdAt: r.created_at.toISOString(), blobId: r.blob_id },
+      albums,
+      copies,
+      prev: await side('>'),
+      next: await side('<'),
     };
   }
 
@@ -329,9 +373,21 @@ export class AdminStorageService {
     if (!r.rowCount) throw new NotFoundException('Альбом не найден');
   }
 
+  // Что случится при смене хозяина: сколько файлов уйдёт и сколько из них лежит ещё и в других альбомах прежнего хозяина.
+  async transferPreview(albumId: string): Promise<{ files: number; inOtherAlbums: number; owner: string }> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const a = (await this.db.query<{ owner: string }>('SELECT u.login AS owner FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.id = $1 AND a.deleted_at IS NULL', [albumId])).rows[0];
+    if (!a) throw new NotFoundException('Альбом не найден');
+    const r = (await this.db.query<{ n: string; o: string }>(
+      `SELECT count(*) AS n, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM album_items x WHERE x.file_id = f.id AND x.album_id <> $1)) AS o
+       FROM files f JOIN album_items ai ON ai.file_id = f.id WHERE ai.album_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL`, [albumId])).rows[0];
+    return { files: Number(r.n), inOtherAlbums: Number(r.o), owner: a.owner };
+  }
+
   // Перенос альбома другому человеку без копирования файлов: у получателя появляются свои записи на те же файлы.
-  // move=false: у прежнего хозяина альбом остаётся; move=true: альбом (но не его фото) у него исчезает.
-  async transferAlbum(albumId: string, toLogin: string, move: boolean): Promise<{ albumId: string; linked: number }> {
+  // move=false: у прежнего хозяина альбом остаётся; move=true: смена хозяина. Альбом и записи о его файлах исчезают
+  // у прежнего хозяина полностью (в том числе из других его альбомов), файлы на диске остаются и считаются в место получателя.
+  async transferAlbum(albumId: string, toLogin: string, move: boolean): Promise<{ albumId: string; linked: number; removedFromOwner: number }> {
     if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
     const a = (await this.db.query<{ id: string; name: string; owner_id: string; kind: string }>('SELECT id, name, owner_id, kind FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rows[0];
     if (!a) throw new NotFoundException('Альбом не найден');
@@ -354,8 +410,18 @@ export class AdminStorageService {
       await this.db.query('INSERT INTO album_items (album_id, file_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [created.id, mine.id]);
       linked++;
     }
-    if (move) await this.db.query('DELETE FROM albums WHERE id = $1', [albumId]);
-    return { albumId: created.id, linked };
+    let removedFromOwner = 0;
+    if (move) {
+      await this.db.query('DELETE FROM albums WHERE id = $1', [albumId]);
+      for (const f of files) {
+        const d = await this.db.query('DELETE FROM files WHERE id = $1 AND owner_id = $2', [f.id, a.owner_id]);
+        if (d.rowCount) {
+          removedFromOwner++;
+          await this.removeLegacyDerived(f);
+        }
+      }
+    }
+    return { albumId: created.id, linked, removedFromOwner };
   }
 
   // ---- Люди ----

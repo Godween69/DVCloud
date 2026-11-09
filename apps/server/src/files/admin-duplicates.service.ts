@@ -38,6 +38,7 @@ export interface DupReport {
   computedAt: string | null;
   scanning: boolean;
   groups: DupGroup[];
+  offset: number; // с какой группы начинается показанная страница
   totalGroups: number;
   reclaimBytes: number;
   mergeable: number; // сколько показанных групп можно удалить одной кнопкой (без слишком больших)
@@ -56,7 +57,8 @@ interface Row {
   taken_at: Date;
 }
 
-const MAX_SHOWN = 100;
+const MAX_KEPT = 1000; // сколько групп держим в списке (страницами по ним листает админка)
+const MAX_SHOWN = 100; // сколько групп можно применить за один раз
 const MAX_MERGE = 50;
 
 @Injectable()
@@ -97,14 +99,18 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
     this.activity.defer(() => this.scan());
   }
 
-  report(): DupReport {
+  // Страница списка: offset и limit по группам (лучшие по экономии первыми). limit не больше MAX_SHOWN.
+  report(offset = 0, limit = MAX_SHOWN): DupReport {
+    const from = Math.max(0, Math.floor(offset));
+    const page = this.groups.slice(from, from + Math.min(MAX_SHOWN, Math.max(1, Math.floor(limit))));
     return {
       computedAt: this.computedAt ? this.computedAt.toISOString() : null,
       scanning: this.scanning,
-      groups: this.groups,
+      groups: page,
+      offset: from,
       totalGroups: this.total,
       reclaimBytes: this.reclaim,
-      mergeable: this.groups.filter((g) => g.blobs.length - 1 <= MAX_MERGE).length,
+      mergeable: page.filter((g) => g.blobs.length - 1 <= MAX_MERGE).length,
       bulk: { ...this.bulk },
     };
   }
@@ -136,7 +142,7 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
         .map((list) => ({ list, lost: list.slice(1).reduce((n, i) => n + i.size, 0) }))
         .sort((x, y) => y.lost - x.lost);
       for (const g of ranked) reclaim += g.lost;
-      const top = ranked.slice(0, MAX_SHOWN);
+      const top = ranked.slice(0, MAX_KEPT);
       // Владельцев узнаём только для показанных групп.
       const ids = top.flatMap((g) => g.list.map((i) => i.id));
       const owners = ids.length

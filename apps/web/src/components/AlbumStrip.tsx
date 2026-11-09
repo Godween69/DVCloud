@@ -58,7 +58,7 @@ export function AlbumStrip({ kind, albums, onOpen, onAll, onCreated, onError }: 
           <button type="submit" disabled={busy || !name.trim()} className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">Создать</button>
         </form>
       ) : (
-        <button type="button" onClick={() => setAdding(true)} className={`${chip} text-violet-700 dark:text-violet-300`}><Plus className="size-4" aria-hidden />Новый</button>
+        <button type="button" onClick={() => setAdding(true)} title="Создать новый альбом" className={`${chip} border-dashed text-violet-700 dark:text-violet-300`}><Plus className="size-4" aria-hidden />Новый альбом</button>
       )}
     </nav>
   );

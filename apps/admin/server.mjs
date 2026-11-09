@@ -3,14 +3,14 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, backupPage, filesPage, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
+import { CSS, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
 
 const COOKIE = 'dvcloud_admin';
 const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; object-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; object-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
   'referrer-policy': 'no-referrer',
@@ -102,6 +102,9 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     return redirect(res, '/media');
   }
 
+  // Куда вернуться после действия на вкладке «Дубликаты»: на ту же страницу.
+  const dupBack = (form) => `/duplicates?page=${/^\d{1,6}$/.test(form.get('page') ?? '') ? form.get('page') : 1}&per=${form.get('per') === '100' ? 100 : 50}`;
+
   async function storageAction(session, res, path, form) {
     const ok = (text) => { session.flash = { kind: 'ok', text }; };
     try {
@@ -133,6 +136,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       } else if (path === '/storage/duplicates/scan') {
         await api.scanDuplicates();
         ok('Поиск дубликатов запущен в фоне, результат появится через несколько минут. Обновите страницу позже');
+        return redirect(res, dupBack(form));
       } else if (path === '/storage/duplicates/apply') {
         // Решения по группам: g = группы, показанные на экране; keep = «номер группы:номер файла», которые отметили «оставить».
         // Кнопка у самой группы шлёт only = номер этой группы.
@@ -143,6 +147,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         const decisions = groups.map((g) => ({ group: g, keep: marks.filter((m) => m[0] === g && /^\d{1,18}$/.test(m[1] ?? '')).map((m) => m[1]) }));
         const r = await api.applyDuplicates(decisions);
         ok(`Решения применяются в фоне, групп: ${r.started}. Ход виден внизу списка`);
+        return redirect(res, dupBack(form));
       } else if (path === '/storage/duplicates/merge') {
         const keep = (form.get('keep') ?? '').trim();
         const drop = (form.get('drop') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -178,6 +183,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
       session.flash = { kind: 'error', text: e.message };
+      if (path.startsWith('/storage/duplicates/')) return redirect(res, dupBack(form));
     }
     return redirect(res, '/storage');
   }
@@ -201,8 +207,9 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         ok(opened + closed === 0 ? 'Доступ не изменился' : `Доступ обновлён: открыто ${opened}, закрыто ${closed}`);
       } else if ((m = /^\/sharing\/(\d{1,18})\/transfer$/.exec(path))) {
         const login = form.get('login') ?? '';
+        if (form.get('confirm') !== '1') return redirect(res, `/sharing/${m[1]}/transfer?login=${encodeURIComponent(login)}`);
         const r = await api.transfer(m[1], login, true);
-        ok(`Альбом передан: ${login}, файлов: ${r.linked}. У прежнего владельца альбом убран, его фото остались`);
+        ok(`Альбом передан: ${login}, файлов: ${r.linked}. У прежнего владельца убраны альбом и записи о ${r.removedFromOwner} файлах (из других его альбомов они тоже пропали); на диске файлы остались`);
       } else if ((m = /^\/sharing\/(\d{1,18})\/vault$/.exec(path))) {
         if (!verifyPassword(form.get('password') ?? '', cfg.passwordHash)) throw new ApiError(403, 'Неверный пароль админки: альбом не тронут');
         const r = await api.toVault(m[1], (form.get('note') ?? '').trim());
@@ -250,13 +257,13 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
   async function proxyFile(req, res, id, what) {
     let r;
     try {
-      r = await api.raw(`/internal/browse/files/${id}/${what}`, req.headers.range);
+      r = await api.raw(`/internal/browse/files/${id}/${what === 'download' ? 'original?dl=1' : what}`, req.headers.range);
     } catch {
       return send(res, 502, 'text/plain; charset=utf-8', 'Сервер DVCloud недоступен');
     }
     if (!r.ok && r.status !== 206) return send(res, r.status === 404 ? 404 : 502, 'text/plain; charset=utf-8', r.status === 404 ? 'Нет такого файла или миниатюры' : 'Ошибка сервера');
     const head = { 'content-type': r.headers.get('content-type') ?? 'application/octet-stream', ...SECURITY_HEADERS, 'cache-control': what === 'thumb' || what === 'preview' ? 'private, max-age=600' : 'no-store' };
-    for (const h of ['content-length', 'content-range', 'accept-ranges']) if (r.headers.get(h)) head[h] = r.headers.get(h);
+    for (const h of ['content-length', 'content-range', 'accept-ranges', 'content-disposition']) if (r.headers.get(h)) head[h] = r.headers.get(h);
     res.writeHead(r.status, head);
     if (!r.body) return res.end();
     const { Readable } = await import('node:stream');
@@ -353,6 +360,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     }
     const path = new URL(req.url, 'http://x').pathname;
     if (req.method === 'GET' && path === '/style.css') return send(res, 200, 'text/css; charset=utf-8', CSS, { 'cache-control': 'max-age=300' });
+    if (req.method === 'GET' && path === '/viewer.js') return send(res, 200, 'text/javascript; charset=utf-8', VIEWER_JS, { 'cache-control': 'max-age=300' });
     if (req.method === 'GET' && path === '/health') return send(res, 200, 'application/json', JSON.stringify({ status: 'ok', service: 'dvcloud-admin' }));
 
     if (path === '/login') {
@@ -392,7 +400,58 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     }
 
     let fm;
-    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})\/(thumb|view|zoom)$/.exec(path))) return proxyFile(req, res, fm[1], fm[2] === 'thumb' ? 'thumb' : fm[2] === 'zoom' ? 'preview' : 'original');
+    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})\/(thumb|view|zoom|download)$/.exec(path))) return proxyFile(req, res, fm[1], fm[2] === 'thumb' ? 'thumb' : fm[2] === 'zoom' ? 'preview' : fm[2] === 'download' ? 'download' : 'original');
+
+    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})$/.exec(path))) {
+      const flash = session.flash;
+      session.flash = null;
+      const q = new URL(req.url, 'http://x').searchParams;
+      const get = (k) => (q.get(k) ?? '').trim();
+      const filter = { login: get('login'), from: get('from'), to: get('to'), q: get('q'), album: get('album') };
+      let info = null;
+      try {
+        info = await api.fileInfo(fm[1], filter);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        if (e.status === 404) return send(res, 404, 'text/plain; charset=utf-8', 'Нет такого файла');
+        session.flash = { kind: 'error', text: e.message };
+        return redirect(res, '/files');
+      }
+      return html(res, 200, filePage({ info, filter, csrf: session.csrf, flash, loadError: null }));
+    }
+
+    if (req.method === 'GET' && path === '/duplicates') {
+      const flash = session.flash;
+      session.flash = null;
+      const q = new URL(req.url, 'http://x').searchParams;
+      const per = q.get('per') === '100' ? 100 : 50;
+      const page = Math.max(1, Math.min(100000, Number(q.get('page')) || 1));
+      let report = null;
+      let loadError = null;
+      try {
+        report = await api.duplicates((page - 1) * per, per);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, dupPage({ report, page, per, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && (fm = /^\/sharing\/(\d{1,18})\/transfer$/.exec(path))) {
+      const login = (new URL(req.url, 'http://x').searchParams.get('login') ?? '').trim();
+      try {
+        const [albums, preview] = await Promise.all([api.albums(), api.transferPreview(fm[1])]);
+        const album = albums.find((a) => a.id === fm[1]);
+        if (!album || !login) throw new ApiError(404, 'Альбом или человек не найден');
+        const flash = session.flash;
+        session.flash = null;
+        return html(res, 200, transferConfirmPage({ album, login, preview, csrf: session.csrf, flash, loadError: null }));
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        session.flash = { kind: 'error', text: e.message };
+        return redirect(res, '/sharing');
+      }
+    }
 
     if (req.method === 'GET' && path === '/files') {
       const flash = session.flash;
@@ -481,10 +540,10 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       session.flash = null;
       const dedupe = session.dedupe ?? null;
       session.dedupe = null;
-      const data = { stats: null, orphans: [], albums: [], deletedAlbums: [], requests: [], users: [], duplicatesReport: null };
+      const data = { stats: null, orphans: [], albums: [], deletedAlbums: [], requests: [], users: [] };
       let loadError = null;
       try {
-        [data.stats, data.orphans, data.albums, data.deletedAlbums, data.requests, data.users, data.duplicatesReport] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.deletedAlbums(), api.requests(), api.list(), api.duplicates()]);
+        [data.stats, data.orphans, data.albums, data.deletedAlbums, data.requests, data.users] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.deletedAlbums(), api.requests(), api.list()]);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         loadError = e.message;

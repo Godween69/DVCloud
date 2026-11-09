@@ -160,8 +160,9 @@ export class InternalStorageController {
 
   // ── Дубликаты по всему хранилищу (поиск идёт сам в фоне) ──
   @Get('duplicates')
-  duplicates(): DupReport {
-    return this.dups.report();
+  duplicates(@Query('offset') offset?: string, @Query('limit') limit?: string): DupReport {
+    const n = (v: string | undefined, d: number): number => (v !== undefined && /^\d{1,6}$/.test(v) ? Number(v) : d);
+    return this.dups.report(n(offset, 0), n(limit, 100));
   }
 
   @Post('duplicates/scan')
@@ -250,14 +251,19 @@ export class InternalStorageController {
     return { ok: true };
   }
 
+  @Get('albums/:id/transfer-preview')
+  async transferPreview(@Param('id') id: string): Promise<{ files: number; inOtherAlbums: number; owner: string }> {
+    return this.admin.transferPreview(id);
+  }
+
   @Post('albums/:id/transfer')
   @HttpCode(200)
-  async transfer(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ albumId: string; linked: number }> {
+  async transfer(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ albumId: string; linked: number; removedFromOwner: number }> {
     requireJson(req);
     const o = asObject(body);
     const login = strField(o, 'login', 1, 64);
     const r = await this.admin.transferAlbum(id, login, o.move === true);
-    await this.audit.write('album.transfer', id, { login, move: o.move === true, linked: r.linked });
+    await this.audit.write('album.transfer', id, { login, move: o.move === true, linked: r.linked, removedFromOwner: r.removedFromOwner });
     return r;
   }
 
@@ -269,6 +275,13 @@ export class InternalStorageController {
     if (!Number.isInteger(n) || n < 1 || n > 200) throw new BadRequestException('limit: от 1 до 200');
     const s = (v?: string) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
     return this.admin.browse({ login: s(login), from: s(from), to: s(to), q: s(q)?.slice(0, 100), albumId: s(album), limit: n, before: s(before) });
+  }
+
+  // Карточка файла и соседи под тем же фильтром (для просмотрщика админки).
+  @Get('browse/files/:id/info')
+  async browseInfo(@Param('id') id: string, @Query('login') login?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('q') q?: string, @Query('album') album?: string): ReturnType<AdminStorageService['fileInfo']> {
+    const s = (v?: string) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
+    return this.admin.fileInfo(id, { login: s(login), from: s(from), to: s(to), q: s(q)?.slice(0, 100), albumId: s(album) });
   }
 
   // Миниатюра, если она уже построена людьми (новых не строим: внутренний порт не запускает фоновых работ). Иначе 404.
@@ -306,11 +319,12 @@ export class InternalStorageController {
 
   // Сам файл целиком (фото или видео), как он лежит на диске.
   @Get('browse/files/:id/original')
-  async browseOriginal(@Param('id') id: string, @Res() res: Response): Promise<void> {
+  async browseOriginal(@Param('id') id: string, @Query('dl') dl: string | undefined, @Res() res: Response): Promise<void> {
     const b = await this.admin.blobOf(id);
     if (!b) throw new NotFoundException('Файл не найден');
     if (!/^(image|video)\/[a-z0-9.+-]+$/i.test(b.mime)) throw new BadRequestException('Показываются только фото и видео');
     res.setHeader('Content-Type', b.mime);
+    if (dl === '1') res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(b.name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`);
     res.sendFile(b.path, { root: this.admin.root, dotfiles: 'deny', headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'no-store' } }, (err) => {
       if (err && !res.headersSent) res.status(404).json({ message: 'Файла нет на диске' });
     });

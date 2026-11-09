@@ -65,22 +65,43 @@ button.ghost { background:transparent; }
 .dupconfirm[open] summary { margin-bottom:8px; }
 .dupconfirm form { margin:0; }
 /* Приближение без скриптов: зажмите кадр, он вырастает на весь экран; отпустите, он уходит обратно. */
-.zoomhold { position:relative; display:block; padding:0; border:0; background:none; cursor:zoom-in; border-radius:8px; }
-.zoomhold img { display:block; width:96px; height:96px; object-fit:cover; border-radius:8px; background:rgba(127,127,127,.15); }
+.zoomhold { position:relative; display:block; padding:0; border:0; background:none; cursor:zoom-in; border-radius:8px; -webkit-user-select:none; user-select:none; touch-action:manipulation; }
+.zoomhold img { display:block; width:140px; height:140px; object-fit:cover; border-radius:8px; background:rgba(127,127,127,.15); -webkit-user-drag:none; }
 .zoombox { display:none; position:fixed; inset:0; z-index:50; pointer-events:none; place-items:center; background:rgba(0,0,0,.72); opacity:0; transition:opacity .2s ease, display .2s allow-discrete; }
 .zoombox figure { margin:0; text-align:center; transform:scale(.35); transition:transform .22s ease-out; }
-.zoombox img { display:block; max-width:94vw; max-height:84vh; border-radius:10px; box-shadow:0 12px 50px rgba(0,0,0,.6); background:#111; }
+.zoombox img { display:block; max-width:96vw; max-height:88vh; width:auto; height:auto; border-radius:10px; box-shadow:0 12px 50px rgba(0,0,0,.6); background:#111; }
 .zoombox figcaption { margin-top:8px; color:#fff; font-size:14px; }
-.zoomhold:active + .zoombox { display:grid; opacity:1; }
-.zoomhold:active + .zoombox figure { transform:scale(1); }
-@starting-style { .zoomhold:active + .zoombox { opacity:0; } .zoomhold:active + .zoombox figure { transform:scale(.35); } }
-.dupkeep { display:flex; gap:6px; align-items:center; margin-top:4px; cursor:pointer; }
-.dupkeep input { width:18px; height:18px; }
+html:not(.js) .zoomhold:active + .zoombox, .zoomhold.hold + .zoombox { display:grid; opacity:1; }
+html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figure { transform:scale(1); }
+@starting-style { html:not(.js) .zoomhold:active + .zoombox, .zoomhold.hold + .zoombox { opacity:0; } html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figure { transform:scale(.35); } }
 .dupgroup { border:1px solid var(--line, #2a3144); border-radius:10px; padding:10px 12px; margin:10px 0; }
-.dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:10px; }
-.dup { display:flex; gap:10px; align-items:center; padding:6px 8px; border-radius:8px; background:rgba(127,127,127,.08); }
-.dup img { width:96px; height:96px; object-fit:cover; border-radius:8px; background:rgba(127,127,127,.15); }
-.dup.keep { outline:1px solid rgba(34,197,94,.55); }
+.dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:12px; }
+.dup { position:relative; width:164px; box-sizing:border-box; padding:6px; border:3px solid var(--bad); border-radius:12px; background:rgba(127,127,127,.08); }
+.dup:has(.dupchk:checked) { border-color:var(--ok); }
+.dup:has(.dupchk:focus-visible) { outline:2px solid var(--acc); outline-offset:2px; }
+.dupchk { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none; }
+.dupstrip { display:block; margin-top:6px; padding:9px 4px; text-align:center; border-radius:8px; cursor:pointer; font-weight:600; color:#fff; background:var(--bad); -webkit-user-select:none; user-select:none; }
+.dupchk:checked ~ .dupstrip { background:var(--ok); }
+.dupstrip .y { display:none; } .dupchk:checked ~ .dupstrip .y { display:inline; } .dupchk:checked ~ .dupstrip .n { display:none; }
+.dupmeta { margin-top:5px; font-size:12px; line-height:1.35; }
+.pager.top { margin:8px 0 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.pager .cur { padding:0 6px; color:var(--mut); }
+.legend { display:flex; gap:14px; flex-wrap:wrap; margin:4px 0 8px; }
+.legend i { display:inline-block; width:14px; height:14px; border-radius:4px; vertical-align:-2px; margin-right:6px; }
+.legend .g i { background:var(--ok); } .legend .r i { background:var(--bad); }
+/* Просмотр файла */
+.fview { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:18px; align-items:start; }
+@media (max-width:900px) { .fview { grid-template-columns:1fr; } }
+.stage { background:#0b0d11; border-radius:12px; display:grid; place-items:center; min-height:50vh; padding:8px; }
+.stage img, .stage video { display:block; max-width:100%; max-height:78vh; width:auto; height:auto; border-radius:6px; }
+.fnav { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 12px; }
+.fnav .sp { flex:1; }
+.facts { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; margin:0 0 12px; font-size:14px; }
+.facts dt { color:var(--mut); } .facts dd { margin:0; word-break:break-word; }
+.facts code { font-size:11px; word-break:break-all; }
+.factions { display:grid; gap:8px; margin-top:10px; }
+.factions .btn { text-align:center; }
+.btn.off { opacity:.4; pointer-events:none; }
 .person { display:grid; grid-template-columns:44px minmax(150px,1.2fr) minmax(170px,1.6fr) auto; gap:6px 16px; align-items:center; padding:12px 4px; border-bottom:1px solid var(--line); }
 .person:last-child { border-bottom:0; }
 .av { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:18px; color:#fff; text-transform:uppercase; }
@@ -189,11 +210,12 @@ input[type=date], input[type=search] { padding:8px 10px; border:1px solid var(--
 .setting b { display:inline; } .setting b + .info { margin-left:6px; }
 `;
 
-const layout = (title, body, head = '') => `<!doctype html>
+const layout = (title, body, head = '', foot = '') => `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title><link rel="stylesheet" href="/style.css">${head}</head>
-<body><main>${body}</main></body></html>`;
+<body><main>${body}</main>${foot}</body></html>`;
 
+const SCRIPT = '<script src="/viewer.js"></script>';
 const csrfInput = (csrf) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
 
 export function loginPage(error) {
@@ -209,7 +231,7 @@ ${error ? `<div class="msg error">${esc(error)}</div>` : ''}
 // «Инфо»: ненавязчивая кнопка с пояснением. text: один или несколько абзацев (строки/HTML из этого файла, не от людей).
 export const info = (text, side = '') => `<details class="info${side ? ' ' + side : ''}"><summary aria-label="Инфо" title="Инфо">i</summary><div class="tip">${[].concat(text).map((t) => `<p>${t}</p>`).join('')}</div></details>`;
 
-const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['backup', '/backup', 'Копия']];
+const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['dups', '/duplicates', 'Дубликаты'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['backup', '/backup', 'Копия']];
 const nav = (current) => `<nav class="tabs" aria-label="Разделы">${TABS.map(([k, href, label]) => `<a href="${href}"${current === k ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const topBar = (current, csrf) => `<div class="bar"><div class="brand"><b>DV Cloud</b><span class="muted">админка</span></div>${nav(current)}
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit" class="ghost">Выйти</button></form></div>`;
@@ -273,7 +295,7 @@ ${flashHtml(flash, loadError)}
 </section>`);
 }
 
-export function storagePage({ stats, orphans, albums, deletedAlbums = [], duplicatesReport = null, requests, users, csrf, flash, loadError, dedupe }) {
+export function storagePage({ stats, orphans, albums, deletedAlbums = [], requests, users, csrf, flash, loadError, dedupe }) {
   const logins = users.map((u) => u.login);
   const pick = (name) => `<select name="${name}" aria-label="Кому">${logins.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>`;
   const reqRows = requests.map((r) => `<tr><td><b>${esc(r.login)}</b> <span class="muted">${esc(r.displayName)}</span></td><td>${esc(formatSize(r.needBytes))}</td><td>${esc(formatSize(r.usedBytes))} из ${esc(formatQuota(r.quotaBytes))}</td><td>${esc(r.note || '—')}</td>
@@ -283,33 +305,6 @@ ${post(csrf, `/storage/requests/${encodeURIComponent(r.id)}/resolve`, {}, 'За�
 <td>${o.note ? esc(o.note) : '<span class="muted">неизвестно (убрано до версии 0.10.0)</span>'}${o.orphanedAt ? `<br><span class="muted">${esc(o.orphanedAt.slice(0, 10))}</span>` : ''}</td>
 <td>${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/adopt`, {}, 'Отдать', '', pick('login'))}
 ${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/purge`, {}, 'Стереть с диска', 'danger')}</td></tr>`).join('');
-  const dupHtml = (() => {
-    const d = duplicatesReport;
-    if (!d) return '<p class="muted">Данные о дубликатах не получены.</p>';
-    const head = d.computedAt
-      ? `<p>Последняя проверка: <b>${esc(d.computedAt.slice(0, 16).replace('T', ' '))}</b> (UTC)${d.scanning ? ', идёт новая' : ''}. Групп дубликатов: <b>${d.totalGroups}</b>${d.totalGroups ? `, можно освободить <b>${esc(formatSize(d.reclaimBytes))}</b>` : ''}.</p>`
-      : `<p class="muted">Первая проверка ещё не проходила${d.scanning ? ', она идёт сейчас' : ': запустится сама через минуту после старта облака'}.</p>`;
-    if (!d.groups.length) return `${head}${d.computedAt ? '<p class="muted">Дубликатов нет: у каждого снимка одна копия.</p>' : ''}`;
-    // Одна форма на весь список. У каждого кадра флажок «Оставить» (лучший отмечен заранее). Отмечен один: остальные в группе
-    // удаляются. Отмечено несколько: удаляются неотмеченные, а отмеченные больше не считаются дубликатами. Ничего не отмечено: группа пропускается.
-    const groups = d.groups.map((g) => {
-      const cards = g.blobs.map((b) => `<li class="dup ${b.keep ? 'keep' : 'drop'}"><button type="button" class="zoomhold" aria-label="Приблизить (удерживайте)" title="Удерживайте, чтобы приблизить"><img src="/files/${encodeURIComponent(b.fileId)}/thumb" alt="" width="96" height="96" loading="lazy"></button><div class="zoombox" aria-hidden="true"><figure><img src="/files/${encodeURIComponent(b.fileId)}/zoom" alt="" loading="lazy"><figcaption>${b.width}×${b.height}, ${esc(formatSize(b.size))}</figcaption></figure></div>
-<div><label class="dupkeep"><input type="checkbox" name="keep" value="${esc(g.id)}:${esc(b.blobId)}"${b.keep ? ' checked' : ''}> <b>Оставить</b></label>${b.width}×${b.height}, ${esc(formatSize(b.size))}<br><span class="muted">${b.owners.map((o) => esc(o.login) + (o.files > 1 ? ` ×${o.files}` : '')).join(', ') || '—'}</span></div></li>`).join('');
-      return `<div class="dupgroup"><input type="hidden" name="g" value="${esc(g.id)}"><ul class="dups">${cards}</ul>
-<p><button class="danger" type="submit" name="only" value="${esc(g.id)}">Применить к этой группе: освободить ${esc(formatSize(g.reclaimBytes))}</button></p></div>`;
-    }).join('');
-    // Внизу списка: «Удалить» для всех показанных групп (до 100). Подтверждение кнопкой, без ввода слова и без скриптов.
-    const b = d.bulk ?? { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null };
-    const last = b.finishedAt ? `<p class="muted">Прошлое удаление: обработано ${b.done} из ${b.total}${b.failed ? `, пропущено ${b.failed}` : ''}, освобождено ${esc(formatSize(b.bytes))}.</p>` : '';
-    const bar = b.running
-      ? `<div class="dupbar"><p><b>Идёт удаление дубликатов:</b> ${b.done} из ${b.total} групп, освобождено ${esc(formatSize(b.bytes))}${b.failed ? `, пропущено ${b.failed}` : ''}. Страница обновляется сама.</p></div>`
-      : `<div class="dupbar">${d.mergeable > 0
-        ? `<details class="dupconfirm"><summary class="danger">Удалить дубликаты: ${d.groups.length} групп выше</summary>
-<p>В каждой группе останутся кадры с флажком «Оставить», остальные будут стёрты с диска. Группы без флажков пропускаются. Это необратимо.</p>
-<button class="danger" type="submit">Да, удалить</button></details>`
-        : ''}${last}</div>`;
-    return `${head}<form method="post" action="/storage/duplicates/apply">${csrfInput(csrf)}${groups}${d.totalGroups > d.groups.length ? `<p class="muted">Показаны первые ${d.groups.length} групп с наибольшей экономией. После удаления откроются следующие.</p>` : ''}${bar}</form>`;
-  })();
   const deletedRows = deletedAlbums.map((a) => `<tr><td>${esc(a.name)}</td><td>${esc(a.owner)}</td><td>${a.count}</td><td>${esc((a.deletedAt ?? '').slice(0, 10))}</td>
 <td>${post(csrf, `/storage/albums-deleted/${encodeURIComponent(a.id)}/restore`, {}, 'Вернуть хозяину')}
 ${post(csrf, `/storage/albums-deleted/${encodeURIComponent(a.id)}/purge`, {}, 'Стереть альбом', 'danger')}</td></tr>`).join('');
@@ -334,10 +329,7 @@ ${stats && stats.orphans > 0 ? `<form class="bulk" method="post" action="/storag
 <tbody>${orphanRows || '<tr><td colspan="5" class="muted">Таких файлов нет.</td></tr>'}</tbody></table>
 
 </section>
-<section class="panel"><h2>Дубликаты по всему хранилищу ${info(['Облако само ищет в фоне снимки, которые лежат в нескольких качествах: оригинал и уменьшенная копия из мессенджера. Сравниваются файлы на диске у всех людей вместе.','«Слить» оставляет лучший файл (больше пикселей), а записи людей на остальные переключает на него. Названия файлов, даты съёмки и альбомы у людей сохраняются. Лишние файлы стираются с диска, это необратимо.','Серии похожих кадров здесь не ищутся: с ними работают люди у себя на сайте.'])}</h2>
-${dupHtml}
-<p>${post(csrf, '/storage/duplicates/scan', {}, 'Проверить сейчас')}</p>
-</section>
+<section class="panel"><h2>Дубликаты</h2><p>Теперь это отдельная вкладка: <a href="/duplicates">Дубликаты</a>. Там список разбит на страницы, у каждого кадра зелёная или красная рамка.</p></section>
 <section class="panel"><h2>Лишние копии на диске ${info(['Остались от старой версии, когда один файл мог лежать на диске несколько раз. Каждая копия сверяется по SHA-256 перед стиранием.','«Только проверить» ничего не меняет и показывает, сколько места можно освободить.'])}</h2>
 ${dedupe ? (dedupe.checked === 0
     ? '<div class="msg ok">Лишних копий не найдено: на диске каждый файл лежит один раз. Так и должно быть, делать ничего не нужно.</div>'
@@ -351,7 +343,7 @@ ${dedupe ? (dedupe.checked === 0
 </section>
 <section class="panel"><h2>Альбомы ${info(['«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту.','«Удалить» убирает только сам альбом (и общий доступ к нему), файлы людей остаются.','Показать альбом другим без копирования можно на вкладке «Альбомы людям».'])}</h2>
 <table><thead><tr><th>Альбом</th><th>Владелец</th><th>Файлов</th><th>Общий</th><th>Действия</th></tr></thead>
-<tbody>${albumRows || '<tr><td colspan="5" class="muted">Альбомов нет.</td></tr>'}</tbody></table></section>`, duplicatesReport?.bulk?.running ? '<meta http-equiv="refresh" content="3">' : '');
+<tbody>${albumRows || '<tr><td colspan="5" class="muted">Альбомов нет.</td></tr>'}</tbody></table></section>`);
 }
 const QUALITY_VIDEO = [[23, 'Высокое'], [26, 'Хорошее'], [28, 'Среднее'], [31, 'Экономное'], [34, 'Компактное']];
 
@@ -487,13 +479,13 @@ export function filesPage({ data, users, albums, filter, csrf, flash, loadError 
   const f = filter;
   const opt = (v, label, cur) => `<option value="${esc(v)}"${String(cur) === String(v) ? ' selected' : ''}>${esc(label)}</option>`;
   const keep = (extra = {}) => new URLSearchParams(Object.entries({ login: f.login, from: f.from, to: f.to, q: f.q, album: f.album, ...extra }).filter(([, v]) => v)).toString();
-  const tiles = (data?.files ?? []).map((x) => `<a class="tile" href="/files/${esc(x.id)}/view" target="_blank" rel="noopener" title="${esc(x.name)}">
+  const tiles = (data?.files ?? []).map((x) => `<a class="tile" href="/files/${esc(x.id)}${keep() ? '?' + esc(keep()) : ''}" title="${esc(x.name)}">
 <object class="th" data="/files/${esc(x.id)}/thumb" type="image/webp" aria-label="${esc(x.name)}"><span class="ext">${esc(extOf(x.name))}</span></object>
 <span class="cap">${esc(x.name)}<small>${esc(x.owner)} · ${esc(x.takenAt.slice(0, 10))} · ${esc(formatSize(x.size))}</small></span></a>`).join('');
   return layout('DV Cloud: файлы', `
 ${topBar('files', csrf)}
 ${flashHtml(flash, loadError)}
-<section class="panel"><div class="panel-head"><div><h2>Файлы всех людей ${info(['Здесь видны все фото и видео, которые лежат в облаке, от новых к старым по дате съёмки. Можно отобрать по человеку, по датам, по части имени или по альбому.','Нажмите на плитку, чтобы открыть файл целиком в новой вкладке. Видео открывается встроенным плеером браузера.','Серая плитка с буквами вместо картинки: миниатюра ещё не построена (она строится, когда человек открывает свою ленту). Сам файл всё равно открывается.','Это только просмотр: ничего не удаляется и не меняется. Корзины людей сюда не попадают.'])}</h2>
+<section class="panel"><div class="panel-head"><div><h2>Файлы всех людей ${info(['Здесь видны все фото и видео, которые лежат в облаке, от новых к старым по дате съёмки. Можно отобрать по человеку, по датам, по части имени или по альбому.','Нажмите на плитку: откроется просмотр файла с информацией, соседними файлами, скачиванием и ссылками на альбомы. Видео играет встроенным плеером браузера.','Серая плитка с буквами вместо картинки: миниатюра ещё не построена (она строится, когда человек открывает свою ленту). Сам файл всё равно открывается.','Список только для просмотра: ничего не удаляется и не меняется. Корзины людей сюда не попадают.'])}</h2>
 <p class="muted">Только просмотр. Найдено: <b>${data ? esc(data.total) : 0}</b></p></div></div>
 <form class="filters" method="get" action="/files">
 <label>Человек<select name="login"><option value="">все</option>${users.map((u) => opt(u.login, u.displayName ? `${u.displayName} (${u.login})` : u.login, f.login)).join('')}</select></label>
@@ -505,6 +497,110 @@ ${flashHtml(flash, loadError)}
 <div class="tiles">${tiles || '<p class="muted">Ничего не найдено. Попробуйте убрать часть условий.</p>'}</div>
 ${data?.next ? `<div class="pager"><a class="btn" href="/files?${esc(keep({ before: data.next }))}">Показать ещё</a></div>` : ''}
 </section>`);
+}
+
+// ── Дубликаты: отдельная вкладка, страницами ──
+// Каждый кадр в рамке: зелёная = оставить, красная = убрать. Рамка переключается нажатием на полосу под картинкой
+// (скрытый флажок + подпись, без скриптов). Удержание левой кнопки на картинке приближает её (с viewer.js; без него работает :active).
+export function dupPage({ report: d, page, per, csrf, flash, loadError }) {
+  const pageHref = (n) => `/duplicates?page=${n}&per=${per}`;
+  const pages = d ? Math.max(1, Math.ceil(d.totalGroups / per)) : 1;
+  const pager = (d && d.totalGroups > per) ? `<div class="pager top"><a class="btn${page <= 1 ? ' off' : ''}" href="${pageHref(Math.max(1, page - 1))}"${page <= 1 ? ' aria-disabled="true" tabindex="-1"' : ''}>← Назад</a><span class="cur">Страница ${page} из ${pages}</span><a class="btn${page >= pages ? ' off' : ''}" href="${pageHref(Math.min(pages, page + 1))}"${page >= pages ? ' aria-disabled="true" tabindex="-1"' : ''}>Далее →</a><span class="muted">На странице: <a href="/duplicates?page=1&per=50">50</a> · <a href="/duplicates?page=1&per=100">100</a></span></div>` : (d && d.totalGroups ? `<div class="pager top"><span class="muted">На странице: <a href="/duplicates?page=1&per=50">50</a> · <a href="/duplicates?page=1&per=100">100</a></span></div>` : '');
+  let body;
+  if (!d) {
+    body = '<p class="muted">Данные о дубликатах не получены.</p>';
+  } else {
+    const head = d.computedAt
+      ? `<p>Последняя проверка: <b>${esc(d.computedAt.slice(0, 16).replace('T', ' '))}</b> (UTC)${d.scanning ? ', идёт новая' : ''}. Групп дубликатов: <b>${d.totalGroups}</b>${d.totalGroups ? `, можно освободить <b>${esc(formatSize(d.reclaimBytes))}</b>` : ''}.</p>`
+      : `<p class="muted">Первая проверка ещё не проходила${d.scanning ? ', она идёт сейчас' : ': запустится сама через минуту после старта облака'}.</p>`;
+    if (!d.groups.length) {
+      body = `${head}${d.computedAt ? (d.totalGroups ? `<p class="muted">На этой странице групп нет. <a href="${pageHref(1)}">К первой странице</a></p>` : '<p class="muted">Дубликатов нет: у каждого снимка одна копия.</p>') : ''}`;
+    } else {
+      const groups = d.groups.map((g) => {
+        const cards = g.blobs.map((b) => {
+          const id = `k-${esc(g.id)}-${esc(b.blobId)}`;
+          const fid = encodeURIComponent(b.fileId);
+          return `<li class="dup"><input class="dupchk" type="checkbox" id="${id}" name="keep" value="${esc(g.id)}:${esc(b.blobId)}"${b.keep ? ' checked' : ''}>
+<button type="button" class="zoomhold" aria-label="Приблизить (удерживайте)" title="Удерживайте левую кнопку, чтобы приблизить"><img src="/files/${fid}/thumb" alt="" width="140" height="140" loading="lazy"></button><div class="zoombox" aria-hidden="true"><figure><img src="/files/${fid}/zoom" alt="" loading="lazy"><figcaption>${b.width}×${b.height}, ${esc(formatSize(b.size))}</figcaption></figure></div>
+<label class="dupstrip" for="${id}"><span class="y">Оставить</span><span class="n">Убрать</span></label>
+<div class="dupmeta">${b.width}×${b.height}, ${esc(formatSize(b.size))}<br><span class="muted">${b.owners.map((o) => esc(o.login) + (o.files > 1 ? ` ×${o.files}` : '')).join(', ') || '—'}</span></div></li>`;
+        }).join('');
+        return `<div class="dupgroup"><input type="hidden" name="g" value="${esc(g.id)}"><ul class="dups">${cards}</ul>
+<p><button class="danger" type="submit" name="only" value="${esc(g.id)}">Применить к этой группе: освободить ${esc(formatSize(g.reclaimBytes))}</button></p></div>`;
+      }).join('');
+      const bk = d.bulk ?? { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null };
+      const last = bk.finishedAt ? `<p class="muted">Прошлое удаление: обработано ${bk.done} из ${bk.total}${bk.failed ? `, пропущено ${bk.failed}` : ''}, освобождено ${esc(formatSize(bk.bytes))}.</p>` : '';
+      const bar = bk.running
+        ? `<div class="dupbar"><p><b>Идёт удаление дубликатов:</b> ${bk.done} из ${bk.total} групп, освобождено ${esc(formatSize(bk.bytes))}${bk.failed ? `, пропущено ${bk.failed}` : ''}. Страница обновляется сама.</p></div>`
+        : `<div class="dupbar">${d.mergeable > 0
+          ? `<details class="dupconfirm"><summary class="danger">Применить к этой странице: ${d.groups.length} групп</summary>
+<p>В каждой группе останутся кадры с зелёной рамкой, остальные (красные) будут стёрты с диска. Группа, где все рамки красные, пропускается. Это необратимо.</p>
+<button class="danger" type="submit">Да, применить</button></details>`
+          : ''}${last}</div>`;
+      body = `${head}<div class="legend"><span class="g"><i></i>зелёная рамка: оставить</span><span class="r"><i></i>красная рамка: убрать</span><span class="muted">Нажмите на полосу под картинкой, чтобы сменить. Удерживайте левую кнопку на картинке, чтобы рассмотреть.</span></div>
+<form method="post" action="/storage/duplicates/apply">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}">${pager}${groups}${bar}${pager}</form>`;
+    }
+  }
+  return layout('DV Cloud: дубликаты', `
+${topBar('dups', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Дубликаты по всему хранилищу ${info(['Облако само ищет в фоне снимки, которые лежат в нескольких качествах: оригинал и уменьшенная копия из мессенджера. Сравниваются файлы на диске у всех людей вместе.','Рамка: зелёная оставить, красная убрать. Лучший кадр (больше пикселей) отмечен зелёным заранее; можно оставить два или три.','Оставленные вместе кадры больше не предлагаются как дубликаты. Лишние файлы стираются с диска, записи людей переключаются на оставленный; названия, даты съёмки и альбомы сохраняются. Это необратимо.','«Применить к этой странице» обрабатывает группы, которые видны сейчас. Потом откроется следующая страница или те же номера, но уже следующие группы.','Серии похожих кадров здесь не ищутся: с ними работают люди у себя на сайте.'])}</h2></div>
+<form method="post" action="/storage/duplicates/scan">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}"><button type="submit">Проверить сейчас</button></form></div>
+${body}
+</section>`, d?.bulk?.running ? '<meta http-equiv="refresh" content="3">' : '', SCRIPT);
+}
+
+// ── Просмотр одного файла ──
+const WEB_IMAGE = /^image\/(jpeg|png|webp|gif|avif)$/i;
+export function filePage({ info: x, filter = {}, csrf, flash, loadError }) {
+  const f = x.file;
+  const qs = (extra = {}) => new URLSearchParams(Object.entries({ login: filter.login, from: filter.from, to: filter.to, q: filter.q, album: filter.album, ...extra }).filter(([, v]) => v)).toString();
+  const withQ = (id) => `/files/${encodeURIComponent(id)}${qs() ? '?' + qs() : ''}`;
+  const id = encodeURIComponent(f.id);
+  const isVideo = /^video\//i.test(f.mime);
+  const shown = isVideo
+    ? `<video controls playsinline preload="metadata" poster="/files/${id}/thumb" src="/files/${id}/view"></video>`
+    : WEB_IMAGE.test(f.mime) ? `<img src="/files/${id}/view" alt="${esc(f.name)}">` : `<img src="/files/${id}/zoom" alt="${esc(f.name)}">`;
+  const conv = !isVideo && !WEB_IMAGE.test(f.mime) ? '<p class="muted">Формат браузер не показывает сам (например HEIC): показан просмотр, сам файл можно скачать.</p>' : '';
+  const nav = (rel, to, label) => to ? `<a class="btn" rel="${rel}" href="${esc(withQ(to))}">${label}</a>` : `<span class="btn off">${label}</span>`;
+  const albums = x.albums.length
+    ? x.albums.map((a) => `<a class="chip" href="/sharing?owner=${encodeURIComponent(a.owner)}&q=${encodeURIComponent(a.name)}" title="Раздача, передача и сейф этого альбома">${esc(a.name)}</a>`).join(' ')
+    : '<span class="muted">ни в одном</span>';
+  const day = f.takenAt.slice(0, 10);
+  return layout(`DV Cloud: ${f.name}`, `
+${topBar('files', csrf)}
+${flashHtml(flash, loadError)}
+<div class="fnav"><a class="btn" data-back href="/files${qs() ? '?' + esc(qs()) : ''}">← К списку</a>${nav('prev', x.prev, '← Новее')}${nav('next', x.next, 'Старее →')}<span class="sp"></span><span class="muted">Стрелки ← → листают, Esc возвращает к списку</span></div>
+<div class="fview"><div><div class="stage">${shown}</div>${conv}</div>
+<aside class="panel"><h2>${esc(f.name)}</h2>
+<dl class="facts"><dt>Владелец</dt><dd><b>${esc(f.owner)}</b></dd>
+<dt>Снято</dt><dd>${esc(f.takenAt.slice(0, 16).replace('T', ' '))} (UTC)</dd>
+<dt>Загружено</dt><dd>${esc(f.createdAt.slice(0, 16).replace('T', ' '))} (UTC)</dd>
+<dt>Размер</dt><dd>${esc(formatSize(f.size))}${f.width && f.height ? `, ${f.width}×${f.height}` : ''}</dd>
+<dt>Тип</dt><dd>${esc(f.mime)}</dd>
+<dt>Альбомы</dt><dd>${albums}</dd>
+<dt>Тот же файл у</dt><dd>${x.copies.length ? x.copies.map(esc).join(', ') : '<span class="muted">больше ни у кого</span>'}</dd>
+<dt>SHA-256</dt><dd><code>${esc(f.sha256)}</code></dd></dl>
+<div class="factions"><a class="btn primary" href="/files/${id}/download">Скачать оригинал</a>
+<a class="btn" href="/files/${id}/view" target="_blank" rel="noopener">Открыть оригинал в новой вкладке</a>
+<a class="btn" href="/files?login=${encodeURIComponent(f.owner)}">Все файлы: ${esc(f.owner)}</a>
+<a class="btn" href="/files?from=${esc(day)}&to=${esc(day)}">Все файлы за ${esc(day)}</a>
+<a class="btn" href="/files?q=${encodeURIComponent(f.name)}">Файлы с таким именем</a></div>
+<p class="muted">Раздать, передать или забрать в сейф можно у альбома: нажмите на название альбома выше.</p></aside></div>`, '', SCRIPT);
+}
+
+// Передача альбома: подтверждение с точными числами. Само действие делает кнопка внизу (POST).
+export function transferConfirmPage({ album, login, preview, csrf, flash, loadError }) {
+  const id = encodeURIComponent(album.id);
+  return layout('DV Cloud: передать альбом', `
+${topBar('sharing', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><h2>Передать альбом «${esc(album.name)}» человеку ${esc(login)}?</h2>
+<p>Сейчас владелец: <b>${esc(preview.owner)}</b>. Файлов в альбоме: <b>${preview.files}</b>.</p>
+<div class="msg error"><b>Файлы уйдут вместе с альбомом.</b> У ${esc(preview.owner)} они исчезнут полностью${preview.inOtherAlbums ? `, в том числе из её/его других альбомов: <b>${preview.inOtherAlbums}</b>` : ''}. Доступа к ним у прежнего владельца не останется. Место освободится у ${esc(preview.owner)} и займётся у ${esc(login)}.</div>
+<p class="muted">На диске файлы остаются в одном экземпляре. Если у ${esc(login)} такой же файл уже есть, второй не создаётся.</p>
+<form method="post" action="/sharing/${id}/transfer">${csrfInput(csrf)}<input type="hidden" name="login" value="${esc(login)}"><input type="hidden" name="confirm" value="1">
+<button class="danger" type="submit">Да, передать</button> <a class="btn" href="/sharing">Отмена</a></form></section>`);
 }
 
 // ── Раздача альбомов: кому открыт каждый альбом, открыть одному, всем или всё всем ──
@@ -531,7 +627,7 @@ ${others.length ? `<div class="acact"><button class="primary" type="submit">Со
 </form>
 <details class="amore"><summary>Передать другому или забрать у владельца</summary>
 <div class="amoreb">
-${others.length ? `<form method="post" action="/sharing/${id}/transfer">${csrfInput(csrf)}<p><b>Передать другому человеку.</b> У него появится такой же альбом с теми же файлами (они считаются в его место), у владельца альбом исчезнет, а его фото останутся в его библиотеке.</p><select name="login" aria-label="Кому передать">${opts}</select> <button type="submit">Передать</button></form>` : ''}
+${others.length ? `<form method="get" action="/sharing/${id}/transfer"><p><b>Передать другому человеку (смена владельца).</b> У него появится такой же альбом с теми же файлами (они считаются в его место). У прежнего владельца исчезнут и альбом, и сами файлы, в том числе из его других альбомов. На диске файлы остаются. Перед передачей будет страница подтверждения с числами.</p><select name="login" aria-label="Кому передать">${opts}</select> <button type="submit">Передать…</button></form>` : ''}
 <form method="post" action="/sharing/${id}/vault">${csrfInput(csrf)}<p><b>Забрать у владельца в сейф.</b> Альбом и его файлы исчезнут у ${esc(a.owner)} полностью (место освободится), файлы будут лежать в сейфе, защищённые от стирания. Достать их можно только по паролю админки.</p>
 <input type="text" name="note" maxlength="300" placeholder="Заметка (необязательно)" aria-label="Заметка к альбому в сейфе"> <input type="password" name="password" placeholder="Пароль админки" autocomplete="current-password" required aria-label="Пароль админки"> <button class="danger" type="submit">В сейф</button></form>
 </div></details></li>`;
@@ -541,7 +637,7 @@ ${topBar('sharing', csrf)}
 ${flashHtml(flash, loadError)}
 <section class="panel"><div class="panel-head"><div><h2>Раздать всё всем ${info(['Каждый альбом каждого человека откроется всем остальным людям. Люди увидят чужие альбомы у себя и смогут сохранить файлы себе, но не смогут их менять.','Место на диске при этом не тратится: файл остаётся в одном экземпляре.','Действие можно отменить только вручную, снимая доступ по альбомам ниже. Поэтому нужно ввести слово.'])}</h2><p class="muted">Чтобы в семье все видели альбомы друг друга.</p></div></div>
 <form method="post" action="/sharing/everything">${csrfInput(csrf)}<input type="text" name="word" placeholder="впишите: раздать" autocomplete="off" required aria-label="Подтверждение: впишите слово раздать"> <button class="primary" type="submit">Открыть все альбомы всем</button></form></section>
-<section class="panel"><div class="panel-head"><div><h2>Альбомы ${info(['Отметьте флажками, кому открыт каждый альбом, и нажмите «Сохранить доступ». Снятый флажок закрывает доступ, отмеченный открывает.','Люди видят чужие альбомы у себя и могут сохранить файлы себе; менять альбом они не могут. Новые файлы, которые владелец добавит позже, видны сразу: это не копия.','«Открыть всем» отмечает всех, «Скрыть у всех» снимает все доступы (альбом остаётся у хозяина).','«Передать другому» делает владельцем другого человека. «В сейф» забирает альбом и файлы у владельца целиком: они пропадают у людей и лежат в сейфе под защитой.'])}</h2><p class="muted">Показано альбомов: ${shown.length} из ${albums.length}.</p></div></div>
+<section class="panel"><div class="panel-head"><div><h2>Альбомы ${info(['Отметьте флажками, кому открыт каждый альбом, и нажмите «Сохранить доступ». Снятый флажок закрывает доступ, отмеченный открывает.','Люди видят чужие альбомы у себя и могут сохранить файлы себе; менять альбом они не могут. Новые файлы, которые владелец добавит позже, видны сразу: это не копия.','«Открыть всем» отмечает всех, «Скрыть у всех» снимает все доступы (альбом остаётся у хозяина).','«Передать другому» меняет владельца: файлы уходят вместе с альбомом и у прежнего владельца пропадают полностью. «В сейф» забирает альбом и файлы у владельца целиком: они пропадают у людей и лежат в сейфе под защитой.'])}</h2><p class="muted">Показано альбомов: ${shown.length} из ${albums.length}.</p></div></div>
 <form class="afilter" method="get" action="/sharing"><select name="owner" aria-label="Владелец"><option value="">Все владельцы</option>${owners.map((o) => `<option value="${esc(o)}"${filter.owner === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>
 <select name="kind" aria-label="Тип альбома"><option value="">Любой тип</option>${Object.entries(KIND_NAME).map(([k, n]) => `<option value="${k}"${filter.kind === k ? ' selected' : ''}>${n}</option>`).join('')}</select>
 <input type="search" name="q" value="${esc(filter.q ?? '')}" placeholder="Название альбома" aria-label="Поиск по названию"> <button type="submit">Показать</button></form>
@@ -633,3 +729,30 @@ export function secretPage({ title, login, password }) {
 <p class="muted">Эту страницу нельзя открыть повторно. Если пароль потерян, сбрось его заново.</p>
 <p><a href="/">К списку людей</a></p>`);
 }
+
+// Маленький скрипт для просмотра: стрелки и Esc, приближение удержанием ЛЕВОЙ кнопки (без меню браузера). Своё, без библиотек.
+export const VIEWER_JS = `(function () {
+  document.documentElement.classList.add('js');
+  var held = null;
+  function release() { if (held) { held.classList.remove('hold'); held = null; } }
+  function grab(el) { release(); held = el; el.classList.add('hold'); }
+  function zoomOf(t) { return t && t.closest ? t.closest('.zoomhold') : null; }
+  document.addEventListener('mousedown', function (e) { var z = zoomOf(e.target); if (z && e.button === 0) { grab(z); e.preventDefault(); } });
+  document.addEventListener('mouseup', release);
+  document.addEventListener('touchstart', function (e) { var z = zoomOf(e.target); if (z) grab(z); }, { passive: true });
+  document.addEventListener('touchend', release);
+  document.addEventListener('touchcancel', release);
+  window.addEventListener('blur', release);
+  document.addEventListener('contextmenu', function (e) { if (zoomOf(e.target) || (e.target.closest && e.target.closest('.zoombox'))) e.preventDefault(); });
+  document.addEventListener('dragstart', function (e) { if (zoomOf(e.target)) e.preventDefault(); });
+  document.addEventListener('keydown', function (e) {
+    var t = e.target && e.target.tagName;
+    if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return;
+    var a = null;
+    if (e.key === 'ArrowLeft') a = document.querySelector('a[rel=prev]');
+    else if (e.key === 'ArrowRight') a = document.querySelector('a[rel=next]');
+    else if (e.key === 'Escape') a = document.querySelector('a[data-back]');
+    if (a) { e.preventDefault(); location.href = a.href; }
+  });
+})();
+`;

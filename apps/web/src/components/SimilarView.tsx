@@ -1,15 +1,18 @@
-import { Check, Loader2, Sparkles, Trash2 } from 'lucide-react';
+import { Check, Info, Loader2, Sparkles, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, previewUrl, thumbUrl } from '../api';
 import { formatBytes } from '../lib/format';
 import type { SimilarFile, SimilarGroup, SimilarResult } from '../types';
 
 // Серии: кадры одного момента. Дубликатами занимается администратор (с версии 0.11.3 это в админке, в фоне).
-const HINT = 'Кадры одного момента, снятые подряд. Лучшие (самые резкие) оставлены, лишние отмечены. Отметки можно менять. Чтобы рассмотреть кадр, зажмите на нём правую кнопку мыши (на телефоне: удерживайте палец): он приблизится, а когда отпустите, улетит обратно.';
+const HINT = 'Кадры одного момента, снятые подряд. Лучшие (самые резкие) оставлены, лишние отмечены. Отметки можно менять.';
+const ZOOM_HINT = 'Чтобы рассмотреть кадр, нажмите на нём правую кнопку мыши и держите (на телефоне: удерживайте палец). Кадр приблизится, а когда отпустите, вернётся на место. Колесо мыши меняет увеличение.';
+const HINT_KEY = 'dv-series-zoom-hint';
 
 interface Zoom { file: SimilarFile; from: DOMRect; open: boolean }
 
 // Приближение кадра: из своей плитки вырастает в большой снимок поверх экрана, отпустили, он возвращается назад.
+// Плавность: блок сразу имеет конечный размер, а движение делает только transform (его считает видеокарта, без перерасчёта вёрстки).
 function ZoomLayer({ z, scale }: { z: Zoom; scale: number }) {
   const vw = window.innerWidth, vh = window.innerHeight;
   const ratio = z.file.width > 0 && z.file.height > 0 ? z.file.width / z.file.height : 1;
@@ -18,14 +21,16 @@ function ZoomLayer({ z, scale }: { z: Zoom; scale: number }) {
   if (h > vh * 0.8) { h = vh * 0.8; w = h * ratio; }
   const [loaded, setLoaded] = useState(false);
   const r = z.from;
-  const box = z.open
-    ? { left: (vw - w) / 2, top: (vh - h) / 2 - 12, width: w, height: h }
-    : { left: r.left, top: r.top, width: r.width, height: r.height };
+  const left = (vw - w) / 2, top = (vh - h) / 2 - 12;
+  const s = Math.min(1, r.width / w);
+  const dx = r.left + r.width / 2 - (left + w / 2);
+  const dy = r.top + r.height / 2 - (top + h / 2);
+  const transform = z.open ? 'translate3d(0,0,0) scale(1)' : `translate3d(${dx}px,${dy}px,0) scale(${s})`;
   return (
     <div className={`pointer-events-none fixed inset-0 z-50 transition-colors duration-200 ${z.open ? 'bg-black/70' : 'bg-black/0'}`} aria-hidden>
-      <div className="absolute overflow-hidden rounded-xl shadow-2xl transition-all duration-200 ease-out" style={box}>
+      <div className="absolute overflow-hidden rounded-xl shadow-2xl will-change-transform" style={{ left, top, width: w, height: h, transform, transformOrigin: 'center', transition: 'transform 220ms cubic-bezier(.2,.8,.2,1)' }}>
         <img src={thumbUrl(z.file.id, true)} alt="" className="absolute inset-0 size-full object-contain" style={{ transform: `scale(${scale})` }} draggable={false} />
-        <img src={previewUrl(z.file.id)} alt="" onLoad={() => setLoaded(true)} className={`absolute inset-0 size-full object-contain transition-opacity duration-150 ${loaded ? 'opacity-100' : 'opacity-0'}`} style={{ transform: `scale(${scale})` }} draggable={false} />
+        <img src={previewUrl(z.file.id)} alt="" decoding="async" onLoad={() => setLoaded(true)} className={`absolute inset-0 size-full object-contain transition-opacity duration-150 ${loaded ? 'opacity-100' : 'opacity-0'}`} style={{ transform: `scale(${scale})` }} draggable={false} />
       </div>
       {z.open && (
         <p className="absolute inset-x-0 bottom-6 text-center text-sm text-white drop-shadow">
@@ -45,6 +50,7 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
   const [zoom, setZoom] = useState<Zoom | null>(null);
   const [scale, setScale] = useState(1);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [hintShown, setHintShown] = useState(() => { try { return localStorage.getItem(HINT_KEY) !== '1'; } catch { return true; } });
   const noClick = useRef(0); // после приближения пальцем отпускание не должно отметить кадр
 
   const load = useCallback((k: 'series') => {
@@ -67,7 +73,7 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
     window.setTimeout(() => setZoom((z) => (z && !z.open ? null : z)), 230);
   }
   // Заранее просим у сервера большое изображение, чтобы к нажатию оно уже было готово.
-  function preload(id: string) { const i = new Image(); i.src = previewUrl(id); }
+  function preload(id: string) { const i = new Image(); i.decoding = 'async'; i.src = previewUrl(id); void i.decode?.().catch(() => undefined); }
   useEffect(() => {
     if (!zoom) return;
     const onWheel = (e: WheelEvent) => { e.preventDefault(); setScale((s) => Math.min(4, Math.max(1, s - e.deltaY * 0.002))); };
@@ -76,6 +82,8 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
     window.addEventListener('pointercancel', closeZoom);
     return () => { window.removeEventListener('wheel', onWheel); window.removeEventListener('pointerup', closeZoom); window.removeEventListener('pointercancel', closeZoom); };
   }, [zoom?.file.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function closeHint() { setHintShown(false); try { localStorage.setItem(HINT_KEY, '1'); } catch { /* без хранилища подсказка покажется снова */ } }
 
   const total = marked.size;
   const bytes = useMemo(() => (data?.groups ?? []).flatMap((g) => g.files).filter((f) => marked.has(f.id)).reduce((s, f) => s + f.size, 0), [data, marked]);
@@ -106,6 +114,13 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
     <div className="mx-auto max-w-4xl px-3 pb-32 pt-6 sm:px-6">
       <h2 className="mb-1 text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">Серии</h2>
       <p className="mb-5 text-sm text-gray-600 dark:text-gray-400">{HINT}</p>
+      {hintShown && (
+        <div role="note" className="mb-5 flex items-start gap-3 rounded-xl border border-violet-300 bg-violet-50 p-3 text-sm text-violet-900 dark:border-violet-500/40 dark:bg-violet-950/40 dark:text-violet-100">
+          <Info className="mt-0.5 size-5 shrink-0" aria-hidden />
+          <p className="flex-1">{ZOOM_HINT}</p>
+          <button type="button" onClick={closeHint} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 font-medium hover:bg-violet-100 dark:hover:bg-violet-900/50"><X className="size-4" aria-hidden />Понятно</button>
+        </div>
+      )}
       {progress && <p className="mb-4 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300"><Sparkles className="size-4" aria-hidden /> Идёт подготовка: обработано {data!.ready} из {data!.images} фото. Результат будет полнее.</p>}
       {!data && <div className="flex justify-center py-20 text-gray-500"><Loader2 className="size-6 animate-spin" aria-label="Загружаем" /></div>}
       {data && data.groups.length === 0 && <p className="py-16 text-center text-gray-600 dark:text-gray-400">{'Серий не найдено.'}</p>}
@@ -126,9 +141,10 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
                     }}
                     onPointerUp={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
                     onPointerCancel={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
-                    aria-pressed={marked.has(f.id)} aria-label={`${f.name}: ${marked.has(f.id) ? 'будет удалён' : 'останется'}`} className={`relative block overflow-hidden rounded-lg ring-2 ${marked.has(f.id) ? 'ring-red-500' : 'ring-transparent'}`}>
+                    aria-pressed={marked.has(f.id)} aria-label={`${f.name}: ${marked.has(f.id) ? 'будет удалён' : 'останется'}`} className={`group relative block overflow-hidden rounded-lg ring-2 ${marked.has(f.id) ? 'ring-red-500' : 'ring-transparent'}`}>
                     <img src={thumbUrl(f.id)} alt="" loading="lazy" className={`aspect-square w-full object-cover ${marked.has(f.id) ? 'opacity-50' : ''}`} />
                     <span className={`absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full text-white ${marked.has(f.id) ? 'bg-red-600' : 'bg-emerald-600'}`}>{marked.has(f.id) ? <Trash2 className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}</span>
+                    <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:hidden">ПКМ: приблизить</span>
                     {i === 0 && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white">лучший</span>}
                   </button>
                   <p className="mt-1 truncate text-xs text-gray-700 dark:text-gray-300">{f.name}</p>

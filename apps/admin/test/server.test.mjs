@@ -43,7 +43,7 @@ describe('админка', () => {
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
         if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
         if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z', note: 'Очистил корзину: anna. Был в альбомах: Отпуск', orphanedAt: '2026-11-02T09:00:00.000Z' }] });
-        if (req.method === 'GET' && req.url === '/internal/duplicates') return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, mergeable: 1, bulk: { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null }, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/duplicates?')) return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, mergeable: 1, bulk: { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null }, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
         if (req.method === 'POST' && req.url === '/internal/duplicates/scan') return j(200, { queued: true });
         if (req.method === 'POST' && req.url === '/internal/duplicates/merge') return j(200, { merged: 1, removedFiles: 0, bytes: 14110 });
         if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
@@ -51,6 +51,9 @@ describe('админка', () => {
         if (req.method === 'POST' && req.url === '/internal/albums/8/restore') return j(200, { name: 'Личное (2)' });
         if (req.method === 'DELETE' && req.url === '/internal/albums-deleted/8') return j(200, { ok: true });
         if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
+        if (req.method === 'GET' && req.url === '/internal/albums/3/transfer-preview') return j(200, { files: 12, inOtherAlbums: 5, owner: 'anna' });
+        if (req.method === 'GET' && req.url.startsWith('/internal/browse/files/41/info')) return j(200, { file: { id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z', width: 800, height: 600, sha256: 'a'.repeat(64), createdAt: '2026-03-06T10:00:00.000Z', blobId: '9' }, albums: [{ id: '3', name: 'Отпуск', owner: 'anna' }], copies: ['boris'], prev: '40', next: null });
+        if (req.method === 'GET' && req.url === '/internal/browse/files/41/original?dl=1') { res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': 4, 'content-disposition': "attachment; filename*=UTF-8''IMG_1.jpg" }); return res.end('JPEG'); }
         if (req.method === 'GET' && req.url.startsWith('/internal/browse/files?')) return j(200, { files: [{ id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z' }], next: '2026-03-05T10:00:00.000Z_41', total: 90 });
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/thumb') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/original') { res.writeHead(req.headers.range ? 206 : 200, { 'content-type': 'image/jpeg', 'content-length': 4, 'accept-ranges': 'bytes' }); return res.end('JPEG'); }
@@ -223,7 +226,7 @@ describe('админка', () => {
     assert.ok(page.text.includes('Был в альбомах: Отпуск'), 'у бесхозного файла видно, откуда он');
     assert.ok(page.text.includes('Удалённые альбомы') && page.text.includes('Личное &lt;i&gt;'), 'удалённые альбомы показаны, имя экранировано');
     assert.ok(!page.text.includes('<i>'), 'разметка из имени альбома не попала как есть');
-    assert.ok(page.text.includes('Дубликаты по всему хранилищу') && page.text.includes('800×600') && page.text.includes('Оставить') && page.text.includes('/files/11/thumb'), 'дубликаты показаны с миниатюрами');
+    assert.ok(page.text.includes('href="/duplicates"') && !page.text.includes('class="dupgroup"'), 'дубликаты переехали на свою вкладку');
     assert.equal((await req('GET', '/storage')).status, 303, 'без входа не открывается');
   });
 
@@ -246,18 +249,25 @@ describe('админка', () => {
     assert.equal(calls.length, nDup, 'неверные номера на сервер не уходят');
     await post('/storage/duplicates/scan', {});
     assert.ok(calls.some((c) => c.startsWith('POST /internal/duplicates/scan')));
-    // Одна форма на весь список: флажки «Оставить», приближение без скриптов, «Удалить» внизу после списка
-    const page = (await req('GET', '/storage', { cookie })).text;
+    // Вкладка «Дубликаты»: одна форма, рамки (скрытый флажок + полоса), приближение, страницы, «Применить» внизу после списка
+    const page = (await req('GET', '/duplicates', { cookie })).text;
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/duplicates?offset=0&limit=50')), 'страница 1 по 50 групп');
     assert.ok(page.includes('class="dupbar"') && page.includes('action="/storage/duplicates/apply"'));
     assert.ok(page.includes('name="keep" value="1:1" checked') && page.includes('name="keep" value="1:2">'), 'лучший отмечен заранее, второй нет');
-    assert.ok(page.includes('class="zoomhold"') && page.includes('/files/11/zoom'), 'приближение зажатием');
+    assert.ok(page.includes('class="dupstrip" for="k-1-1"') && page.includes('800×600'), 'полоса-переключатель и размеры');
+    assert.ok(page.includes('class="zoomhold"') && page.includes('/files/11/zoom') && page.includes('/files/11/thumb'), 'приближение зажатием');
+    assert.ok(page.includes('<script src="/viewer.js"></script>'));
+    assert.ok(!page.includes('type="checkbox" id="k-1-1" name="keep" value="1:1" checked class'), 'флажок скрыт стилем, не атрибутом');
     const mf = page.slice(page.indexOf('action="/storage/duplicates/apply"'));
     assert.ok(!mf.slice(0, mf.indexOf('</form>')).includes('name="word"'), 'слово вводить не нужно');
     assert.ok(page.indexOf('class="dupgroup"') < page.indexOf('class="dupbar"'), 'кнопка внизу, после списка');
+    assert.ok((await req('GET', '/duplicates?page=3&per=100', { cookie })).status === 200);
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/duplicates?offset=200&limit=100')), 'страница 3 по 100 даёт смещение 200');
     const nAll = calls.length;
     await req('POST', '/storage/duplicates/apply', { cookie, form: [['csrf', csrf]] });
     assert.equal(calls.length, nAll, 'без групп удаление не запускается');
-    await req('POST', '/storage/duplicates/apply', { cookie, form: [['csrf', csrf], ['g', '1'], ['keep', '1:1'], ['keep', '1:2'], ['keep', '9:5']] });
+    const back = await req('POST', '/storage/duplicates/apply', { cookie, form: [['csrf', csrf], ['page', '2'], ['per', '100'], ['g', '1'], ['keep', '1:1'], ['keep', '1:2'], ['keep', '9:5']] });
+    assert.equal(back.headers.location, '/duplicates?page=2&per=100', 'после применения возвращаемся на ту же страницу');
     const sent = calls.filter((c) => c.startsWith('POST /internal/duplicates/apply')).pop();
     assert.ok(sent && sent.includes('"group":"1"') && sent.includes('"keep":["1","2"]') && !sent.includes('"5"'), sent);
     await post('/storage/albums-deleted/8/restore', {});
@@ -421,7 +431,7 @@ describe('админка', () => {
     const cookie = await login();
     const page = await req('GET', '/files?login=anna&from=2026-03-01&q=IMG', { cookie });
     assert.equal(page.status, 200);
-    assert.ok(page.text.includes('data="/files/41/thumb"') && page.text.includes('href="/files/41/view"'));
+    assert.ok(page.text.includes('data="/files/41/thumb"') && page.text.includes('href="/files/41?login=anna'), 'плитка ведёт на просмотр с тем же фильтром');
     assert.ok(!page.text.includes('<b>IMG_1</b>'), 'имя файла экранировано');
     assert.ok(page.text.includes('Найдено: <b>90</b>'));
     assert.ok(page.text.includes('before=2026-03-05'), 'ссылка на следующую страницу');
@@ -429,6 +439,28 @@ describe('админка', () => {
     assert.ok(!page.text.includes('<script'));
     assert.ok(calls.some((c) => c.startsWith('GET /internal/browse/files?') && c.includes('login=anna') && c.includes('from=2026-03-01') && c.includes('q=IMG') && c.includes('limit=60')));
     assert.ok(page.text.includes('class="info"'), 'кнопка «Инфо»');
+  });
+
+  it('просмотр файла: карточка, соседи, скачивание, скрипт; чужого нет', async () => {
+    const cookie = await login();
+    const page = await req('GET', '/files/41?login=anna&q=IMG', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('src="/files/41/view"') && page.text.includes('/files/41/download'));
+    assert.ok(page.text.includes('rel="prev" href="/files/40?login=anna&amp;q=IMG"'), 'сосед сохраняет фильтр');
+    assert.ok(page.text.includes('data-back href="/files?login=anna&amp;q=IMG"'));
+    assert.ok(page.text.includes('boris') && page.text.includes('800×600') && page.text.includes('Отпуск'));
+    assert.ok(!page.text.includes('<b>IMG_1</b>'), 'имя экранировано');
+    assert.ok(page.text.includes('<script src="/viewer.js"></script>') && !/<script>/.test(page.text), 'только внешний скрипт');
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/browse/files/41/info?') && c.includes('login=anna') && c.includes('q=IMG')));
+    const d = await fetch(`${base}/files/41/download`, { headers: { cookie: `dvcloud_admin=${cookie.split('=')[1] ?? ''}` } });
+    assert.equal(d.status, 200);
+    assert.match(d.headers.get('content-disposition') ?? '', /^attachment/);
+    await d.text();
+    const js = await fetch(`${base}/viewer.js`);
+    assert.equal(js.status, 200);
+    assert.ok((await js.text()).includes('contextmenu'));
+    assert.equal((await req('GET', '/files/41', {})).status, 303, 'без входа нельзя');
+    assert.equal((await req('GET', '/files/abc', { cookie })).status, 404);
   });
 
   it('миниатюра и файл отдаются через админку; без входа нельзя; чужих путей нет', async () => {
@@ -483,7 +515,14 @@ describe('админка', () => {
     await post('/sharing/3/set', [['login', 'carol']]);
     const made = calls.slice(n0);
     assert.ok(made.some((c) => c.startsWith('PUT /internal/albums/3/shares/carol')) && made.some((c) => c.startsWith('DELETE /internal/albums/3/shares/boris')), made.join(' | '));
-    await post('/sharing/3/transfer', { login: 'boris' });
+    const n2 = calls.length;
+    const ask = await post('/sharing/3/transfer', { login: 'boris' });
+    assert.equal(ask.headers.location, '/sharing/3/transfer?login=boris', 'без подтверждения ничего не передаётся');
+    assert.equal(calls.length, n2);
+    const conf = await req('GET', '/sharing/3/transfer?login=boris', { cookie });
+    assert.equal(conf.status, 200);
+    assert.ok(conf.text.includes('Файлы уйдут вместе с альбомом') && conf.text.includes('<b>5</b>') && conf.text.includes('<b>12</b>'), 'в подтверждении точные числа');
+    await post('/sharing/3/transfer', { login: 'boris', confirm: '1' });
     assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/transfer') && c.includes('"move":true')));
     // сейф: с неверным паролем запроса нет, с верным есть
     const n1 = calls.length;

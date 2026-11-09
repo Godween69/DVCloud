@@ -248,6 +248,27 @@ describe('единое хранение и общий доступ (настоя
     assert.ok((await api('GET', '/api/albums', { cookie: e.anna })).json.albums.some((a: any) => a.id === album));
   });
 
+  it('смена хозяина альбома: файлы уходят вместе с альбомом, у прежнего хозяина пропадают и из других альбомов', async () => {
+    const f1 = (await upload(e.anna, 'mv1.jpg', jpeg('move-1'), '2026-10-03T10:00:00Z')).json.file.id;
+    const f2 = (await upload(e.anna, 'mv2.jpg', jpeg('move-2'), '2026-10-03T11:00:00Z')).json.file.id;
+    const album = (await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Уезжает' }), ...J })).json.album.id;
+    const other = (await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Остаётся' }), ...J })).json.album.id;
+    await api('POST', `/api/albums/${album}/add`, { cookie: e.anna, body: body({ ids: [f1, f2] }), ...J });
+    await api('POST', `/api/albums/${other}/add`, { cookie: e.anna, body: body({ ids: [f1] }), ...J });
+    const pv = await intCall('GET', `/internal/albums/${album}/transfer-preview`);
+    assert.deepEqual({ files: pv.files, inOtherAlbums: pv.inOtherAlbums, owner: pv.owner }, { files: 2, inOtherAlbums: 1, owner: 'anna' });
+    const disk = (await libraryFiles()).length;
+    const r = await intCall('POST', `/internal/albums/${album}/transfer`, { login: 'boris', move: true });
+    assert.equal(r.linked, 2);
+    assert.equal(r.removedFromOwner, 2);
+    assert.equal((await libraryFiles()).length, disk, 'файлы на диске остались');
+    const annaFiles = (await api('GET', '/api/files', { cookie: e.anna })).json.files;
+    assert.ok(!annaFiles.some((x: any) => x.name === 'mv1.jpg' || x.name === 'mv2.jpg'), 'у прежнего хозяина записей нет');
+    assert.ok(!(await api('GET', '/api/albums', { cookie: e.anna })).json.albums.some((a: any) => a.id === album));
+    const borisFiles = (await api('GET', '/api/files', { cookie: e.boris })).json.files;
+    assert.ok(borisFiles.some((x: any) => x.name === 'mv1.jpg') && borisFiles.some((x: any) => x.name === 'mv2.jpg'));
+  });
+
   it('админ удаляет альбом: файлы людей остаются', async () => {
     const f = (await upload(e.anna, 'ad1.jpg', jpeg('admin-del-1'), '2026-10-02T10:00:00Z')).json.file.id;
     const album = (await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Лишний' }), ...J })).json.album.id;
