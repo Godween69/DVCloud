@@ -72,6 +72,14 @@ export class AlbumsController {
     return { album: await this.albums.rename(req.user.id, id, asObject(req.body).name) };
   }
 
+  // Где показывать файлы альбома: в библиотеке, фото, видео, скриншотах. Тело: { library?, photos?, videos?, screenshots? } (да/нет).
+  @Patch(':id/show')
+  async show(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ album: PublicAlbum }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return { album: await this.albums.setShow(req.user.id, id, req.body) };
+  }
+
   @Delete(':id')
   async remove(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ ok: true }> {
     res.setHeader('Cache-Control', 'no-store');

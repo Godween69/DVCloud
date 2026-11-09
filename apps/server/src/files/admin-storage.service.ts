@@ -11,6 +11,8 @@ export interface AdminAlbum {
   owner: string;
   count: number;
   sharedWith: number;
+  deletedAt?: string; // у удалённого человеком альбома: когда он его удалил
+  show?: { library: boolean; photos: boolean; videos: boolean; screenshots: boolean };
 }
 
 export interface AdminFile {
@@ -63,9 +65,12 @@ export class AdminStorageService {
   }
 
   // Файлы на диске, на которые не ссылается ничей список (человек убрал у себя насовсем или удалён аккаунт).
-  async orphans(limit = 200): Promise<{ id: string; name: string; size: number; createdAt: string }[]> {
-    const r = await this.db.query<BlobRow>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) ORDER BY b.id LIMIT $1', [limit]);
-    return r.rows.map((b) => ({ id: b.id, name: b.path.split('/').pop() ?? b.path, size: Number(b.size_bytes), createdAt: b.created_at.toISOString() }));
+  async orphans(limit = 200): Promise<{ id: string; name: string; size: number; createdAt: string; note: string | null; orphanedAt: string | null }[]> {
+    const r = await this.db.query<BlobRow & { orphaned_at: Date | null; orphan_note: string | null }>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) ORDER BY b.id LIMIT $1', [limit]);
+    return r.rows.map((b) => ({
+      id: b.id, name: b.path.split('/').pop() ?? b.path, size: Number(b.size_bytes), createdAt: b.created_at.toISOString(),
+      note: b.orphan_note, orphanedAt: b.orphaned_at ? b.orphaned_at.toISOString() : null,
+    }));
   }
 
   // Стирает с диска сразу все файлы без владельца. confirm = число, которое человек видел на экране: если файлов стало
@@ -102,6 +107,7 @@ export class AdminStorageService {
   // Миниатюра и превью файла-оригинала (общие) уходят вместе с ним; прежние по записям, если ещё не перенесены, тоже.
   private async removeDerived(blobId: string, links: Pick<FileRow, 'owner_id' | 'id'>[]): Promise<void> {
     await this.storage.remove(`thumbs/${blobId}.webp`);
+    await this.storage.remove(`thumbs-fit/${blobId}.webp`);
     await this.storage.remove(`previews/${blobId}.webp`);
     await rm(this.storage.abs(`faces/${blobId}`), { recursive: true, force: true }); // вырезки лиц
     for (const l of links) await this.removeLegacyDerived(l);
@@ -253,35 +259,65 @@ export class AdminStorageService {
   // Скрыть альбом у всех: снять все доступы. Сам альбом и его файлы у хозяина остаются. Возвращает, сколько доступов снято.
   async unshareAll(albumId: string): Promise<number> {
     if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
-    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
+    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
     return (await this.db.query('DELETE FROM album_shares WHERE album_id = $1', [albumId])).rowCount ?? 0;
   }
 
   // Открыть альбом всем действующим людям, кроме хозяина. Возвращает, сколько новых доступов создано.
   async shareWithAll(albumId: string): Promise<number> {
     if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
-    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
+    if (!(await this.db.query('SELECT 1 FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rowCount) throw new NotFoundException('Альбом не найден');
     const r = await this.db.query('INSERT INTO album_shares (album_id, user_id) SELECT a.id, u.id FROM albums a CROSS JOIN users u WHERE a.id = $1 AND u.id <> a.owner_id AND NOT u.disabled ON CONFLICT DO NOTHING', [albumId]);
     return r.rowCount ?? 0;
   }
 
   // Каждый альбом каждого человека открыть всем остальным: «чтобы в семье все видели альбомы друг друга».
   async shareEverything(): Promise<{ albums: number; links: number }> {
-    const albums = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM albums')).rows[0].n);
-    const r = await this.db.query('INSERT INTO album_shares (album_id, user_id) SELECT a.id, u.id FROM albums a CROSS JOIN users u WHERE u.id <> a.owner_id AND NOT u.disabled ON CONFLICT DO NOTHING');
+    const albums = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM albums WHERE deleted_at IS NULL')).rows[0].n);
+    const r = await this.db.query('INSERT INTO album_shares (album_id, user_id) SELECT a.id, u.id FROM albums a CROSS JOIN users u WHERE a.deleted_at IS NULL AND u.id <> a.owner_id AND NOT u.disabled ON CONFLICT DO NOTHING');
     return { albums, links: r.rowCount ?? 0 };
   }
 
   // ---- Альбомы ----
 
   async albums(): Promise<AdminAlbum[]> {
-    const r = await this.db.query<{ id: string; name: string; owner: string; n: string; shared: string }>(
-      `SELECT a.id, a.name, u.login AS owner,
+    const r = await this.db.query<{ id: string; name: string; owner: string; n: string; shared: string; in_library: boolean; in_photos: boolean; in_videos: boolean; in_screenshots: boolean }>(
+      `SELECT a.id, a.name, u.login AS owner, a.in_library, a.in_photos, a.in_videos, a.in_screenshots,
          (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
          (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared
-       FROM albums a JOIN users u ON u.id = a.owner_id ORDER BY u.login, lower(a.name)`,
+       FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.deleted_at IS NULL ORDER BY u.login, lower(a.name)`,
     );
-    return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared) }));
+    return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared), show: { library: x.in_library, photos: x.in_photos, videos: x.in_videos, screenshots: x.in_screenshots } }));
+  }
+
+  // Альбомы, которые люди удалили у себя. Файлы в них никуда не делись: они в библиотеках хозяев. Здесь можно вернуть альбом или стереть его насовсем.
+  async deletedAlbums(): Promise<AdminAlbum[]> {
+    const r = await this.db.query<{ id: string; name: string; owner: string; n: string; shared: string; deleted_at: Date }>(
+      `SELECT a.id, a.name, u.login AS owner, a.deleted_at,
+         (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
+         (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared
+       FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.deleted_at IS NOT NULL ORDER BY a.deleted_at DESC, a.id DESC`,
+    );
+    return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared), deletedAt: x.deleted_at.toISOString() }));
+  }
+
+  // Вернуть удалённый альбом хозяину. Если за это время у него появился альбом с таким же названием, возвращаем под другим именем.
+  async restoreAlbum(albumId: string): Promise<{ name: string }> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const a = (await this.db.query<{ name: string; owner_id: string }>('SELECT name, owner_id FROM albums WHERE id = $1 AND deleted_at IS NOT NULL', [albumId])).rows[0];
+    if (!a) throw new NotFoundException('Удалённого альбома с таким номером нет');
+    let name = a.name;
+    const taken = async (n: string) => (await this.db.query('SELECT 1 FROM albums WHERE owner_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL', [a.owner_id, n])).rowCount! > 0;
+    for (let i = 2; await taken(name); i++) name = `${a.name} (${i})`.slice(0, 100);
+    await this.db.query('UPDATE albums SET deleted_at = NULL, name = $2 WHERE id = $1', [albumId, name]);
+    return { name };
+  }
+
+  // Стереть удалённый альбом насовсем: пропадает только сам альбом (состав и доступы), файлы людей остаются.
+  async purgeAlbum(albumId: string): Promise<void> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const r = await this.db.query('DELETE FROM albums WHERE id = $1 AND deleted_at IS NOT NULL', [albumId]);
+    if (!r.rowCount) throw new NotFoundException('Удалённого альбома с таким номером нет');
   }
 
   // Удалить альбом целиком (только сам альбом, его состав и общий доступ; файлы людей остаются).
@@ -295,7 +331,7 @@ export class AdminStorageService {
   // move=false: у прежнего хозяина альбом остаётся; move=true: альбом (но не его фото) у него исчезает.
   async transferAlbum(albumId: string, toLogin: string, move: boolean): Promise<{ albumId: string; linked: number }> {
     if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
-    const a = (await this.db.query<{ id: string; name: string; owner_id: string }>('SELECT id, name, owner_id FROM albums WHERE id = $1', [albumId])).rows[0];
+    const a = (await this.db.query<{ id: string; name: string; owner_id: string }>('SELECT id, name, owner_id FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rows[0];
     if (!a) throw new NotFoundException('Альбом не найден');
     const to = (await this.db.query<{ id: string }>('SELECT id FROM users WHERE login = $1', [toLogin])).rows[0];
     if (!to) throw new NotFoundException('Нет такого человека');
@@ -305,7 +341,7 @@ export class AdminStorageService {
       [albumId],
     )).rows;
     let name = a.name;
-    const taken = async (n: string) => (await this.db.query('SELECT 1 FROM albums WHERE owner_id = $1 AND lower(name) = lower($2)', [to.id, n])).rows.length > 0;
+    const taken = async (n: string) => (await this.db.query('SELECT 1 FROM albums WHERE owner_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL', [to.id, n])).rows.length > 0;
     for (let i = 2; await taken(name); i++) name = `${a.name} (${i})`;
     const created = (await this.db.query<{ id: string }>('INSERT INTO albums (owner_id, name) VALUES ($1, $2) RETURNING id', [to.id, name])).rows[0];
     let linked = 0;
@@ -330,8 +366,15 @@ export class AdminStorageService {
     const n = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM files WHERE owner_id = $1', [u.id])).rows[0].n);
     if (n > 0 && !force) throw new ConflictException(`У человека ${n} файлов. Отдайте альбомы другим или удалите с force: файлы на диске останутся без владельца`);
     const links = (await this.db.query<FileRow>('SELECT id, owner_id FROM files WHERE owner_id = $1', [u.id])).rows;
+    const blobs = (await this.db.query<{ blob_id: string }>('SELECT DISTINCT blob_id FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL', [u.id])).rows;
     await this.db.query('DELETE FROM albums WHERE owner_id = $1', [u.id]);
     await this.db.query('DELETE FROM files WHERE owner_id = $1', [u.id]);
+    for (const b of blobs) {
+      await this.db.query(
+        'UPDATE blobs SET orphaned_at = now(), orphan_note = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
+        [b.blob_id, `Аккаунт ${login} удалён администратором`],
+      );
+    }
     for (const l of links) await this.removeLegacyDerived(l); // общие миниатюры остаются у файлов-оригиналов
     await this.db.query('DELETE FROM users WHERE id = $1', [u.id]);
     return { links: links.length };

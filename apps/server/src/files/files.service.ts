@@ -47,9 +47,12 @@ export interface PublicFile {
   takenAt: string;
   createdAt: string;
   trashedAt: string | null;
+  // Размеры снимка в пикселях (после поворота), если они уже посчитаны; нужны «Умной плитке». У видео и новых файлов пока null.
+  width: number | null;
+  height: number | null;
 }
 
-export function toPublicFile(f: FileRow): PublicFile {
+export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null }): PublicFile {
   return {
     id: f.id,
     name: f.original_name,
@@ -59,8 +62,14 @@ export function toPublicFile(f: FileRow): PublicFile {
     takenAt: f.taken_at.toISOString(),
     createdAt: f.created_at.toISOString(),
     trashedAt: f.trashed_at ? f.trashed_at.toISOString() : null,
+    width: f.w ?? null,
+    height: f.h ?? null,
   };
 }
+
+// Условие SQL «файл спрятан из библиотеки допуском альбома» (для поиска и групп лиц). alias: имя таблицы файлов, owner: номер параметра хозяина.
+export const hiddenFromLibrary = (alias: string, owner: string): string =>
+  `EXISTS (SELECT 1 FROM album_items hi JOIN albums ha ON ha.id = hi.album_id WHERE hi.file_id = ${alias}.id AND ha.owner_id = ${owner} AND ha.deleted_at IS NULL AND NOT ha.in_library)`;
 
 export const ID_RE = /^\d{1,18}$/;
 export const SHA_RE = /^[0-9a-f]{64}$/;
@@ -319,6 +328,12 @@ export class FilesService {
       params.push(o.person);
       where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
     }
+    // Допуски альбомов: файл не попадает в раздел, если лежит хотя бы в одном своём альбоме, у которого этот раздел выключен.
+    // Внутри самого альбома и в корзине допуски не действуют; группы лиц и поиск считаются «Библиотекой».
+    if (o.albumId === undefined && !o.trashed) {
+      const flag = o.kind === 'photos' ? 'in_photos' : o.kind === 'videos' ? 'in_videos' : o.kind === 'screenshots' ? 'in_screenshots' : 'in_library';
+      where += ` AND NOT EXISTS (SELECT 1 FROM album_items hi JOIN albums ha ON ha.id = hi.album_id WHERE hi.file_id = files.id AND ha.owner_id = $1 AND ha.deleted_at IS NULL AND NOT ha.${flag})`;
+    }
     // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
     if (o.albumId === undefined && !o.trashed && o.kind !== undefined) {
       const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
@@ -357,7 +372,7 @@ export class FilesService {
     params.push(opts.limit + 1);
     const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
     const dir = up ? 'ASC' : 'DESC';
-    const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null }>(`SELECT files.*, p.width AS w, p.height AS h FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
     const more = r.rows.length > opts.limit;
     let rows = more ? r.rows.slice(0, opts.limit) : r.rows;
     if (up) rows = rows.reverse();
@@ -414,12 +429,12 @@ export class FilesService {
   async deletePermanently(user: UserRow, id: string): Promise<void> {
     const f = await this.getOwned(user.id, id);
     if (!f.trashed_at) throw new ConflictException('Сначала переложите файл в корзину');
-    await this.dropLinks([f]);
+    await this.dropLinks([f], 'Убрал насовсем из корзины');
   }
 
   async emptyTrash(user: UserRow): Promise<number> {
     const r = await this.db.query<FileRow>('SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NOT NULL', [user.id]);
-    await this.dropLinks(r.rows);
+    await this.dropLinks(r.rows, 'Очистил корзину');
     return r.rows.length;
   }
 
@@ -439,14 +454,34 @@ export class FilesService {
       return r.rowCount ?? 0;
     }
     const r = await this.db.query<FileRow>('SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NOT NULL AND id = ANY($2::bigint[])', [user.id, ids]);
-    await this.dropLinks(r.rows);
+    await this.dropLinks(r.rows, 'Убрал насовсем из корзины');
     return r.rows.length;
   }
 
-  private async dropLinks(rows: FileRow[]): Promise<void> {
+  // why: как это произошло, попадёт в пометку «откуда» у файла без владельца (её видит админ).
+  private async dropLinks(rows: FileRow[], why: string): Promise<void> {
     if (rows.length === 0) return;
-    await this.db.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [rows.map((f) => f.id)]);
+    const ids = rows.map((f) => f.id);
+    // Пока записи живы, запоминаем, чьи они были и в каких альбомах лежали: потом это уже не узнать.
+    const info = await this.db.query<{ blob_id: string; login: string; albums: string }>(
+      `SELECT f.blob_id, u.login,
+              COALESCE(string_agg(DISTINCT a.name || CASE WHEN a.deleted_at IS NOT NULL THEN ' (альбом удалён)' ELSE '' END, ', '), '') AS albums
+       FROM files f JOIN users u ON u.id = f.owner_id
+       LEFT JOIN album_items ai ON ai.file_id = f.id LEFT JOIN albums a ON a.id = ai.album_id
+       WHERE f.id = ANY($1::bigint[]) AND f.blob_id IS NOT NULL GROUP BY f.blob_id, u.login`,
+      [ids],
+    );
+    await this.db.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [ids]);
+    for (const i of info.rows) await this.noteOrphan(i.blob_id, `${why}: ${i.login}${i.albums ? `. Был в альбомах: ${i.albums}` : '. В альбомах не лежал'}`);
     for (const f of rows) await this.thumbs.remove(f);
+  }
+
+  // Если у содержимого не осталось владельцев, записать, откуда оно такое. Если владельцы ещё есть, ничего не делает.
+  async noteOrphan(blobId: string, note: string): Promise<void> {
+    await this.db.query(
+      'UPDATE blobs SET orphaned_at = now(), orphan_note = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
+      [blobId, note.slice(0, 500)],
+    );
   }
 
   // Сохранить себе файлы чужого альбома, которым поделились: в облаке они не копируются, у человека появляются свои записи.

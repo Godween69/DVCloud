@@ -3,7 +3,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
 import { DbService } from '../db/db.service';
-import { FileRow, ID_RE } from './files.service';
+import { FileRow, hiddenFromLibrary, ID_RE } from './files.service';
 import { MediaSettingsService } from './media-settings';
 import { prepareScan } from './scan-image';
 import { StorageService } from './storage.service';
@@ -520,7 +520,7 @@ export class PeopleService {
     const ids = personIds.filter((x) => ID_RE.test(x));
     if (ids.length === 0) return [];
     const params: unknown[] = [ownerId];
-    let where = 'f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL';
+    let where = `f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND NOT ${hiddenFromLibrary('f', '$1')}`;
     for (const id of ids) {
       params.push(id);
       where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = f.blob_id AND dp.person_id = $${params.length})`;

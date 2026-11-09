@@ -450,7 +450,7 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
     try {
       let id = this.albums.get(a.id);
       if (!id) {
-        const found = await this.db.query<{ id: string }>('SELECT id FROM albums WHERE owner_id = $1 AND lower(name) = lower($2)', [user.id, ALBUM_NAME]);
+        const found = await this.db.query<{ id: string }>('SELECT id FROM albums WHERE owner_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL', [user.id, ALBUM_NAME]);
         id = found.rows[0]?.id ?? (await this.albumsSvc.create(user.id, ALBUM_NAME)).id;
         this.albums.set(a.id, id);
       }

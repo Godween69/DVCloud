@@ -36,6 +36,7 @@ import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
 import { InternalHealthController, InternalBackupController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
 import { AdminStorageService } from './files/admin-storage.service';
+import { AdminDuplicatesService } from './files/admin-duplicates.service';
 import { BackupService } from './files/backup.service';
 import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
@@ -72,7 +73,7 @@ export class InternalModule {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
       controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController, InternalBackupController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, PeopleService, AdminMediaService, BackupService],
+      providers: [InternalTokenGuard, ActivityService, StorageForAdmin, AdminStorageService, AdminDuplicatesService, MediaSettingsService, MlClient, PeopleService, AdminMediaService, BackupService],
     };
   }
 }

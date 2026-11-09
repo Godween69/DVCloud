@@ -130,6 +130,23 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         const login = form.get('login') ?? '';
         const r = await api.transfer(m[1], login, false);
         ok(`Альбом скопирован человеку ${login}, файлов: ${r.linked}`);
+      } else if (path === '/storage/duplicates/scan') {
+        await api.scanDuplicates();
+        ok('Поиск дубликатов запущен в фоне, результат появится через несколько минут. Обновите страницу позже');
+      } else if (path === '/storage/duplicates/merge') {
+        const keep = (form.get('keep') ?? '').trim();
+        const drop = (form.get('drop') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+        if (!/^\d{1,18}$/.test(keep) || drop.length === 0 || drop.some((x) => !/^\d{1,18}$/.test(x))) throw new ApiError(400, 'Не получилось разобрать группу: обновите страницу');
+        const r = await api.mergeDuplicates(keep, drop);
+        ok(`Готово: записей людей переключено ${r.merged}, лишних записей убрано ${r.removedFiles}, освобождено ${formatSize(r.bytes)}`);
+      } else if ((m = /^\/storage\/albums-deleted\/(\d{1,18})\/(restore|purge)$/.exec(path))) {
+        if (m[2] === 'restore') {
+          const r = await api.restoreAlbum(m[1]);
+          ok(`Альбом возвращён хозяину под названием «${r.name}»`);
+        } else {
+          await api.purgeAlbum(m[1]);
+          ok('Альбом стёрт насовсем. Файлы людей остались');
+        }
       } else if ((m = /^\/storage\/albums\/(\d{1,18})\/delete$/.exec(path))) {
         await api.deleteAlbum(m[1]);
         ok('Альбом удалён, файлы остались');
@@ -398,10 +415,10 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       session.flash = null;
       const dedupe = session.dedupe ?? null;
       session.dedupe = null;
-      const data = { stats: null, orphans: [], albums: [], requests: [], users: [] };
+      const data = { stats: null, orphans: [], albums: [], deletedAlbums: [], requests: [], users: [], duplicatesReport: null };
       let loadError = null;
       try {
-        [data.stats, data.orphans, data.albums, data.requests, data.users] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.requests(), api.list()]);
+        [data.stats, data.orphans, data.albums, data.deletedAlbums, data.requests, data.users, data.duplicatesReport] = await Promise.all([api.stats(), api.orphans(), api.albums(), api.deletedAlbums(), api.requests(), api.list(), api.duplicates()]);
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         loadError = e.message;

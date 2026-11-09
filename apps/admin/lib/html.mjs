@@ -58,6 +58,11 @@ button.ghost { background:transparent; }
 .off { opacity:.6; }
 /* Люди: строки с аватаром, полосой квоты и меню действий */
 .people { list-style:none; margin:0; padding:0; }
+.dupgroup { border:1px solid var(--line, #2a3144); border-radius:10px; padding:10px 12px; margin:10px 0; }
+.dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:10px; }
+.dup { display:flex; gap:10px; align-items:center; padding:6px 8px; border-radius:8px; background:rgba(127,127,127,.08); }
+.dup img { width:96px; height:96px; object-fit:cover; border-radius:8px; background:rgba(127,127,127,.15); }
+.dup.keep { outline:1px solid rgba(34,197,94,.55); }
 .person { display:grid; grid-template-columns:44px minmax(150px,1.2fr) minmax(170px,1.6fr) auto; gap:6px 16px; align-items:center; padding:12px 4px; border-bottom:1px solid var(--line); }
 .person:last-child { border-bottom:0; }
 .av { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:18px; color:#fff; text-transform:uppercase; }
@@ -235,15 +240,36 @@ ${flashHtml(flash, loadError)}
 </section>`);
 }
 
-export function storagePage({ stats, orphans, albums, requests, users, csrf, flash, loadError, dedupe }) {
+export function storagePage({ stats, orphans, albums, deletedAlbums = [], duplicatesReport = null, requests, users, csrf, flash, loadError, dedupe }) {
   const logins = users.map((u) => u.login);
   const pick = (name) => `<select name="${name}" aria-label="Кому">${logins.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>`;
   const reqRows = requests.map((r) => `<tr><td><b>${esc(r.login)}</b> <span class="muted">${esc(r.displayName)}</span></td><td>${esc(formatSize(r.needBytes))}</td><td>${esc(formatSize(r.usedBytes))} из ${esc(formatQuota(r.quotaBytes))}</td><td>${esc(r.note || '—')}</td>
 <td>${post(csrf, `/storage/requests/${encodeURIComponent(r.id)}/grant`, { login: r.login }, 'Задать квоту', '', '<input class="narrow" type="text" name="quota" placeholder="ГБ" aria-label="Новая квота, ГБ" required>')}
 ${post(csrf, `/storage/requests/${encodeURIComponent(r.id)}/resolve`, {}, 'Закрыть без изменений')}</td></tr>`).join('');
   const orphanRows = orphans.map((o) => `<tr><td>${esc(o.name)}</td><td>${esc(formatSize(o.size))}</td><td>${esc(o.createdAt.slice(0, 10))}</td>
+<td>${o.note ? esc(o.note) : '<span class="muted">неизвестно (убрано до версии 0.10.0)</span>'}${o.orphanedAt ? `<br><span class="muted">${esc(o.orphanedAt.slice(0, 10))}</span>` : ''}</td>
 <td>${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/adopt`, {}, 'Отдать', '', pick('login'))}
 ${post(csrf, `/storage/files/${encodeURIComponent(o.id)}/purge`, {}, 'Стереть с диска', 'danger')}</td></tr>`).join('');
+  const dupHtml = (() => {
+    const d = duplicatesReport;
+    if (!d) return '<p class="muted">Данные о дубликатах не получены.</p>';
+    const head = d.computedAt
+      ? `<p>Последняя проверка: <b>${esc(d.computedAt.slice(0, 16).replace('T', ' '))}</b> (UTC)${d.scanning ? ', идёт новая' : ''}. Групп дубликатов: <b>${d.totalGroups}</b>${d.totalGroups ? `, можно освободить <b>${esc(formatSize(d.reclaimBytes))}</b>` : ''}.</p>`
+      : `<p class="muted">Первая проверка ещё не проходила${d.scanning ? ', она идёт сейчас' : ': запустится сама через минуту после старта облака'}.</p>`;
+    if (!d.groups.length) return `${head}${d.computedAt ? '<p class="muted">Дубликатов нет: у каждого снимка одна копия.</p>' : ''}`;
+    const groups = d.groups.map((g) => {
+      const keep = g.blobs.find((b) => b.keep) ?? g.blobs[0];
+      const drops = g.blobs.filter((b) => b !== keep).map((b) => b.blobId).join(',');
+      const cards = g.blobs.map((b) => `<li class="dup ${b.keep ? 'keep' : 'drop'}"><img src="/files/${encodeURIComponent(b.fileId)}/thumb" alt="" width="96" height="96" loading="lazy">
+<div><b>${b.keep ? 'Оставить' : 'Убрать'}</b><br>${b.width}×${b.height}, ${esc(formatSize(b.size))}<br><span class="muted">${b.owners.map((o) => esc(o.login) + (o.files > 1 ? ` ×${o.files}` : '')).join(', ') || '—'}</span></div></li>`).join('');
+      return `<div class="dupgroup"><ul class="dups">${cards}</ul>
+<p>${post(csrf, '/storage/duplicates/merge', { keep: keep.blobId, drop: drops }, `Слить: оставить лучший, освободить ${formatSize(g.reclaimBytes)}`, 'danger')}</p></div>`;
+    }).join('');
+    return `${head}${groups}${d.totalGroups > d.groups.length ? `<p class="muted">Показаны первые ${d.groups.length} групп с наибольшей экономией.</p>` : ''}`;
+  })();
+  const deletedRows = deletedAlbums.map((a) => `<tr><td>${esc(a.name)}</td><td>${esc(a.owner)}</td><td>${a.count}</td><td>${esc((a.deletedAt ?? '').slice(0, 10))}</td>
+<td>${post(csrf, `/storage/albums-deleted/${encodeURIComponent(a.id)}/restore`, {}, 'Вернуть хозяину')}
+${post(csrf, `/storage/albums-deleted/${encodeURIComponent(a.id)}/purge`, {}, 'Стереть альбом', 'danger')}</td></tr>`).join('');
   const albumRows = albums.map((a) => `<tr><td>${esc(a.name)}</td><td>${esc(a.owner)}</td><td>${a.count}</td><td>${a.sharedWith || '—'}</td>
 <td>${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/transfer`, {}, 'Скопировать', '', pick('login'))}
 ${post(csrf, `/storage/albums/${encodeURIComponent(a.id)}/delete`, {}, 'Удалить', 'danger')}</td></tr>`).join('');
@@ -257,18 +283,28 @@ ${stats ? `<section class="panel"><div class="summary"><div><b>${stats.files}</b
 <tbody>${reqRows || '<tr><td colspan="5" class="muted">Просьб нет.</td></tr>'}</tbody></table>
 
 </section>
-<section class="panel"><h2>Файлы без владельца ${info(['Остаются, когда человек убрал файл насовсем или аккаунт удалён. На диске лежат, пока вы их не отдадите или не сотрёте.','«Отдать» делает файл файлом выбранного человека (место идёт в его квоту). «Стереть с диска» необратимо.'])}</h2>
+<section class="panel"><h2>Файлы без владельца ${info(['Остаются, когда человек убрал файл насовсем или аккаунт удалён. На диске лежат, пока вы их не отдадите или не сотрёте.','В колонке «Откуда» написано, кто убрал файл, из корзины или по очереди, и в каких альбомах он лежал. Если там названия альбомов, это, скорее всего, не мусор: подумайте, прежде чем стирать.','«Отдать» делает файл файлом выбранного человека (место идёт в его квоту). «Стереть с диска» необратимо.'])}</h2>
 ${stats && stats.orphans > 0 ? `<form class="bulk" method="post" action="/storage/orphans/purge">${csrfInput(csrf)}<input type="hidden" name="count" value="${esc(stats.orphans)}">
 <p>Всего таких файлов: <b>${esc(stats.orphans)}</b>, они занимают <b>${esc(formatSize(stats.orphanBytes ?? 0))}</b>${orphans.length < stats.orphans ? ` (в таблице ниже только первые ${orphans.length})` : ''}. Стирание необратимо.</p>
 <input type="text" name="word" placeholder="впишите: стереть" autocomplete="off" required aria-label="Подтверждение: впишите слово стереть"> <button class="danger" type="submit">Стереть с диска все ${esc(stats.orphans)}</button></form>` : ''}
-<table><thead><tr><th>Файл</th><th>Размер</th><th>Дата</th><th>Действия</th></tr></thead>
-<tbody>${orphanRows || '<tr><td colspan="4" class="muted">Таких файлов нет.</td></tr>'}</tbody></table>
+<table><thead><tr><th>Файл</th><th>Размер</th><th>Дата</th><th>Откуда</th><th>Действия</th></tr></thead>
+<tbody>${orphanRows || '<tr><td colspan="5" class="muted">Таких файлов нет.</td></tr>'}</tbody></table>
 
 </section>
+<section class="panel"><h2>Дубликаты по всему хранилищу ${info(['Облако само ищет в фоне снимки, которые лежат в нескольких качествах: оригинал и уменьшенная копия из мессенджера. Сравниваются файлы на диске у всех людей вместе.','«Слить» оставляет лучший файл (больше пикселей), а записи людей на остальные переключает на него. Названия файлов, даты съёмки и альбомы у людей сохраняются. Лишние файлы стираются с диска, это необратимо.','Серии похожих кадров здесь не ищутся: с ними работают люди у себя на сайте.'])}</h2>
+${dupHtml}
+<p>${post(csrf, '/storage/duplicates/scan', {}, 'Проверить сейчас')}</p>
+</section>
 <section class="panel"><h2>Лишние копии на диске ${info(['Остались от старой версии, когда один файл мог лежать на диске несколько раз. Каждая копия сверяется по SHA-256 перед стиранием.','«Только проверить» ничего не меняет и показывает, сколько места можно освободить.'])}</h2>
-${dedupe ? `<div class="msg ok">Проверено: ${dedupe.checked}, удалено: ${dedupe.removed}, освобождено: ${esc(formatSize(dedupe.freedBytes))}${dedupe.mismatched.length ? `, не совпали: ${dedupe.mismatched.length}` : ''}</div>` : ''}
+${dedupe ? (dedupe.checked === 0
+    ? '<div class="msg ok">Лишних копий не найдено: на диске каждый файл лежит один раз. Так и должно быть, делать ничего не нужно.</div>'
+    : `<div class="msg ok">Найдено лишних копий: ${dedupe.checked}${dedupe.removed ? `, удалено: ${dedupe.removed}` : ''}, освобождено: ${esc(formatSize(dedupe.freedBytes))}${dedupe.mismatched.length ? `, не совпали по содержимому и оставлены: ${dedupe.mismatched.length}` : ''}</div>`) : ''}
 <p>${post(csrf, '/storage/dedupe', { apply: '0' }, 'Только проверить')} ${post(csrf, '/storage/dedupe', { apply: '1' }, 'Удалить лишние копии', 'danger')}</p>
 
+</section>
+<section class="panel"><h2>Удалённые альбомы ${info(['Человек удалил альбом у себя, но облако его не стёрло, а убрало сюда. Фото из такого альбома по-прежнему лежат в библиотеке человека, ничего не потеряно.','«Вернуть хозяину» возвращает альбом как был. «Стереть альбом» убирает только сам альбом, без фото.','Если файлы потом окажутся в списке «без владельца», рядом будет написано, из какого альбома они.'])}</h2>
+<table><thead><tr><th>Альбом</th><th>Хозяин</th><th>Файлов</th><th>Удалён</th><th>Действия</th></tr></thead>
+<tbody>${deletedRows || '<tr><td colspan="5" class="muted">Удалённых альбомов нет.</td></tr>'}</tbody></table>
 </section>
 <section class="panel"><h2>Альбомы ${info(['«Скопировать» создаёт такой же альбом у выбранного человека со ссылками на те же файлы; место на диске не тратится, но идёт в его квоту.','«Удалить» убирает только сам альбом (и общий доступ к нему), файлы людей остаются.','Показать альбом другим без копирования можно на вкладке «Альбомы людям».'])}</h2>
 <table><thead><tr><th>Альбом</th><th>Владелец</th><th>Файлов</th><th>Общий</th><th>Действия</th></tr></thead>
@@ -422,7 +458,7 @@ ${flashHtml(flash, loadError)}
 <label>По дату<input type="date" name="to" value="${esc(f.to ?? '')}"></label>
 <label>Часть имени<input type="search" name="q" value="${esc(f.q ?? '')}" maxlength="100" placeholder="например IMG_"></label>
 <label>Альбом<select name="album"><option value="">любой</option>${albums.map((a) => opt(a.id, `${a.name} — ${a.owner}`, f.album)).join('')}</select></label>
-<button class="primary" type="submit">Показать</button> <a class="btn" href="/files">Сбросить</a></form>
+<button class="primary" type="submit">Показать</button> <a class="btn" href="/files">Сбросить фильтр</a></form>
 <div class="tiles">${tiles || '<p class="muted">Ничего не найдено. Попробуйте убрать часть условий.</p>'}</div>
 ${data?.next ? `<div class="pager"><a class="btn" href="/files?${esc(keep({ before: data.next }))}">Показать ещё</a></div>` : ''}
 </section>`);

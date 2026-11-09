@@ -42,7 +42,13 @@ describe('админка', () => {
         if (/^\/internal\/users\/[a-z0-9_]+\/reset-2fa$/.test(req.url)) return j(200, { ok: true });
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
         if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
-        if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z' }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z', note: 'Очистил корзину: anna. Был в альбомах: Отпуск', orphanedAt: '2026-11-02T09:00:00.000Z' }] });
+        if (req.method === 'GET' && req.url === '/internal/duplicates') return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
+        if (req.method === 'POST' && req.url === '/internal/duplicates/scan') return j(200, { queued: true });
+        if (req.method === 'POST' && req.url === '/internal/duplicates/merge') return j(200, { merged: 1, removedFiles: 0, bytes: 14110 });
+        if (req.method === 'GET' && req.url === '/internal/albums-deleted') return j(200, { albums: [{ id: '8', name: 'Личное <i>', owner: 'boris', count: 4, sharedWith: 0, deletedAt: '2026-11-08T10:00:00.000Z' }] });
+        if (req.method === 'POST' && req.url === '/internal/albums/8/restore') return j(200, { name: 'Личное (2)' });
+        if (req.method === 'DELETE' && req.url === '/internal/albums-deleted/8') return j(200, { ok: true });
         if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
         if (req.method === 'GET' && req.url.startsWith('/internal/browse/files?')) return j(200, { files: [{ id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z' }], next: '2026-03-05T10:00:00.000Z_41', total: 90 });
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/thumb') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
@@ -209,6 +215,10 @@ describe('админка', () => {
     assert.ok(page.text.includes('5,0 ГБ'));
     assert.ok(!page.text.includes('<b>x</b>'), 'имя файла с разметкой не должно попасть как есть');
     assert.ok(page.text.includes('&lt;b&gt;x&lt;/b&gt;'));
+    assert.ok(page.text.includes('Был в альбомах: Отпуск'), 'у бесхозного файла видно, откуда он');
+    assert.ok(page.text.includes('Удалённые альбомы') && page.text.includes('Личное &lt;i&gt;'), 'удалённые альбомы показаны, имя экранировано');
+    assert.ok(!page.text.includes('<i>'), 'разметка из имени альбома не попала как есть');
+    assert.ok(page.text.includes('Дубликаты по всему хранилищу') && page.text.includes('800×600') && page.text.includes('Оставить') && page.text.includes('/files/11/thumb'), 'дубликаты показаны с миниатюрами');
     assert.equal((await req('GET', '/storage')).status, 303, 'без входа не открывается');
   });
 
@@ -224,6 +234,17 @@ describe('админка', () => {
     assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/transfer') && c.includes('"move":false')));
     await post('/storage/albums/3/delete', {});
     assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums/3')));
+    await post('/storage/duplicates/merge', { keep: '1', drop: '2' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/duplicates/merge') && c.includes('"keep":"1"') && c.includes('"drop":["2"]')));
+    const nDup = calls.length;
+    await post('/storage/duplicates/merge', { keep: 'x', drop: '2' });
+    assert.equal(calls.length, nDup, 'неверные номера на сервер не уходят');
+    await post('/storage/duplicates/scan', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/duplicates/scan')));
+    await post('/storage/albums-deleted/8/restore', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/8/restore')));
+    await post('/storage/albums-deleted/8/purge', {});
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/albums-deleted/8')));
     const before = calls.length;
     await post('/storage/requests/9/grant', { login: 'anna', quota: 'много' });
     assert.equal(calls.length, before, 'плохая квота не уходит на сервер');

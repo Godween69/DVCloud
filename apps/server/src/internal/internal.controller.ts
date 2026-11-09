@@ -5,6 +5,7 @@ import { AuditService } from '../db/audit.service';
 import { asObject, optStrField, requireJson, strField } from '../http';
 import { PublicUser, toPublic, UsersService } from '../users/users.service';
 import { AdminAlbum, AdminFile, AdminStorageService, QuotaRequest } from '../files/admin-storage.service';
+import { AdminDuplicatesService, DupReport } from '../files/admin-duplicates.service';
 import { InternalTokenGuard } from './internal-token.guard';
 import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
@@ -97,6 +98,7 @@ export class InternalUsersController {
 export class InternalStorageController {
   constructor(
     private readonly admin: AdminStorageService,
+    private readonly dups: AdminDuplicatesService,
     private readonly audit: AuditService,
   ) {}
 
@@ -106,7 +108,7 @@ export class InternalStorageController {
   }
 
   @Get('files/orphans')
-  async orphans(@Query('limit') limit?: string): Promise<{ orphans: { id: string; name: string; size: number; createdAt: string }[] }> {
+  async orphans(@Query('limit') limit?: string): Promise<{ orphans: Awaited<ReturnType<AdminStorageService['orphans']>> }> {
     const n = limit === undefined ? 200 : Number(limit);
     if (!Number.isInteger(n) || n < 1 || n > 1000) throw new BadRequestException('limit: от 1 до 1000');
     return { orphans: await this.admin.orphans(n) };
@@ -156,9 +158,55 @@ export class InternalStorageController {
     return r;
   }
 
+  // ── Дубликаты по всему хранилищу (поиск идёт сам в фоне) ──
+  @Get('duplicates')
+  duplicates(): DupReport {
+    return this.dups.report();
+  }
+
+  @Post('duplicates/scan')
+  @HttpCode(200)
+  scanDuplicates(): { queued: true } {
+    this.dups.request();
+    return { queued: true };
+  }
+
+  // Слить дубликаты: тело { keep: "<номер файла>", drop: ["<номера лишних>"] }. Лишние стираются с диска, записи людей переключаются на оставляемый.
+  @Post('duplicates/merge')
+  @HttpCode(200)
+  async mergeDuplicates(@Body() body: unknown, @Req() req: Request): Promise<{ merged: number; removedFiles: number; bytes: number }> {
+    requireJson(req);
+    const o = asObject(body);
+    const keep = strField(o, 'keep', 1, 18);
+    const r = await this.dups.merge(keep, o.drop);
+    await this.audit.write('files.merge-duplicates', keep, { drop: o.drop, ...r });
+    return r;
+  }
+
   @Get('albums')
   async albums(): Promise<{ albums: AdminAlbum[] }> {
     return { albums: await this.admin.albums() };
+  }
+
+  // Альбомы, удалённые людьми у себя (админ может вернуть или стереть).
+  @Get('albums-deleted')
+  async deletedAlbums(): Promise<{ albums: AdminAlbum[] }> {
+    return { albums: await this.admin.deletedAlbums() };
+  }
+
+  @Post('albums/:id/restore')
+  @HttpCode(200)
+  async restoreAlbum(@Param('id') id: string): Promise<{ name: string }> {
+    const r = await this.admin.restoreAlbum(id);
+    await this.audit.write('album.restore', id, { name: r.name });
+    return r;
+  }
+
+  @Delete('albums-deleted/:id')
+  async purgeAlbum(@Param('id') id: string): Promise<{ ok: true }> {
+    await this.admin.purgeAlbum(id);
+    await this.audit.write('album.purge', id, {});
+    return { ok: true };
   }
 
   @Post('albums/:id/transfer')

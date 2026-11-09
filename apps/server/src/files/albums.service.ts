@@ -15,7 +15,18 @@ export interface PublicAlbum {
   mine: boolean; // false: альбом чужой, им поделились
   ownerName: string | null; // у чужого альбома: кто поделился
   sharedWith: number; // у своего альбома: со сколькими людьми он общий
+  // Где файлы альбома видны в ленте (внутри самого альбома они видны всегда). Относится к своим альбомам.
+  show: AlbumShow;
 }
+
+export interface AlbumShow {
+  library: boolean;
+  photos: boolean;
+  videos: boolean;
+  screenshots: boolean;
+}
+
+export const SHOW_KEYS: (keyof AlbumShow)[] = ['library', 'photos', 'videos', 'screenshots'];
 
 interface AlbumRow {
   id: string;
@@ -26,6 +37,10 @@ interface AlbumRow {
   cover: string | null;
   owner_name: string;
   shared_with: string;
+  in_library: boolean;
+  in_photos: boolean;
+  in_videos: boolean;
+  in_screenshots: boolean;
 }
 
 export const MAX_IDS = 2000;
@@ -65,14 +80,15 @@ const toPublic = (r: AlbumRow, viewerId: string): PublicAlbum => {
     mine,
     ownerName: mine ? null : r.owner_name,
     sharedWith: mine ? Number(r.shared_with) : 0,
+    show: { library: r.in_library, photos: r.in_photos, videos: r.in_videos, screenshots: r.in_screenshots },
   };
 };
 
-const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name,
+const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name, a.in_library, a.in_photos, a.in_videos, a.in_screenshots,
   (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
   (SELECT f.id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1) AS cover,
   (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared_with
-  FROM albums a JOIN users u ON u.id = a.owner_id`;
+  FROM albums a JOIN users u ON u.id = a.owner_id AND a.deleted_at IS NULL`; // удалённые человеком альбомы никому не видны, кроме админа
 
 // Альбом виден хозяину и тем, с кем поделились.
 const VISIBLE = `(a.owner_id = $1 OR EXISTS (SELECT 1 FROM album_shares s WHERE s.album_id = a.id AND s.user_id = $1))`;
@@ -134,10 +150,30 @@ export class AlbumsService {
     return this.get(ownerId, id);
   }
 
-  // Удаляется только сам альбом: фото остаются в библиотеке.
+  // Альбом пропадает у человека (и у тех, с кем он был общим), но не стирается: он уходит в «Удалённые альбомы» админа,
+  // чтобы нельзя было принять случайно убранные дорогие фото за мусор. Сами фото остаются в библиотеке человека.
   async remove(ownerId: string, id: string): Promise<void> {
     await this.get(ownerId, id);
-    await this.db.query('DELETE FROM albums WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    await this.db.query('UPDATE albums SET deleted_at = now() WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL', [id, ownerId]);
+  }
+
+  // Где показывать файлы альбома: частичное изменение допусков. Переданные поля меняются, остальные остаются.
+  async setShow(ownerId: string, id: string, raw: unknown): Promise<PublicAlbum> {
+    await this.get(ownerId, id);
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new BadRequestException('Поле show: допуски альбома');
+    const o = raw as Record<string, unknown>;
+    const col: Record<keyof AlbumShow, string> = { library: 'in_library', photos: 'in_photos', videos: 'in_videos', screenshots: 'in_screenshots' };
+    const sets: string[] = [];
+    const params: unknown[] = [id, ownerId];
+    for (const k of SHOW_KEYS) {
+      if (!(k in o)) continue;
+      if (typeof o[k] !== 'boolean') throw new BadRequestException(`show.${k}: да или нет`);
+      params.push(o[k]);
+      sets.push(`${col[k]} = $${params.length}`);
+    }
+    if (sets.length === 0) throw new BadRequestException('show: укажите library, photos, videos или screenshots');
+    await this.db.query(`UPDATE albums SET ${sets.join(', ')} WHERE id = $1 AND owner_id = $2`, params);
+    return this.get(ownerId, id);
   }
 
   // Добавить фото в альбом. Одно фото может лежать в нескольких альбомах; повторное добавление ничего не меняет.
@@ -175,7 +211,7 @@ export class AlbumsService {
     const own = await this.db.query('SELECT 1 FROM files WHERE id = $1 AND owner_id = $2', [fileId, ownerId]);
     if (!own.rows[0]) throw new NotFoundException('Файл не найден');
     const r = await this.db.query<{ id: string; name: string }>(
-      `SELECT a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = $1 AND a.owner_id = $2 ORDER BY lower(a.name), a.id`,
+      `SELECT a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = $1 AND a.owner_id = $2 AND a.deleted_at IS NULL ORDER BY lower(a.name), a.id`,
       [fileId, ownerId],
     );
     return r.rows;
