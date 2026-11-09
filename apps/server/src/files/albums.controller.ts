@@ -47,7 +47,8 @@ export class AlbumsController {
   async create(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ album: PublicAlbum }> {
     requireJson(req);
     res.setHeader('Cache-Control', 'no-store');
-    return { album: await this.albums.create(req.user.id, asObject(req.body).name) };
+    const body = asObject(req.body);
+    return { album: await this.albums.create(req.user.id, body.name, body.kind) };
   }
 
   // В каких альбомах лежит файл. album — первый из них (для старых клиентов), albums — все.
@@ -78,6 +79,14 @@ export class AlbumsController {
     requireJson(req);
     res.setHeader('Cache-Control', 'no-store');
     return { album: await this.albums.setShow(req.user.id, id, req.body) };
+  }
+
+  // Звёздочка альбома. Тело: { favorite: true | false }.
+  @Patch(':id/favorite')
+  async favorite(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ album: PublicAlbum }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return { album: await this.albums.setFavorite(req.user.id, id, asObject(req.body).favorite) };
   }
 
   @Delete(':id')
@@ -114,10 +123,10 @@ export class AlbumsController {
 
   @Post(':id/add')
   @HttpCode(200)
-  async add(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ added: number }> {
+  async add(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ added: number; rejected: number }> {
     requireJson(req);
     res.setHeader('Cache-Control', 'no-store');
-    return { added: await this.albums.addFiles(req.user.id, id, parseIds(asObject(req.body).ids)) };
+    return this.albums.addFiles(req.user.id, id, parseIds(asObject(req.body).ids));
   }
 
   @Get(':id/shares')

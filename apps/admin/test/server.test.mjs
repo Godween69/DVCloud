@@ -43,9 +43,10 @@ describe('админка', () => {
         if (m && m[2]) return j(200, { password: 'newpass23456789zz' });
         if (req.method === 'GET' && req.url === '/internal/stats') return j(200, { files: 5, blobs: 4, orphans: 1, orphanBytes: 2048, bytes: 1048576, extraCopies: 2 });
         if (req.method === 'GET' && req.url.startsWith('/internal/files/orphans')) return j(200, { orphans: [{ id: '7', name: '<b>x</b>.jpg', size: 2048, createdAt: '2026-11-01T10:00:00.000Z', note: 'Очистил корзину: anna. Был в альбомах: Отпуск', orphanedAt: '2026-11-02T09:00:00.000Z' }] });
-        if (req.method === 'GET' && req.url === '/internal/duplicates') return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
+        if (req.method === 'GET' && req.url === '/internal/duplicates') return j(200, { computedAt: '2026-11-09T09:00:00.000Z', scanning: false, totalGroups: 1, mergeable: 1, bulk: { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null }, reclaimBytes: 14110, groups: [{ id: '1', reclaimBytes: 14110, blobs: [{ blobId: '1', fileId: '11', width: 800, height: 600, size: 31192, keep: true, owners: [{ login: 'anna', files: 1 }] }, { blobId: '2', fileId: '12', width: 400, height: 300, size: 14110, keep: false, owners: [{ login: 'boris', files: 2 }] }] }] });
         if (req.method === 'POST' && req.url === '/internal/duplicates/scan') return j(200, { queued: true });
         if (req.method === 'POST' && req.url === '/internal/duplicates/merge') return j(200, { merged: 1, removedFiles: 0, bytes: 14110 });
+        if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
         if (req.method === 'GET' && req.url === '/internal/albums-deleted') return j(200, { albums: [{ id: '8', name: 'Личное <i>', owner: 'boris', count: 4, sharedWith: 0, deletedAt: '2026-11-08T10:00:00.000Z' }] });
         if (req.method === 'POST' && req.url === '/internal/albums/8/restore') return j(200, { name: 'Личное (2)' });
         if (req.method === 'DELETE' && req.url === '/internal/albums-deleted/8') return j(200, { ok: true });
@@ -54,6 +55,10 @@ describe('админка', () => {
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/thumb') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/original') { res.writeHead(req.headers.range ? 206 : 200, { 'content-type': 'image/jpeg', 'content-length': 4, 'accept-ranges': 'bytes' }); return res.end('JPEG'); }
         if (req.method === 'GET' && /^\/internal\/browse\/files\/\d+\/(thumb|original)$/.test(req.url)) return j(404, { message: 'нет' });
+        if (req.method === 'GET' && req.url === '/internal/vault') return j(200, { albums: [{ id: '5', name: 'Тайный <b>', note: 'на всякий', fromLogin: 'anna', count: 7, bytes: 2048, createdAt: '2026-11-09T10:00:00.000Z' }] });
+        if (req.method === 'POST' && req.url === '/internal/albums/3/to-vault') return j(200, { vaultId: '5', files: 12 });
+        if (req.method === 'POST' && req.url === '/internal/vault/5/return') return j(200, { albumId: '9', linked: 7 });
+        if (req.method === 'DELETE' && req.url === '/internal/vault/5') return j(200, { files: 7, bytes: 2048, kept: 0 });
         if (req.method === 'GET' && req.url === '/internal/albums/3/shares') return j(200, { logins: ['boris'] });
         if (req.method === 'PUT' && /^\/internal\/albums\/3\/shares\/[a-z0-9_]+$/.test(req.url)) return j(200, { ok: true });
         if (req.method === 'DELETE' && /^\/internal\/albums\/3\/shares\/[a-z0-9_]+$/.test(req.url)) return j(200, { ok: true });
@@ -241,6 +246,20 @@ describe('админка', () => {
     assert.equal(calls.length, nDup, 'неверные номера на сервер не уходят');
     await post('/storage/duplicates/scan', {});
     assert.ok(calls.some((c) => c.startsWith('POST /internal/duplicates/scan')));
+    // Одна форма на весь список: флажки «Оставить», приближение без скриптов, «Удалить» внизу после списка
+    const page = (await req('GET', '/storage', { cookie })).text;
+    assert.ok(page.includes('class="dupbar"') && page.includes('action="/storage/duplicates/apply"'));
+    assert.ok(page.includes('name="keep" value="1:1" checked') && page.includes('name="keep" value="1:2">'), 'лучший отмечен заранее, второй нет');
+    assert.ok(page.includes('class="zoomhold"') && page.includes('/files/11/zoom'), 'приближение зажатием');
+    const mf = page.slice(page.indexOf('action="/storage/duplicates/apply"'));
+    assert.ok(!mf.slice(0, mf.indexOf('</form>')).includes('name="word"'), 'слово вводить не нужно');
+    assert.ok(page.indexOf('class="dupgroup"') < page.indexOf('class="dupbar"'), 'кнопка внизу, после списка');
+    const nAll = calls.length;
+    await req('POST', '/storage/duplicates/apply', { cookie, form: [['csrf', csrf]] });
+    assert.equal(calls.length, nAll, 'без групп удаление не запускается');
+    await req('POST', '/storage/duplicates/apply', { cookie, form: [['csrf', csrf], ['g', '1'], ['keep', '1:1'], ['keep', '1:2'], ['keep', '9:5']] });
+    const sent = calls.filter((c) => c.startsWith('POST /internal/duplicates/apply')).pop();
+    assert.ok(sent && sent.includes('"group":"1"') && sent.includes('"keep":["1","2"]') && !sent.includes('"5"'), sent);
     await post('/storage/albums-deleted/8/restore', {});
     assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/8/restore')));
     await post('/storage/albums-deleted/8/purge', {});
@@ -449,6 +468,47 @@ describe('админка', () => {
     assert.ok(calls.some((c) => c.startsWith('POST /internal/share-everything') && c.includes('"confirm":true')));
     assert.ok((await req('GET', '/sharing', { cookie })).text.includes('новых доступов открыто: 3'));
     assert.equal((await req('POST', '/sharing/3/all', { cookie, form: { csrf: 'wrong' } })).status, 403);
+  });
+
+  it('«Альбомы людям»: карточки с флажками, сохранение разницы, передача; в сейф только с паролем админки', async () => {
+    const cookie = await login();
+    const page = (await req('GET', '/sharing', { cookie })).text;
+    assert.ok(page.includes('class="acard"') && page.includes('name="login" value="boris" checked'), 'у boris флажок стоит: альбом ему открыт');
+    assert.ok(page.includes('Владелец: <b>anna</b>') && page.includes('Забрать у владельца в сейф'));
+    assert.ok(!(await req('GET', '/sharing?owner=boris', { cookie })).text.includes('Отпуск'), 'фильтр по владельцу');
+    const csrf = csrfOf(page);
+    const post = (path, form) => req('POST', path, { cookie, form: form instanceof Array ? [['csrf', csrf], ...form] : { csrf, ...form } });
+    // снят флажок у boris, отмечен carol: одно закрытие и одно открытие
+    const n0 = calls.length;
+    await post('/sharing/3/set', [['login', 'carol']]);
+    const made = calls.slice(n0);
+    assert.ok(made.some((c) => c.startsWith('PUT /internal/albums/3/shares/carol')) && made.some((c) => c.startsWith('DELETE /internal/albums/3/shares/boris')), made.join(' | '));
+    await post('/sharing/3/transfer', { login: 'boris' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/transfer') && c.includes('"move":true')));
+    // сейф: с неверным паролем запроса нет, с верным есть
+    const n1 = calls.length;
+    await post('/sharing/3/vault', { password: 'неверный', note: 'x' });
+    assert.equal(calls.length, n1, 'без пароля админки в сейф не кладётся');
+    const r = await post('/sharing/3/vault', { password: PASSWORD, note: 'x' });
+    assert.equal(r.status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/to-vault') && c.includes('"note":"x"')));
+  });
+
+  it('«Сейф»: список, вернуть и стереть только после пароля админки', async () => {
+    const cookie = await login();
+    const page = (await req('GET', '/vault', { cookie })).text;
+    assert.ok(page.includes('Тайный &lt;b&gt;') && page.includes('Забран у: <b>anna</b>'), 'название экранировано');
+    const csrf = csrfOf(page);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    const n = calls.length;
+    await post('/vault/5/return', { login: 'boris', password: 'нет' });
+    await post('/vault/5/erase', { password: 'нет' });
+    assert.equal(calls.length, n, 'с неверным паролем ничего не уходит');
+    await post('/vault/5/return', { login: 'boris', password: PASSWORD });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/vault/5/return') && c.includes('"login":"boris"')));
+    await post('/vault/5/erase', { password: PASSWORD });
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/vault/5')));
+    assert.equal((await req('POST', '/vault/5/erase', { cookie, form: { csrf: 'wrong', password: PASSWORD } })).status, 403);
   });
 
   it('страница «Копия»: способы, ключ для SSH, запуск только кнопкой, ход, ошибки сервера', async () => {

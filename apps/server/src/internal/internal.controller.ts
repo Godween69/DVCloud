@@ -183,6 +183,47 @@ export class InternalStorageController {
     return r;
   }
 
+  // Применить решения по группам (в фоне). Тело {decisions: [{group, keep: [номера файлов, которые оставить]}]}.
+  @Post('duplicates/apply')
+  @HttpCode(200)
+  async applyDuplicates(@Body() body: unknown, @Req() req: Request): Promise<{ started: number }> {
+    requireJson(req);
+    const r = await this.dups.apply(asObject(body).decisions);
+    await this.audit.write('files.apply-duplicates', 'duplicates', r);
+    return r;
+  }
+
+  // Сейф: альбомы, забранные у владельцев. Пароль админки проверяет админка, до этого порта доходят только подтверждённые действия.
+  @Get('vault')
+  async vault() {
+    return { albums: await this.admin.vaultList() };
+  }
+
+  @Post('albums/:id/to-vault')
+  @HttpCode(200)
+  async toVault(@Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
+    requireJson(req);
+    const r = await this.admin.toVault(id, asObject(body).note);
+    await this.audit.write('vault.put', id, r);
+    return r;
+  }
+
+  @Post('vault/:id/return')
+  @HttpCode(200)
+  async vaultReturn(@Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
+    requireJson(req);
+    const r = await this.admin.vaultReturn(id, asObject(body).login);
+    await this.audit.write('vault.return', id, r);
+    return r;
+  }
+
+  @Delete('vault/:id')
+  async vaultErase(@Param('id') id: string) {
+    const r = await this.admin.vaultErase(id);
+    await this.audit.write('vault.erase', id, r);
+    return r;
+  }
+
   @Get('albums')
   async albums(): Promise<{ albums: AdminAlbum[] }> {
     return { albums: await this.admin.albums() };
@@ -236,8 +277,30 @@ export class InternalStorageController {
     const b = await this.admin.blobOf(id);
     if (!b) throw new NotFoundException('Файл не найден');
     res.setHeader('Content-Type', 'image/webp');
-    res.sendFile(`thumbs/${b.blobId}.webp`, { root: this.admin.root, dotfiles: 'deny', headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' } }, (err) => {
-      if (err && !res.headersSent) res.status(404).json({ message: 'Миниатюры нет' });
+    const opts = { root: this.admin.root, dotfiles: 'deny' as const, headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=3600' } };
+    // Единая миниатюра файла лежит в thumbs-fit; прежняя квадратная (если новой ещё нет) в thumbs.
+    res.sendFile(`thumbs-fit/${b.blobId}.webp`, opts, (err) => {
+      if (!err || res.headersSent) return;
+      res.sendFile(`thumbs/${b.blobId}.webp`, opts, (err2) => {
+        if (err2 && !res.headersSent) res.status(404).json({ message: 'Миниатюры нет' });
+      });
+    });
+  }
+
+  // Картинка покрупнее для приближения при сравнении дубликатов: превью для просмотра, а если его ещё нет, сам файл.
+  @Get('browse/files/:id/preview')
+  async browsePreview(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    const b = await this.admin.blobOf(id);
+    if (!b) throw new NotFoundException('Файл не найден');
+    if (!/^image\/[a-z0-9.+-]+$/i.test(b.mime)) throw new BadRequestException('Приближение только для фото');
+    const headers = { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=600' };
+    res.setHeader('Content-Type', 'image/webp');
+    res.sendFile(`previews/${b.blobId}.webp`, { root: this.admin.root, dotfiles: 'deny', headers }, (err) => {
+      if (!err || res.headersSent) return;
+      res.setHeader('Content-Type', b.mime);
+      res.sendFile(b.path, { root: this.admin.root, dotfiles: 'deny', headers }, (err2) => {
+        if (err2 && !res.headersSent) res.status(404).json({ message: 'Файла нет на диске' });
+      });
     });
   }
 

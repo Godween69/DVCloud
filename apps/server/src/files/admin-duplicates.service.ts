@@ -25,12 +25,23 @@ export interface DupGroup {
   blobs: DupBlob[]; // лучший первым
   reclaimBytes: number; // сколько освободится, если оставить только лучший
 }
+// Ход «удалить дубликаты пачкой»: идёт в фоне, страница админки показывает цифры.
+export interface DupBulk {
+  running: boolean;
+  total: number; // сколько групп взято в работу
+  done: number; // сколько уже обработано (слито или пропущено)
+  failed: number; // пропущено: файлы изменились или группа слишком большая
+  bytes: number; // освобождено на диске
+  finishedAt: string | null;
+}
 export interface DupReport {
   computedAt: string | null;
   scanning: boolean;
   groups: DupGroup[];
   totalGroups: number;
   reclaimBytes: number;
+  mergeable: number; // сколько показанных групп можно удалить одной кнопкой (без слишком больших)
+  bulk: DupBulk;
 }
 
 interface Row {
@@ -57,6 +68,7 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
   private groups: DupGroup[] = [];
   private total = 0;
   private reclaim = 0;
+  private bulk: DupBulk = { running: false, total: 0, done: 0, failed: 0, bytes: 0, finishedAt: null };
 
   constructor(
     @Inject(DbService) private readonly db: DbService,
@@ -64,11 +76,11 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
     @Inject(ActivityService) private readonly activity: ActivityService,
   ) {}
 
-  // Первый поиск через минуту после запуска, дальше раз в несколько часов (по умолчанию 6) и после каждого слияния.
+  // Поиск идёт в фоне всегда: первый через минуту после запуска, дальше раз в полчаса (когда нет загрузок) и после каждого слияния.
   onModuleInit(): void {
     if (process.env.DVCLOUD_NO_DUP_SCAN === '1') return;
-    const ms = Number(process.env.DVCLOUD_DUP_SCAN_MS ?? 6 * 3600_000);
-    const every = Number.isFinite(ms) && ms >= 1000 ? ms : 6 * 3600_000;
+    const ms = Number(process.env.DVCLOUD_DUP_SCAN_MS ?? 30 * 60_000);
+    const every = Number.isFinite(ms) && ms >= 1000 ? ms : 30 * 60_000;
     const first = setTimeout(() => this.request(), Math.min(60_000, every));
     first.unref();
     this.timer = setInterval(() => this.request(), every);
@@ -86,14 +98,22 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
   }
 
   report(): DupReport {
-    return { computedAt: this.computedAt ? this.computedAt.toISOString() : null, scanning: this.scanning, groups: this.groups, totalGroups: this.total, reclaimBytes: this.reclaim };
+    return {
+      computedAt: this.computedAt ? this.computedAt.toISOString() : null,
+      scanning: this.scanning,
+      groups: this.groups,
+      totalGroups: this.total,
+      reclaimBytes: this.reclaim,
+      mergeable: this.groups.filter((g) => g.blobs.length - 1 <= MAX_MERGE).length,
+      bulk: { ...this.bulk },
+    };
   }
 
   private async load(only?: string[]): Promise<{ rows: Map<string, Row>; items: Item[] }> {
     const r = await this.db.query<Row>(
       `SELECT DISTINCT ON (f.blob_id) f.blob_id, f.id AS file_id, p.dhash, p.tiny, p.width, p.height, p.sharpness, b.size_bytes, f.taken_at
        FROM files f JOIN file_fingerprints p ON p.file_id = f.id JOIN blobs b ON b.id = f.blob_id
-       WHERE f.blob_id IS NOT NULL AND b.mime LIKE 'image/%' ${only ? 'AND f.blob_id = ANY($1::bigint[])' : ''}
+       WHERE f.blob_id IS NOT NULL AND b.mime LIKE 'image/%' AND NOT EXISTS (SELECT 1 FROM dup_keep k WHERE k.blob_id = f.blob_id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = f.blob_id) ${only ? 'AND f.blob_id = ANY($1::bigint[])' : ''}
        ORDER BY f.blob_id, f.id`,
       only ? [only] : [],
     );
@@ -206,7 +226,63 @@ export class AdminDuplicatesService implements OnModuleInit, OnModuleDestroy {
       await rm(this.storage.abs(`faces/${g.id}`), { recursive: true, force: true });
       bytes += g.size;
     }
-    this.request(); // обновить список
+    if (!this.bulk.running) this.request(); // обновить список (при «удалить все» один раз в конце)
     return { merged, removedFiles, bytes };
   }
+  // Применить решения администратора по показанным группам. Для каждой группы он отметил, какие файлы ОСТАВИТЬ (keep):
+  // - отмечен один: остальные файлы группы сливаются в него и стираются (как кнопка «Слить»);
+  // - отмечено несколько: неотмеченные сливаются в первый отмеченный, а отмеченные навсегда помечаются «оба нужны»
+  //   (таблица dup_keep) и больше как дубликаты не предлагаются;
+  // - не отмечено ничего: группа пропускается, ничего не стирается.
+  // Группы и файлы берутся только из текущего списка (чужие номера отклоняются). Каждая группа перед слиянием проверяется заново
+  // (merge), изменившиеся пропускаются. Работа идёт в фоне по одной группе, ход виден в report().bulk.
+  async apply(decisions: unknown): Promise<{ started: number }> {
+    if (this.bulk.running) throw new ConflictException('Удаление уже идёт');
+    if (this.scanning) throw new ConflictException('Сейчас идёт поиск дубликатов, подождите минуту и повторите');
+    if (!Array.isArray(decisions) || decisions.length < 1 || decisions.length > MAX_SHOWN) throw new BadRequestException(`decisions: список от 1 до ${MAX_SHOWN} групп`);
+    const work: { keep: string[]; drops: string[] }[] = [];
+    const seen = new Set<string>();
+    for (const d of decisions) {
+      const o = (typeof d === 'object' && d !== null ? d : {}) as { group?: unknown; keep?: unknown };
+      if (typeof o.group !== 'string' || !Array.isArray(o.keep) || o.keep.some((x) => typeof x !== 'string')) throw new BadRequestException('decisions: у каждой группы нужны group и keep');
+      if (seen.has(o.group)) throw new BadRequestException('decisions: группа указана дважды');
+      seen.add(o.group);
+      const g = this.groups.find((x) => x.id === o.group);
+      if (!g) throw new ConflictException('Список дубликатов изменился. Обновите страницу');
+      const all = g.blobs.map((b) => b.blobId);
+      const keep = all.filter((id) => (o.keep as string[]).includes(id)); // в порядке списка: лучший первым
+      if ((o.keep as string[]).some((id) => !all.includes(id))) throw new ConflictException('Список дубликатов изменился. Обновите страницу');
+      work.push({ keep, drops: all.filter((id) => !keep.includes(id)) });
+    }
+    this.bulk = { running: true, total: work.length, done: 0, failed: 0, bytes: 0, finishedAt: null };
+    void this.runBulk(work);
+    return { started: work.length };
+  }
+
+  private async runBulk(work: { keep: string[]; drops: string[] }[]): Promise<void> {
+    try {
+      for (const g of work) {
+        try {
+          if (g.keep.length === 0) throw new Error('ничего не отмечено, группа пропущена');
+          if (g.drops.length > 0) {
+            if (g.drops.length > MAX_MERGE) throw new Error('в группе слишком много файлов, удалите её отдельной кнопкой');
+            const r = await this.merge(g.keep[0], g.drops);
+            this.bulk.bytes += r.bytes;
+          }
+          if (g.keep.length > 1) await this.db.query('INSERT INTO dup_keep (blob_id) SELECT id FROM blobs WHERE id = ANY($1::bigint[]) ON CONFLICT DO NOTHING', [g.keep]);
+        } catch (e) {
+          this.bulk.failed++;
+          this.log.warn(`группа ${g.keep} пропущена: ${(e as Error).message}`);
+        }
+        this.bulk.done++;
+        await new Promise((res) => setImmediate(res)); // не держим сервер занятым подряд
+      }
+    } finally {
+      this.bulk.running = false;
+      this.bulk.finishedAt = new Date().toISOString();
+      this.log.log(`удаление дубликатов по решению: обработано ${this.bulk.done}, пропущено ${this.bulk.failed}, освобождено ${Math.round(this.bulk.bytes / 1048576)} МБ`);
+      this.request();
+    }
+  }
+
 }

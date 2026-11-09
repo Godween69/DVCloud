@@ -17,7 +17,22 @@ export interface PublicAlbum {
   sharedWith: number; // у своего альбома: со сколькими людьми он общий
   // Где файлы альбома видны в ленте (внутри самого альбома они видны всегда). Относится к своим альбомам.
   show: AlbumShow;
+  // Тип альбома: 'any' универсальный, иначе принимает только фото, только видео или только скриншоты. Выбирается при создании.
+  kind: AlbumKind;
+  favorite: boolean; // звёздочка владельца: избранные альбомы идут первыми
 }
+
+export type AlbumKind = 'any' | 'photos' | 'videos' | 'screenshots';
+export const ALBUM_KINDS: AlbumKind[] = ['any', 'photos', 'videos', 'screenshots'];
+
+// Какие файлы подходят альбому такого типа (условие к таблице files). Скриншот: ручная отметка сильнее автоматики.
+const SHOT = 'COALESCE(f.shot_override, EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = f.id AND p.screenshot))';
+export const KIND_SQL: Record<AlbumKind, string> = {
+  any: 'true',
+  photos: `f.mime LIKE 'image/%' AND NOT ${SHOT}`,
+  videos: "f.mime LIKE 'video/%'",
+  screenshots: `f.mime LIKE 'image/%' AND ${SHOT}`,
+};
 
 export interface AlbumShow {
   library: boolean;
@@ -41,6 +56,8 @@ interface AlbumRow {
   in_photos: boolean;
   in_videos: boolean;
   in_screenshots: boolean;
+  kind: AlbumKind;
+  favorite: boolean;
 }
 
 export const MAX_IDS = 2000;
@@ -81,10 +98,12 @@ const toPublic = (r: AlbumRow, viewerId: string): PublicAlbum => {
     ownerName: mine ? null : r.owner_name,
     sharedWith: mine ? Number(r.shared_with) : 0,
     show: { library: r.in_library, photos: r.in_photos, videos: r.in_videos, screenshots: r.in_screenshots },
+    kind: r.kind,
+    favorite: r.favorite,
   };
 };
 
-const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name, a.in_library, a.in_photos, a.in_videos, a.in_screenshots,
+const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name, a.in_library, a.in_photos, a.in_videos, a.in_screenshots, a.kind, a.favorite,
   (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
   (SELECT f.id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1) AS cover,
   (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared_with
@@ -105,9 +124,16 @@ export class AlbumsService {
     private readonly storage: StorageService,
   ) {}
 
-  // Свои альбомы и те, которыми поделились. Свои сначала.
+  // Свои альбомы и те, которыми поделились. Свои сначала. Среди своих: избранные, потом по типу (универсальные, фото, видео,
+  // скриншоты), потом тяжёлые вперёд (больше файлов), потом по названию.
   async list(userId: string): Promise<PublicAlbum[]> {
-    const r = await this.db.query<AlbumRow>(`${ALBUM_SELECT} WHERE ${VISIBLE} ORDER BY (a.owner_id = $1) DESC, lower(a.name), a.id`, [userId]);
+    const r = await this.db.query<AlbumRow>(
+      `${ALBUM_SELECT} WHERE ${VISIBLE}
+       ORDER BY (a.owner_id = $1) DESC, (a.favorite AND a.owner_id = $1) DESC,
+         CASE a.kind WHEN 'any' THEN 0 WHEN 'photos' THEN 1 WHEN 'videos' THEN 2 ELSE 3 END,
+         n DESC, lower(a.name), a.id`,
+      [userId],
+    );
     return r.rows.map((x) => toPublic(x, userId));
   }
 
@@ -127,10 +153,12 @@ export class AlbumsService {
     return { album: toPublic(r.rows[0], userId), ownerId: r.rows[0].owner_id };
   }
 
-  async create(ownerId: string, rawName: unknown): Promise<PublicAlbum> {
+  async create(ownerId: string, rawName: unknown, rawKind: unknown = 'any'): Promise<PublicAlbum> {
     const name = cleanAlbumName(rawName);
+    const kind = rawKind ?? 'any';
+    if (typeof kind !== 'string' || !ALBUM_KINDS.includes(kind as AlbumKind)) throw new BadRequestException('Поле kind: any, photos, videos или screenshots');
     try {
-      const r = await this.db.query<{ id: string }>('INSERT INTO albums (owner_id, name) VALUES ($1, $2) RETURNING id', [ownerId, name]);
+      const r = await this.db.query<{ id: string }>('INSERT INTO albums (owner_id, name, kind) VALUES ($1, $2, $3) RETURNING id', [ownerId, name, kind]);
       return this.get(ownerId, r.rows[0].id);
     } catch (e) {
       if ((e as { code?: string }).code === '23505') throw new ConflictException('Альбом с таким названием уже есть');
@@ -176,16 +204,27 @@ export class AlbumsService {
     return this.get(ownerId, id);
   }
 
+  // Звёздочка: свой альбом в избранное или обратно.
+  async setFavorite(ownerId: string, id: string, value: unknown): Promise<PublicAlbum> {
+    await this.get(ownerId, id);
+    if (typeof value !== 'boolean') throw new BadRequestException('Поле favorite: да или нет');
+    await this.db.query('UPDATE albums SET favorite = $3 WHERE id = $1 AND owner_id = $2', [id, ownerId, value]);
+    return this.get(ownerId, id);
+  }
+
   // Добавить фото в альбом. Одно фото может лежать в нескольких альбомах; повторное добавление ничего не меняет.
-  async addFiles(ownerId: string, albumId: string, ids: string[]): Promise<number> {
-    await this.get(ownerId, albumId);
+  // Альбом определённого типа принимает только подходящее: не подошедшие пропускаются и считаются в rejected.
+  async addFiles(ownerId: string, albumId: string, ids: string[]): Promise<{ added: number; rejected: number }> {
+    const album = await this.get(ownerId, albumId);
+    const total = (await this.db.query<{ n: string }>('SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[])', [ownerId, ids])).rows[0];
     const r = await this.db.query(
       `INSERT INTO album_items (file_id, album_id)
-       SELECT f.id, $2 FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($3::bigint[])
+       SELECT f.id, $2 FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($3::bigint[]) AND (${KIND_SQL[album.kind]})
        ON CONFLICT (album_id, file_id) DO NOTHING`,
       [ownerId, albumId, ids],
     );
-    return r.rowCount ?? 0;
+    const fit = (await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[]) AND (${KIND_SQL[album.kind]})`, [ownerId, ids])).rows[0];
+    return { added: r.rowCount ?? 0, rejected: Number(total.n) - Number(fit.n) };
   }
 
   async removeFiles(ownerId: string, albumId: string, ids: string[]): Promise<number> {

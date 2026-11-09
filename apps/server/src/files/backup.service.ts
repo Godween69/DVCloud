@@ -57,7 +57,7 @@ const DUMPS_KEEP = 7;
 // Что не нужно копировать никогда: временные файлы и ключ для связи с удалённым сервером.
 const ALWAYS_SKIP = ['/tmp/', '/uploads/', '/.backup-key/'];
 const TRASH = ['/trash/'];
-const DERIVED = ['/thumbs/', '/previews/', '/videos/', '/faces/'];
+const DERIVED = ['/thumbs/', '/thumbs-fit/', '/previews/', '/videos/', '/faces/'];
 
 export function parseBackupPatch(input: unknown): Partial<BackupConfig> {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new BadRequestException('Ожидался объект с настройками копии');

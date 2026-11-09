@@ -502,7 +502,9 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
-    const end = this.activity.begin();
+    // «Идёт загрузка» (фоновая работа уступает) отмечаем только на время обработки файла на сервере. Скачивание с Яндекса идёт
+    // по сети, процессор почти не занят, а раньше оно держало «занято» целиком: миниатюры и отпечатки не строились, пока шёл импорт.
+    let end = (): void => undefined;
     const tmp = this.storage.newTmp();
     try {
       const disk = this.diskOf(a);
@@ -512,6 +514,7 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
       const { size: got, sha256 } = await this.storage.receive(dl.stream, tmp, room);
       if (got === 0 || (size > 0 && got !== size)) throw new YandexUnavailable(`Размер не совпал (пришло ${got}, ждали ${size})`);
       if (it.md5 && dl.md5() !== it.md5) throw new YandexUnavailable('Контрольная сумма не совпала');
+      end = this.activity.begin();
       const res = await this.files.finishUpload(user, tmp, got, sha256, clean, it.taken_hint ?? new Date());
       await this.mark(it, 'done', null, res.file.id);
       await this.toAlbum(a, user, res.file.id);

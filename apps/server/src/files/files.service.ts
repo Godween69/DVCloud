@@ -36,6 +36,8 @@ export interface BlobRow {
   mime: string;
   size_bytes: string;
   created_at: Date;
+  orphan_name?: string | null; // у файла без владельца: как он назывался
+  orphan_taken_at?: Date | null; // и когда был снят
 }
 
 // Путь на диске наружу не отдаётся: клиент знает только id.
@@ -480,8 +482,8 @@ export class FilesService {
     if (rows.length === 0) return;
     const ids = rows.map((f) => f.id);
     // Пока записи живы, запоминаем, чьи они были и в каких альбомах лежали: потом это уже не узнать.
-    const info = await this.db.query<{ blob_id: string; login: string; albums: string }>(
-      `SELECT f.blob_id, u.login,
+    const info = await this.db.query<{ blob_id: string; login: string; albums: string; name: string; taken: Date }>(
+      `SELECT f.blob_id, u.login, min(f.original_name) AS name, min(f.taken_at) AS taken,
               COALESCE(string_agg(DISTINCT a.name || CASE WHEN a.deleted_at IS NOT NULL THEN ' (альбом удалён)' ELSE '' END, ', '), '') AS albums
        FROM files f JOIN users u ON u.id = f.owner_id
        LEFT JOIN album_items ai ON ai.file_id = f.id LEFT JOIN albums a ON a.id = ai.album_id
@@ -489,15 +491,15 @@ export class FilesService {
       [ids],
     );
     await this.db.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [ids]);
-    for (const i of info.rows) await this.noteOrphan(i.blob_id, `${why}: ${i.login}${i.albums ? `. Был в альбомах: ${i.albums}` : '. В альбомах не лежал'}`);
+    for (const i of info.rows) await this.noteOrphan(i.blob_id, `${why}: ${i.login}${i.albums ? `. Был в альбомах: ${i.albums}` : '. В альбомах не лежал'}`, i.name, i.taken);
     for (const f of rows) await this.thumbs.remove(f);
   }
 
   // Если у содержимого не осталось владельцев, записать, откуда оно такое. Если владельцы ещё есть, ничего не делает.
-  async noteOrphan(blobId: string, note: string): Promise<void> {
+  async noteOrphan(blobId: string, note: string, name?: string, takenAt?: Date): Promise<void> {
     await this.db.query(
-      'UPDATE blobs SET orphaned_at = now(), orphan_note = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
-      [blobId, note.slice(0, 500)],
+      'UPDATE blobs SET orphaned_at = now(), orphan_note = $2, orphan_name = COALESCE($3, orphan_name), orphan_taken_at = COALESCE($4, orphan_taken_at) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
+      [blobId, note.slice(0, 500), name ?? null, takenAt ?? null],
     );
   }
 

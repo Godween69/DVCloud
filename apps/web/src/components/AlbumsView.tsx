@@ -1,10 +1,11 @@
 import { motion } from 'framer-motion';
-import { ArrowLeft, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Trash2, Users, Zap } from 'lucide-react';
+import { ArrowLeft, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Star, Trash2, Users, Zap } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, thumbUrl } from '../api';
 import { albumZipHref } from '../lib/albums';
 import { countFiles } from '../lib/format';
-import type { Album, AlbumShow } from '../types';
+import { KIND_LABEL } from '../lib/albumKinds';
+import type { Album, AlbumKind, AlbumShow } from '../types';
 
 interface ListProps {
   albums: Album[] | null;
@@ -13,7 +14,18 @@ interface ListProps {
   onError: (m: string) => void;
   quickId?: string; // какой альбом сейчас «быстрый»
   onQuick: (a: Album | null) => void; // сделать быстрым или выключить (null)
+  filter: AlbumKind | 'all'; // какие альбомы показывать: все или только один тип
+  onFilter: (f: AlbumKind | 'all') => void;
+  onFavorite: (a: Album) => void; // звёздочка
 }
+
+const CHIPS: { key: AlbumKind | 'all'; label: string }[] = [
+  { key: 'all', label: 'Все' },
+  { key: 'any', label: 'Универсальные' },
+  { key: 'screenshots', label: 'Скриншоты' },
+  { key: 'photos', label: 'Фото' },
+  { key: 'videos', label: 'Видео' },
+];
 
 const SHOW_LABELS: { key: keyof AlbumShow; label: string }[] = [
   { key: 'library', label: 'Библиотека' },
@@ -73,9 +85,10 @@ function ShowMenu({ album, onChanged, onError }: { album: Album; onChanged: (a: 
 }
 
 // Список альбомов: карточки с обложкой и кнопка «Новый альбом».
-export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuick }: ListProps) {
+export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuick, filter, onFilter, onFavorite }: ListProps) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
+  const [kind, setKind] = useState<AlbumKind>('any');
   const [busy, setBusy] = useState(false);
 
   async function create(e: FormEvent) {
@@ -84,7 +97,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
     if (!n) return;
     setBusy(true);
     try {
-      onCreated(await api.albumCreate(n));
+      onCreated(await api.albumCreate(n, kind));
       setName('');
       setAdding(false);
     } catch (err) {
@@ -102,6 +115,9 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
         {adding ? (
           <form onSubmit={create} className="flex gap-2">
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setAdding(false)} maxLength={100} placeholder="Название" aria-label="Название альбома" className="w-52 rounded-lg border border-paper-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
+            <select value={kind} onChange={(e) => setKind(e.target.value as AlbumKind)} aria-label="Тип альбома" title="Тип выбирается один раз и потом не меняется" className="rounded-lg border border-paper-300 bg-white px-2 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-white">
+              {(['any', 'photos', 'videos', 'screenshots'] as const).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+            </select>
             <button type="submit" disabled={busy || !name.trim()} className="rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">Создать</button>
             <button type="button" onClick={() => setAdding(false)} className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800">Отмена</button>
           </form>
@@ -109,6 +125,16 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
           <button type="button" onClick={() => setAdding(true)} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500"><FolderPlus className="size-4" aria-hidden />Новый альбом</button>
         )}
       </div>
+      {albums.length > 0 && (
+        <div role="group" aria-label="Тип альбомов" className="mb-4 flex flex-wrap gap-2">
+          {CHIPS.map((c) => {
+            const n = albums.filter((a) => a.mine && (c.key === 'all' || a.kind === c.key)).length;
+            return (
+              <button key={c.key} type="button" aria-pressed={filter === c.key} onClick={() => onFilter(c.key)} className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${filter === c.key ? 'bg-violet-600 text-white' : 'bg-paper-200 text-gray-700 hover:bg-paper-300 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}`}>{c.label}{c.key !== 'all' || n > 0 ? ` (${n})` : ''}</button>
+            );
+          })}
+        </div>
+      )}
       {albums.length === 0 ? (
         <div className="mx-auto flex max-w-md flex-col items-center px-4 py-20 text-center">
           <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-violet-600/10 text-violet-600 dark:text-violet-400"><Folders className="size-8" aria-hidden /></span>
@@ -117,7 +143,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
         </div>
       ) : (
         <ul className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(13rem,16rem))]">
-          {albums.map((a) => {
+          {albums.filter((a) => filter === 'all' || !a.mine || a.kind === filter).map((a) => {
             const quick = a.id === quickId;
             return (
               <li key={a.id} className="group relative">
@@ -125,12 +151,16 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
                   {a.coverFileId ? <img src={thumbUrl(a.coverFileId)} alt="" loading="lazy" className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105" /> : <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-violet-500/20 to-paper-200 text-violet-500/60 dark:to-gray-800"><Images className="size-12" aria-hidden /></div>}
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-3.5 pb-3 pt-14 text-white">
                     <p className="truncate text-base font-semibold drop-shadow">{a.name}</p>
-                    <p className="text-sm text-white/80">{countFiles(a.count)}</p>
+                    <p className="text-sm text-white/80">{countFiles(a.count)}{a.mine && a.kind !== 'any' ? ` · ${KIND_LABEL[a.kind]}` : ''}</p>
                     {!a.mine && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><Users className="size-3.5 shrink-0" aria-hidden />Поделился: {a.ownerName}</p>}
                     {a.mine && hiddenIn(a.show).length > 0 && <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/80"><EyeOff className="size-3.5 shrink-0" aria-hidden />Скрыт: {hiddenIn(a.show).join(', ')}</p>}
                     {a.mine && a.sharedWith > 0 && <p className="mt-0.5 flex items-center gap-1 text-xs text-white/80"><Share2 className="size-3.5 shrink-0" aria-hidden />Общий, людей: {a.sharedWith}</p>}
                   </div>
                 </button>
+                {a.mine && <button type="button" onClick={() => onFavorite(a)} aria-pressed={a.favorite} aria-label={a.favorite ? `Убрать «${a.name}» из избранных` : `Добавить «${a.name}» в избранные`} title={a.favorite ? 'Избранный альбом. Нажмите, чтобы убрать' : 'В избранные: такие альбомы идут первыми'}
+                  className={`absolute left-2.5 top-2.5 flex size-8 items-center justify-center rounded-full backdrop-blur transition-all ${a.favorite ? 'bg-black/45 opacity-100' : 'bg-black/45 opacity-0 hover:bg-black/60 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
+                  <Star className={`size-4 ${a.favorite ? 'fill-amber-400 text-amber-400' : 'text-white'}`} aria-hidden />
+                </button>}
                 {a.mine && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
                   className={`absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full py-1.5 text-xs font-medium text-white backdrop-blur transition-all ${quick ? 'bg-violet-600 pl-2.5 pr-3 opacity-100' : 'bg-black/45 px-2 opacity-0 hover:bg-violet-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
                   <Zap className="size-3.5" aria-hidden />{quick && 'Быстрый'}

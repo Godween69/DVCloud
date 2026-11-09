@@ -11,13 +11,14 @@ import { countFiles } from '../lib/format';
 import { useTheme } from '../lib/theme';
 import type { Month } from '../lib/timeline';
 import { MAX_ZIP_IDS, setMany, toggled } from '../lib/albums';
-import type { Album, AlbumRef, Estimate, FileItem, PeopleGroup, PeopleList, SearchStatus, Usage, User } from '../types';
+import type { Album, AlbumKind, AlbumRef, Estimate, FileItem, PeopleGroup, PeopleList, SearchStatus, Usage, User } from '../types';
 import { useSearch } from '../lib/useSearch';
 import { PeopleView, PersonHeader } from './PeopleView';
 import { SearchView } from './SearchView';
 import { QuotaDialog } from './QuotaDialog';
 import { AlbumPicker, type PickResult } from './AlbumPicker';
 import { AlbumHeader, AlbumsView } from './AlbumsView';
+import { AlbumStrip } from './AlbumStrip';
 import { Gallery } from './Gallery';
 import { YandexView } from './YandexView';
 import { SecurityView } from './SecurityView';
@@ -47,6 +48,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const [album, setAlbum] = useState<Album | null>(null); // открытый альбом (внутри вкладки «Альбомы»)
   const [albums, setAlbums] = useState<Album[] | null>(null);
+  const [albumFilter, setAlbumFilter] = useState<AlbumKind | 'all'>('all');
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
@@ -119,7 +121,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   }, [view]);
   useEffect(() => { if (view === 'trash') trash.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
   const refreshAlbums = useCallback(() => { api.albums().then(setAlbums).catch(() => {}); }, []);
-  useEffect(() => { if (view === 'albums' && !album) refreshAlbums(); }, [view, album, refreshAlbums]);
+  useEffect(() => { if ((view === 'albums' && !album) || view === 'photos' || view === 'videos' || view === 'screenshots') refreshAlbums(); }, [view, album, refreshAlbums]);
   useEffect(() => { if (album) albumFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [album?.id]);
 
   const endSelect = useCallback(() => { setSelecting(false); setSelected(new Set()); }, []);
@@ -247,7 +249,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   function albumChanged(file: FileItem, r: PickResult) {
     const a = r.album;
     if (a) quick.note([file.id], a.id, r.removed);
-    say(!a ? 'Ничего не изменилось' : r.removed ? `Убрано из альбома «${a.name}»` : `В альбоме «${a.name}»`);
+    say(a && r.rejected ? `Не подошло по типу альбома «${a.name}»` : !a ? 'Ничего не изменилось' : r.removed ? `Убрано из альбома «${a.name}»` : `В альбоме «${a.name}»`);
     if (r.removed && a && inAlbum && album && a.id === album.id) leaveFeed(file.id);
   }
 
@@ -304,8 +306,13 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     try {
       await api.setKind(kind, [...imgs]);
       const leaves = (view === 'photos' || view === 'library') ? kind === 'screenshot' : view === 'screenshots' ? kind === 'photo' : false;
-      if (leaves) imgs.forEach((id) => active.remove(id)); else active.patch(imgs, { screenshot: kind === 'screenshot' });
-      say(kind === 'screenshot' ? `В скриншотах: ${imgs.size}` : `Теперь это фото: ${imgs.size}`);
+      // Если снимок открыт в просмотрщике, показываем соседний (как после «В корзину»), а не закрываем просмотр.
+      if (leaves) imgs.forEach((id) => (viewer && viewer.id === id ? leaveFeed(id) : active.remove(id))); else active.patch(imgs, { screenshot: kind === 'screenshot' });
+      const back = kind === 'screenshot' ? 'photo' : 'screenshot';
+      say(kind === 'screenshot' ? `В скриншотах: ${imgs.size}` : `Теперь это фото: ${imgs.size}`, leaves ? {
+        label: 'Вернуть',
+        run: () => { api.setKind(back, [...imgs]).then(() => { [library, photos, shots].forEach((f) => { if (f.loaded) void f.loadMore(true); }); }).catch(() => say('Не получилось вернуть')); },
+      } : undefined);
       endSelect();
     } catch (e) {
       say(e instanceof Error ? e.message : 'Не получилось');
@@ -326,13 +333,38 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
   }
 
+  function albumCreated(a: Album) {
+    setAlbums((l) => [...(l ?? []), a]);
+    say(`Альбом «${a.name}» создан`);
+    refreshAlbums();
+  }
+
+  async function toggleFavorite(a: Album) {
+    try {
+      const n = await api.albumFavorite(a.id, !a.favorite);
+      setAlbums((l) => (l ?? []).map((x) => (x.id === n.id ? n : x)));
+      refreshAlbums(); // порядок задаёт сервер
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось');
+    }
+  }
+
+  // Какого вида выбранные файлы (если все одного вида): по этому в окне выбора первыми идут подходящие альбомы.
+  function pickKind(ids: string[]): Exclude<AlbumKind, 'any'> | undefined {
+    const fs = active.files.filter((f) => ids.includes(f.id));
+    if (fs.length === 0) return undefined;
+    const k = (f: FileItem): Exclude<AlbumKind, 'any'> => (f.mime.startsWith('video/') ? 'videos' : f.screenshot ? 'screenshots' : 'photos');
+    const first = k(fs[0]);
+    return fs.every((f) => k(f) === first) ? first : undefined;
+  }
+
   function selectionPicked(r: PickResult) {
     const ids = picker ?? [];
     const a = r.album;
     setPicker(null);
     if (!a) return;
     quick.note(ids, a.id);
-    say(`В альбом «${a.name}»: ${r.n}`);
+    say(r.rejected ? `В альбом «${a.name}»: ${r.n}. Не подошло по типу альбома: ${r.rejected} из ${ids.length}` : `В альбом «${a.name}»: ${r.n}`);
     endSelect();
   }
 
@@ -374,16 +406,16 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <input ref={folderInput} type="file" multiple className="hidden" data-testid="folder-input" {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e) => { void startUpload(filesFromInput(e.target.files)); e.target.value = ''; }} />
       <motion.main key={`${view}:${album?.id ?? ''}:${person?.id ?? ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: 'easeOut' }} className="pb-16 sm:pb-0">
         {view === 'library' && gallery(library, undefined, true)}
-        {view === 'photos' && gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'), true)}
-        {view === 'videos' && gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'), true)}
-        {view === 'screenshots' && gallery(shots, (
+        {view === 'photos' && <><AlbumStrip kind="photos" albums={albums} onOpen={(a) => { setView('albums'); setAlbum(a); endSelect(); }} onAll={() => { setAlbumFilter('photos'); changeView('albums'); }} onCreated={albumCreated} onError={say} />{gallery(photos, emptyNote(<Images className="size-8" aria-hidden />, 'Фото пока нет', 'Здесь собраны фотографии без скриншотов. Видео и скриншоты лежат на своих вкладках, а всё вместе в «Библиотеке».'), true)}</>}
+        {view === 'videos' && <><AlbumStrip kind="videos" albums={albums} onOpen={(a) => { setView('albums'); setAlbum(a); endSelect(); }} onAll={() => { setAlbumFilter('videos'); changeView('albums'); }} onCreated={albumCreated} onError={say} />{gallery(videos, emptyNote(<Film className="size-8" aria-hidden />, 'Видео пока нет', 'Здесь будут все ваши видео. Добавьте их кнопкой «Добавить» или перетащите в окно браузера.'), true)}</>}
+        {view === 'screenshots' && <><AlbumStrip kind="screenshots" albums={albums} onOpen={(a) => { setView('albums'); setAlbum(a); endSelect(); }} onAll={() => { setAlbumFilter('screenshots'); changeView('albums'); }} onCreated={albumCreated} onError={say} />{gallery(shots, (
           <div className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
             <span className="mb-5 flex size-16 items-center justify-center rounded-2xl bg-paper-200 text-gray-500 dark:bg-gray-900"><Smartphone className="size-8" aria-hidden /></span>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Скриншотов пока нет</h2>
             <p className="mt-2 text-gray-600 dark:text-gray-400">Облако само находит снимки экрана среди ваших файлов. Для уже загруженных это занимает время: поиск идёт в фоне, когда нет загрузок. Новые скриншоты появятся здесь сразу после обработки.</p>
           </div>
-        ), true)}
-        {view === 'albums' && !album && <AlbumsView albums={albums} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={(a) => { setAlbums((l) => [...(l ?? []), a]); say(`Альбом «${a.name}» создан`); }} onError={say}
+        ), true)}</>}
+        {view === 'albums' && !album && <AlbumsView albums={albums} filter={albumFilter} onFilter={setAlbumFilter} onFavorite={toggleFavorite} onOpen={(a) => { setAlbum(a); endSelect(); }} onCreated={albumCreated} onError={say}
           quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (
           <>
@@ -422,7 +454,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </AnimatePresence>
       {sharing && album && album.mine && <ShareDialog album={album} onClose={() => setSharing(false)} onError={say} onChanged={(n) => setAlbum((a) => (a ? { ...a, sharedWith: n } : a))} />}
-      {picker && <AlbumPicker ids={picker} current={[]} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
+      {picker && <AlbumPicker ids={picker} fitKind={pickKind(picker)} current={[]} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
       {targetPicker && <AlbumPicker target ids={[]} current={quick.saved ? [quick.saved] : []} onClose={() => setTargetPicker(false)} onError={say}
         onDone={(r) => { const a = r.album; setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>

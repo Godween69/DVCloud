@@ -72,7 +72,14 @@ export function useQuickAlbum(say: (m: string) => void) {
     setIds((s) => { const n = new Set(s); if (was) n.delete(id); else n.add(id); return n; });
     try {
       if (was) await api.albumRemoveFiles(target.id, [id]);
-      else await api.albumAdd(target.id, [id]);
+      else {
+        const r = await api.albumAdd(target.id, [id]);
+        if (r.added === 0 && r.rejected > 0) {
+          setIds((x) => { const n = new Set(x); n.delete(id); return n; });
+          say('Не подходит по типу: в этот быстрый альбом такие файлы не кладутся');
+          return null;
+        }
+      }
       return !was;
     } catch (e) {
       setIds((s) => { const n = new Set(s); if (was) n.add(id); else n.delete(id); return n; });
@@ -84,9 +91,10 @@ export function useQuickAlbum(say: (m: string) => void) {
   const addMany = useCallback(async (list: string[]): Promise<number | null> => {
     if (!target) return null;
     try {
-      const n = await api.albumAdd(target.id, list);
+      const r = await api.albumAdd(target.id, list);
+      if (r.rejected > 0) say(`Не подошли по типу альбома: ${r.rejected} из ${list.length}`);
       setIds((s) => new Set([...s, ...list]));
-      return n;
+      return r.added;
     } catch (e) {
       say(e instanceof ApiError ? e.message : 'Не получилось');
       return null;

@@ -8,6 +8,9 @@ import { MlClient, MlHealth } from './ml-client';
 import { IndexStats, indexStats } from './search-index';
 import { detectTakenAt } from './taken';
 
+function sumStats(a: DirStat[]): DirStat {
+  return { files: a.reduce((n, x) => n + x.files, 0), bytes: a.reduce((n, x) => n + x.bytes, 0) };
+}
 export type ClearTarget = 'thumbs' | 'previews' | 'videos' | 'index' | 'index-failed' | 'people';
 
 export interface DirStat {
@@ -150,7 +153,7 @@ export class AdminMediaService {
     const size = Number((await this.db.query<{ n: string }>("SELECT COALESCE(sum(octet_length(vector)), 0) AS n FROM embeddings")).rows[0].n);
     return {
       settings,
-      thumbs: await dirStat(this.storage.abs('thumbs')),
+      thumbs: await sumStats([await dirStat(this.storage.abs('thumbs-fit')), await dirStat(this.storage.abs('thumbs'))]), // единая миниатюра в thumbs-fit, прежние квадратные ещё могут лежать в thumbs
       previews: await dirStat(this.storage.abs('previews')),
       videos: {
         copies: await dirStat(this.storage.abs('videos')),
@@ -224,9 +227,13 @@ export class AdminMediaService {
       return { files: n, bytes: 0 };
     }
     if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews, videos, index, index-failed или people');
-    const before = await dirStat(this.storage.abs(what));
-    await rm(this.storage.abs(what), { recursive: true, force: true });
-    await mkdir(this.storage.abs(what), { recursive: true });
+    const dirs = what === 'thumbs' ? ['thumbs-fit', 'thumbs'] : [what];
+    const before = await sumStats(await Promise.all(dirs.map((d) => dirStat(this.storage.abs(d)))));
+    for (const d of dirs) {
+      await rm(this.storage.abs(d), { recursive: true, force: true });
+      await mkdir(this.storage.abs(d), { recursive: true });
+    }
+    if (what === 'thumbs') await this.db.query('UPDATE blobs SET thumb_at = NULL, thumb_failed_at = NULL'); // фон построит заново
     if (what === 'videos') await this.db.query('DELETE FROM video_copies');
     return before;
   }

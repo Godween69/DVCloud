@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, AlbumShow, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
+import type { Album, AlbumKind, AlbumRef, AlbumShow, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -118,7 +118,8 @@ export const api = {
   restore: (id: string) => request<{ file: FileItem }>('POST', `/api/files/${id}/restore`, {}),
   purge: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${id}?permanent=1`),
   albums: () => request<{ albums: Album[] }>('GET', '/api/albums').then((r) => r.albums),
-  albumCreate: (name: string) => request<{ album: Album }>('POST', '/api/albums', { name }).then((r) => r.album),
+  albumCreate: (name: string, kind: AlbumKind = 'any') => request<{ album: Album }>('POST', '/api/albums', { name, kind }).then((r) => r.album),
+  albumFavorite: (id: string, favorite: boolean) => request<{ album: Album }>('PATCH', `/api/albums/${id}/favorite`, { favorite }).then((r) => r.album),
   albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
   albumShow: (id: string, show: Partial<AlbumShow>) => request<{ album: Album }>('PATCH', `/api/albums/${id}/show`, show).then((r) => r.album),
   albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
@@ -131,7 +132,8 @@ export const api = {
   },
   albumTimeline: (id: string) => request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/albums/${id}/timeline?${new URLSearchParams({ tz: timeZone() })}`),
   albumIds: (id: string) => request<{ ids: string[] }>('GET', `/api/albums/${id}/ids`).then((r) => r.ids),
-  albumAdd: (id: string, ids: string[]) => request<{ added: number }>('POST', `/api/albums/${id}/add`, { ids }).then((r) => r.added),
+  // added: сколько положено, rejected: сколько не подошло по типу альбома (в альбоме «Видео» нет фото и наоборот)
+  albumAdd: (id: string, ids: string[]) => request<{ added: number; rejected: number }>('POST', `/api/albums/${id}/add`, { ids }),
   albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),
   albumOf: (fileId: string) => request<{ album: AlbumRef | null; albums: AlbumRef[] }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.albums),
   people: () => request<{ people: Person[] }>('GET', '/api/albums/people').then((r) => r.people),

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, backupPage, filesPage, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage } from './lib/html.mjs';
+import { CSS, backupPage, filesPage, formatSize, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -33,7 +33,7 @@ async function readForm(req) {
   const chunks = [];
   for await (const c of req) {
     size += c.length;
-    if (size > 16 * 1024) return null;
+    if (size > 64 * 1024) return null; // 100 групп дубликатов с отметками занимают около 10 КБ
     chunks.push(c);
   }
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
@@ -133,6 +133,16 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       } else if (path === '/storage/duplicates/scan') {
         await api.scanDuplicates();
         ok('Поиск дубликатов запущен в фоне, результат появится через несколько минут. Обновите страницу позже');
+      } else if (path === '/storage/duplicates/apply') {
+        // Решения по группам: g = группы, показанные на экране; keep = «номер группы:номер файла», которые отметили «оставить».
+        // Кнопка у самой группы шлёт only = номер этой группы.
+        const only = (form.get('only') ?? '').trim();
+        const groups = form.getAll('g').filter((x) => /^\d{1,18}$/.test(x) && (!only || x === only));
+        if (groups.length === 0) throw new ApiError(400, 'Нет групп: обновите страницу');
+        const marks = form.getAll('keep').map((x) => x.split(':'));
+        const decisions = groups.map((g) => ({ group: g, keep: marks.filter((m) => m[0] === g && /^\d{1,18}$/.test(m[1] ?? '')).map((m) => m[1]) }));
+        const r = await api.applyDuplicates(decisions);
+        ok(`Решения применяются в фоне, групп: ${r.started}. Ход виден внизу списка`);
       } else if (path === '/storage/duplicates/merge') {
         const keep = (form.get('keep') ?? '').trim();
         const drop = (form.get('drop') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -181,6 +191,23 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         if ((form.get('word') ?? '').trim().toLowerCase() !== 'раздать') throw new ApiError(400, 'Чтобы раздать всё, впишите слово «раздать»');
         const r = await api.shareEverything();
         ok(`Готово: альбомов ${r.albums}, новых доступов открыто: ${r.links}`);
+      } else if ((m = /^\/sharing\/(\d{1,18})\/set$/.exec(path))) {
+        // Флажки: кому альбом открыт. Сравниваем с тем, что есть сейчас, и открываем или закрываем разницу.
+        const want = new Set(form.getAll('login').map((x) => x.trim()).filter(Boolean));
+        const have = new Set(await api.albumShares(m[1]));
+        let opened = 0, closed = 0;
+        for (const l of want) if (!have.has(l)) { await api.share(m[1], l); opened++; }
+        for (const l of have) if (!want.has(l)) { await api.unshare(m[1], l); closed++; }
+        ok(opened + closed === 0 ? 'Доступ не изменился' : `Доступ обновлён: открыто ${opened}, закрыто ${closed}`);
+      } else if ((m = /^\/sharing\/(\d{1,18})\/transfer$/.exec(path))) {
+        const login = form.get('login') ?? '';
+        const r = await api.transfer(m[1], login, true);
+        ok(`Альбом передан: ${login}, файлов: ${r.linked}. У прежнего владельца альбом убран, его фото остались`);
+      } else if ((m = /^\/sharing\/(\d{1,18})\/vault$/.exec(path))) {
+        if (!verifyPassword(form.get('password') ?? '', cfg.passwordHash)) throw new ApiError(403, 'Неверный пароль админки: альбом не тронут');
+        const r = await api.toVault(m[1], (form.get('note') ?? '').trim());
+        ok(`Альбом в сейфе, файлов: ${r.files}. У владельца его больше нет`);
+        return redirect(res, '/vault');
       } else if ((m = /^\/sharing\/(\d{1,18})\/(add|remove|all|hide)$/.exec(path))) {
         const login = form.get('login') ?? '';
         if (m[2] === 'add') { await api.share(m[1], login); ok(`Альбом открыт: ${login}`); }
@@ -197,6 +224,28 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     return redirect(res, '/sharing');
   }
 
+  // Сейф: вернуть или стереть только после повторного ввода пароля админки.
+  async function vaultAction(session, res, path, form) {
+    const ok = (text) => { session.flash = { kind: 'ok', text }; };
+    try {
+      const m = /^\/vault\/(\d{1,18})\/(return|erase)$/.exec(path);
+      if (!m) return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      if (!verifyPassword(form.get('password') ?? '', cfg.passwordHash)) throw new ApiError(403, 'Неверный пароль админки: сейф не тронут');
+      if (m[2] === 'return') {
+        const login = form.get('login') ?? '';
+        const r = await api.vaultReturn(m[1], login);
+        ok(`Возвращено человеку ${login}, файлов: ${r.linked}`);
+      } else {
+        const r = await api.vaultErase(m[1]);
+        ok(`Стёрто с диска файлов: ${r.files}${r.kept ? `, осталось у людей: ${r.kept}` : ''}, освобождено ${formatSize(r.bytes)}`);
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, '/vault');
+  }
+
   // Миниатюра или файл целиком: берётся с внутреннего порта и отдаётся как есть (Range для перемотки видео).
   async function proxyFile(req, res, id, what) {
     let r;
@@ -206,7 +255,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       return send(res, 502, 'text/plain; charset=utf-8', 'Сервер DVCloud недоступен');
     }
     if (!r.ok && r.status !== 206) return send(res, r.status === 404 ? 404 : 502, 'text/plain; charset=utf-8', r.status === 404 ? 'Нет такого файла или миниатюры' : 'Ошибка сервера');
-    const head = { 'content-type': r.headers.get('content-type') ?? 'application/octet-stream', ...SECURITY_HEADERS, 'cache-control': what === 'thumb' ? 'private, max-age=3600' : 'no-store' };
+    const head = { 'content-type': r.headers.get('content-type') ?? 'application/octet-stream', ...SECURITY_HEADERS, 'cache-control': what === 'thumb' || what === 'preview' ? 'private, max-age=600' : 'no-store' };
     for (const h of ['content-length', 'content-range', 'accept-ranges']) if (r.headers.get(h)) head[h] = r.headers.get(h);
     res.writeHead(r.status, head);
     if (!r.body) return res.end();
@@ -255,6 +304,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
     if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
     if (path.startsWith('/sharing/')) return sharingAction(session, res, path, form);
+    if (path.startsWith('/vault/')) return vaultAction(session, res, path, form);
     if (path.startsWith('/backup/')) return backupAction(session, res, path, form);
     const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
     try {
@@ -342,7 +392,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     }
 
     let fm;
-    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})\/(thumb|view)$/.exec(path))) return proxyFile(req, res, fm[1], fm[2] === 'thumb' ? 'thumb' : 'original');
+    if (req.method === 'GET' && (fm = /^\/files\/(\d{1,18})\/(thumb|view|zoom)$/.exec(path))) return proxyFile(req, res, fm[1], fm[2] === 'thumb' ? 'thumb' : fm[2] === 'zoom' ? 'preview' : 'original');
 
     if (req.method === 'GET' && path === '/files') {
       const flash = session.flash;
@@ -378,7 +428,23 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
         albums = [];
       }
-      return html(res, 200, sharingPage({ albums, users, csrf: session.csrf, flash, loadError }));
+      const sp = new URL(req.url, 'http://x').searchParams;
+      return html(res, 200, sharingPage({ albums, users, csrf: session.csrf, flash, loadError, filter: { owner: sp.get('owner') ?? '', kind: sp.get('kind') ?? '', q: sp.get('q') ?? '' } }));
+    }
+
+    if (req.method === 'GET' && path === '/vault') {
+      const flash = session.flash;
+      session.flash = null;
+      let albums = [];
+      let users = [];
+      let loadError = null;
+      try {
+        [albums, users] = await Promise.all([api.vault(), api.list()]);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, vaultPage({ albums, users, csrf: session.csrf, flash, loadError }));
     }
 
     if (req.method === 'GET' && path === '/backup') {

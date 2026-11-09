@@ -67,6 +67,11 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
   const cur = useRef(file?.id);
   cur.current = file?.id;
   const busy = useRef(false);
+  const onTrashRef = useRef(onTrash);
+  onTrashRef.current = onTrash;
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const lastDelRef = useRef(0);
   const [broken, setBroken] = useState(false);
   const [noPreview, setNoPreview] = useState(false); // превью нет или не открылось: показываем оригинал
   const [vfit, setVfit] = usePref<'fit' | 'orig'>('video-size', 'fit', ['fit', 'orig'] as const); // ролик по размеру окна (по умолчанию) или в своём размере
@@ -208,6 +213,15 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       if (e.code === 'KeyA' && !readOnly && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
+      else if (e.key === 'Delete' && onTrashRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Del = сразу в корзину, без вопроса (файл можно вернуть кнопкой «Восстановить»). Повтор от зажатой клавиши и быстрый второй
+        // удар не считаются: иначе при зажатой клавише улетела бы вся серия снимков.
+        e.preventDefault();
+        const now = Date.now();
+        if (e.repeat || now - lastDelRef.current < 500) return;
+        lastDelRef.current = now;
+        onTrashRef.current(fileRef.current!);
+      }
       else if (e.key === 'Escape') onClose();
       else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
       else if (e.key === 'ArrowRight' && index < files.length - 1) onIndex(index + 1);
@@ -250,7 +264,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
           </button>
         )}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
+        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (клавиша Del; файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">
@@ -300,7 +314,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
         </p>
       </div>
       {picking && (
-        <AlbumPicker ids={[file.id]} current={list ?? []} onClose={() => setPicking(false)} onError={onError}
+        <AlbumPicker ids={[file.id]} fitKind={video ? 'videos' : file.screenshot ? 'screenshots' : 'photos'} current={list ?? []} onClose={() => setPicking(false)} onError={onError}
           onDone={(r: PickResult) => { setPicking(false); remember(file.id, r.now); onAlbumChanged(file, r); }} />
       )}
     </motion.div>

@@ -143,3 +143,93 @@ describe('дубликаты по всему хранилищу (настоящ�
     assert.equal((await ic('POST', '/internal/duplicates/merge', { keep: '999999', drop: ['999998'] })).status, 409);
   });
 });
+
+describe('решения по группам дубликатов (настоящий Postgres и диск)', () => {
+  const e = startEnv();
+  const { upload } = e;
+  const f: Record<string, string> = {};
+  const ic = async (method: string, path: string, data?: unknown) => {
+    const r = await fetch(e.intBase + path, { method, headers: { authorization: `Bearer ${e.token}`, ...(data !== undefined ? { 'content-type': 'application/json' } : {}) }, body: data !== undefined ? JSON.stringify(data) : undefined });
+    let json: any = null;
+    try { json = await r.json(); } catch { /* пусто */ }
+    return { status: r.status, json };
+  };
+
+  before(async () => {
+    await e.start({ DVCLOUD_FP_TICK_MS: '200', DVCLOUD_NO_DUP_SCAN: '1' });
+    // Три независимые группы: у каждой оригинал и уменьшенная копия
+    for (const [key, seed] of [['a', 11], ['b', 77], ['c', 123]] as const) {
+      const S = scene(seed, W, H);
+      const o = await upload(e.anna, `${key}-orig.jpg`, await img(S, W, H).jpeg({ quality: 88 }).toBuffer(), '2026-05-01T10:00:00Z');
+      const c = await upload(e.anna, `${key}-copy.jpg`, await img(S, W, H).resize(400, 300).jpeg({ quality: 40 }).toBuffer(), '2026-05-01T10:00:00Z');
+      assert.equal(o.status, 201); assert.equal(c.status, 201);
+      f[`${key}Orig`] = o.json.file.id;
+      f[`${key}Copy`] = c.json.file.id;
+    }
+  });
+  after(async () => { await e.stop(); });
+
+  async function found(groups: number) {
+    let last: unknown = null;
+    for (let i = 0; i < 120; i++) {
+      await ic('POST', '/internal/duplicates/scan', {});
+      await new Promise((ok) => setTimeout(ok, 300));
+      const r = (await ic('GET', '/internal/duplicates')).json;
+      last = r;
+      if (!r.scanning && r.totalGroups === groups) return r;
+    }
+    throw new Error('группы не нашлись: ' + JSON.stringify(last));
+  }
+  async function finished() {
+    let rep: any = null;
+    for (let i = 0; i < 200; i++) {
+      rep = (await ic('GET', '/internal/duplicates')).json;
+      if (!rep.bulk.running && rep.bulk.finishedAt) break;
+      await new Promise((ok) => setTimeout(ok, 200));
+    }
+    return rep;
+  }
+
+  it('плохие решения отклоняются, ничего не стирается', async () => {
+    const rep = await found(3);
+    const g = rep.groups[0];
+    assert.equal((await ic('POST', '/internal/duplicates/apply', {})).status, 400);
+    assert.equal((await ic('POST', '/internal/duplicates/apply', { decisions: [] })).status, 400);
+    assert.equal((await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: '999999', keep: [] }] })).status, 409, 'группы нет в списке');
+    assert.equal((await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: g.id, keep: ['999999'] }] })).status, 409, 'чужой файл');
+    assert.equal((await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: g.id, keep: [] }, { group: g.id, keep: [] }] })).status, 400, 'группа дважды');
+    assert.equal((await ic('GET', '/internal/duplicates')).json.totalGroups, 3, 'всё на месте');
+  });
+
+  it('группа без отмеченных пропускается, у группы с одним отмеченным лишнее стирается', async () => {
+    const rep = await found(3);
+    const [g1, g2] = rep.groups;
+    const best = g1.blobs.find((b: any) => b.keep).blobId;
+    const r = await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: g1.id, keep: [best] }, { group: g2.id, keep: [] }] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.started, 2);
+    const done = await finished();
+    assert.equal(done.bulk.total, 2);
+    assert.equal(done.bulk.failed, 1, 'пустая группа пропущена');
+    assert.ok(done.bulk.bytes > 0, 'место освобождено');
+    const after = await found(2);
+    assert.equal(after.totalGroups, 2);
+  });
+
+  it('оба оставлены: лишнего нет, но пара больше не предлагается как дубликаты', async () => {
+    const rep = await found(2);
+    const g = rep.groups[0];
+    const both = g.blobs.map((b: any) => b.blobId);
+    const r = await ic('POST', '/internal/duplicates/apply', { decisions: [{ group: g.id, keep: both }] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const done = await finished();
+    assert.equal(done.bulk.failed, 0);
+    const after = await found(1);
+    assert.equal(after.totalGroups, 1, 'оставленная пара из списка ушла, осталась только непросмотренная группа');
+    // оба файла на месте
+    const ids = [f.aOrig, f.aCopy, f.bOrig, f.bCopy, f.cOrig, f.cCopy];
+    let alive = 0;
+    for (const id of ids) if ((await e.api('GET', `/api/files/${id}`, { cookie: e.anna })).status === 200) alive++;
+    assert.ok(alive >= 4, `живых файлов ${alive}`);
+  });
+});

@@ -13,6 +13,7 @@ export interface AdminAlbum {
   sharedWith: number;
   deletedAt?: string; // у удалённого человеком альбома: когда он его удалил
   show?: { library: boolean; photos: boolean; videos: boolean; screenshots: boolean };
+  kind?: 'any' | 'photos' | 'videos' | 'screenshots';
 }
 
 export interface AdminFile {
@@ -48,8 +49,8 @@ export class AdminStorageService {
   async stats(): Promise<{ files: number; blobs: number; orphans: number; orphanBytes: number; bytes: number; extraCopies: number; yandex: { accounts: number; expired: number; items: number; done: number } }> {
     const r = await this.db.query<{ files: string; blobs: string; orphans: string; orphan_bytes: string; bytes: string; extra: string }>(
       `SELECT (SELECT count(*) FROM files) AS files, (SELECT count(*) FROM blobs) AS blobs,
-              (SELECT count(*) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)) AS orphans,
-              (SELECT COALESCE(sum(size_bytes), 0) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)) AS orphan_bytes,
+              (SELECT count(*) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id)) AS orphans,
+              (SELECT COALESCE(sum(size_bytes), 0) FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id)) AS orphan_bytes,
               (SELECT COALESCE(sum(size_bytes), 0) FROM blobs) AS bytes, (SELECT count(*) FROM blob_extra_paths) AS extra`,
     );
     const x = r.rows[0];
@@ -66,9 +67,9 @@ export class AdminStorageService {
 
   // Файлы на диске, на которые не ссылается ничей список (человек убрал у себя насовсем или удалён аккаунт).
   async orphans(limit = 200): Promise<{ id: string; name: string; size: number; createdAt: string; note: string | null; orphanedAt: string | null }[]> {
-    const r = await this.db.query<BlobRow & { orphaned_at: Date | null; orphan_note: string | null }>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) ORDER BY b.id LIMIT $1', [limit]);
+    const r = await this.db.query<BlobRow & { orphaned_at: Date | null; orphan_note: string | null }>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id) ORDER BY b.id LIMIT $1', [limit]);
     return r.rows.map((b) => ({
-      id: b.id, name: b.path.split('/').pop() ?? b.path, size: Number(b.size_bytes), createdAt: b.created_at.toISOString(),
+      id: b.id, name: b.orphan_name ?? b.path.split('/').pop() ?? b.path, size: Number(b.size_bytes), createdAt: b.created_at.toISOString(),
       note: b.orphan_note, orphanedAt: b.orphaned_at ? b.orphaned_at.toISOString() : null,
     }));
   }
@@ -80,12 +81,12 @@ export class AdminStorageService {
     if (now !== confirm) throw new ConflictException(`Файлов без владельца сейчас ${now}, а подтверждено ${confirm}. Обновите страницу и проверьте число.`);
     let count = 0, bytes = 0, skipped = 0, last = '0';
     for (;;) {
-      const batch = (await this.db.query<BlobRow>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND b.id > $1 ORDER BY b.id LIMIT 100', [last])).rows;
+      const batch = (await this.db.query<BlobRow>('SELECT b.* FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id) AND b.id > $1 ORDER BY b.id LIMIT 100', [last])).rows;
       if (batch.length === 0) break;
       for (const b of batch) {
         last = b.id;
         const extra = (await this.db.query<{ path: string }>('SELECT path FROM blob_extra_paths WHERE blob_id = $1', [b.id])).rows.map((x) => x.path);
-        const del = await this.db.query('DELETE FROM blobs b WHERE b.id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)', [b.id]);
+        const del = await this.db.query('DELETE FROM blobs b WHERE b.id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id)', [b.id]); // в сейфе не стирается
         if (!del.rowCount) { skipped++; continue; }
         for (const p of new Set<string>([b.path, ...extra])) await this.storage.remove(p);
         await this.storage.remove(`videos/${b.id}.mp4`);
@@ -121,6 +122,7 @@ export class AdminStorageService {
   // Стирает файл с диска и все записи людей о нём. Единственное место, где файлы удаляются физически.
   async purgeBlob(id: string): Promise<{ links: number; bytes: number }> {
     const b = await this.blob(id);
+    await this.refuseIfVault(id);
     const links = (await this.db.query<FileRow>('SELECT * FROM files WHERE blob_id = $1', [id])).rows;
     const extra = (await this.db.query<{ path: string }>('SELECT path FROM blob_extra_paths WHERE blob_id = $1', [id])).rows.map((x) => x.path);
     const paths = new Set<string>([b.path, ...extra, ...links.map((l) => l.path)]);
@@ -137,7 +139,7 @@ export class AdminStorageService {
     const b = await this.blob(id);
     const u = (await this.db.query<{ id: string }>('SELECT id FROM users WHERE login = $1', [login])).rows[0];
     if (!u) throw new NotFoundException('Нет такого человека');
-    return this.link(u.id, b, b.path.split('/').pop() ?? 'file', new Date());
+    return this.link(u.id, b, b.orphan_name ?? b.path.split('/').pop() ?? 'file', b.orphan_taken_at ?? new Date());
   }
 
   private async link(userId: string, b: BlobRow, name: string, takenAt: Date): Promise<FileRow> {
@@ -281,13 +283,13 @@ export class AdminStorageService {
   // ---- Альбомы ----
 
   async albums(): Promise<AdminAlbum[]> {
-    const r = await this.db.query<{ id: string; name: string; owner: string; n: string; shared: string; in_library: boolean; in_photos: boolean; in_videos: boolean; in_screenshots: boolean }>(
-      `SELECT a.id, a.name, u.login AS owner, a.in_library, a.in_photos, a.in_videos, a.in_screenshots,
+    const r = await this.db.query<{ id: string; name: string; owner: string; n: string; shared: string; in_library: boolean; in_photos: boolean; in_videos: boolean; in_screenshots: boolean; kind: 'any' | 'photos' | 'videos' | 'screenshots' }>(
+      `SELECT a.id, a.name, u.login AS owner, a.in_library, a.in_photos, a.in_videos, a.in_screenshots, a.kind,
          (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
          (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared
        FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.deleted_at IS NULL ORDER BY u.login, lower(a.name)`,
     );
-    return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared), show: { library: x.in_library, photos: x.in_photos, videos: x.in_videos, screenshots: x.in_screenshots } }));
+    return r.rows.map((x) => ({ id: x.id, name: x.name, owner: x.owner, count: Number(x.n), sharedWith: Number(x.shared), show: { library: x.in_library, photos: x.in_photos, videos: x.in_videos, screenshots: x.in_screenshots }, kind: x.kind }));
   }
 
   // Альбомы, которые люди удалили у себя. Файлы в них никуда не делись: они в библиотеках хозяев. Здесь можно вернуть альбом или стереть его насовсем.
@@ -331,7 +333,7 @@ export class AdminStorageService {
   // move=false: у прежнего хозяина альбом остаётся; move=true: альбом (но не его фото) у него исчезает.
   async transferAlbum(albumId: string, toLogin: string, move: boolean): Promise<{ albumId: string; linked: number }> {
     if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
-    const a = (await this.db.query<{ id: string; name: string; owner_id: string }>('SELECT id, name, owner_id FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rows[0];
+    const a = (await this.db.query<{ id: string; name: string; owner_id: string; kind: string }>('SELECT id, name, owner_id, kind FROM albums WHERE id = $1 AND deleted_at IS NULL', [albumId])).rows[0];
     if (!a) throw new NotFoundException('Альбом не найден');
     const to = (await this.db.query<{ id: string }>('SELECT id FROM users WHERE login = $1', [toLogin])).rows[0];
     if (!to) throw new NotFoundException('Нет такого человека');
@@ -343,7 +345,7 @@ export class AdminStorageService {
     let name = a.name;
     const taken = async (n: string) => (await this.db.query('SELECT 1 FROM albums WHERE owner_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL', [to.id, n])).rows.length > 0;
     for (let i = 2; await taken(name); i++) name = `${a.name} (${i})`;
-    const created = (await this.db.query<{ id: string }>('INSERT INTO albums (owner_id, name) VALUES ($1, $2) RETURNING id', [to.id, name])).rows[0];
+    const created = (await this.db.query<{ id: string }>('INSERT INTO albums (owner_id, name, kind) VALUES ($1, $2, $3) RETURNING id', [to.id, name, a.kind])).rows[0];
     let linked = 0;
     for (const f of files) {
       const b = (await this.db.query<BlobRow>('SELECT * FROM blobs WHERE id = $1', [f.blob_id])).rows[0];
@@ -366,13 +368,13 @@ export class AdminStorageService {
     const n = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM files WHERE owner_id = $1', [u.id])).rows[0].n);
     if (n > 0 && !force) throw new ConflictException(`У человека ${n} файлов. Отдайте альбомы другим или удалите с force: файлы на диске останутся без владельца`);
     const links = (await this.db.query<FileRow>('SELECT id, owner_id FROM files WHERE owner_id = $1', [u.id])).rows;
-    const blobs = (await this.db.query<{ blob_id: string }>('SELECT DISTINCT blob_id FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL', [u.id])).rows;
+    const blobs = (await this.db.query<{ blob_id: string; name: string; taken: Date }>('SELECT blob_id, min(original_name) AS name, min(taken_at) AS taken FROM files WHERE owner_id = $1 AND blob_id IS NOT NULL GROUP BY blob_id', [u.id])).rows;
     await this.db.query('DELETE FROM albums WHERE owner_id = $1', [u.id]);
     await this.db.query('DELETE FROM files WHERE owner_id = $1', [u.id]);
     for (const b of blobs) {
       await this.db.query(
-        'UPDATE blobs SET orphaned_at = now(), orphan_note = $2 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
-        [b.blob_id, `Аккаунт ${login} удалён администратором`],
+        'UPDATE blobs SET orphaned_at = now(), orphan_note = $2, orphan_name = $3, orphan_taken_at = $4 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
+        [b.blob_id, `Аккаунт ${login} удалён администратором`, b.name, b.taken],
       );
     }
     for (const l of links) await this.removeLegacyDerived(l); // общие миниатюры остаются у файлов-оригиналов
@@ -395,5 +397,97 @@ export class AdminStorageService {
     if (!ID_RE.test(id)) throw new NotFoundException('Просьба не найдена');
     const r = await this.db.query('UPDATE quota_requests SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL', [id]);
     if (!r.rowCount) throw new NotFoundException('Просьба не найдена');
+  }
+
+  // ---- Сейф ----
+
+  private async refuseIfVault(blobId: string): Promise<void> {
+    const v = await this.db.query('SELECT 1 FROM vault_items WHERE blob_id = $1 LIMIT 1', [blobId]);
+    if (v.rows[0]) throw new ConflictException('Файл лежит в сейфе: стереть его можно только из панели «Сейф» после ввода пароля');
+  }
+
+  async vaultList(): Promise<{ id: string; name: string; note: string; fromLogin: string; count: number; bytes: number; createdAt: string}[]> {
+    const r = await this.db.query<{ id: string; name: string; note: string; from_login: string; created_at: Date; n: string; bytes: string }>(
+      `SELECT v.id, v.name, v.note, v.from_login, v.created_at,
+              (SELECT count(*) FROM vault_items i WHERE i.vault_album_id = v.id) AS n,
+              (SELECT COALESCE(sum(b.size_bytes), 0) FROM vault_items i JOIN blobs b ON b.id = i.blob_id WHERE i.vault_album_id = v.id) AS bytes
+       FROM vault_albums v ORDER BY v.created_at DESC, v.id DESC`,
+    );
+    return r.rows.map((x) => ({ id: x.id, name: x.name, note: x.note, fromLogin: x.from_login, count: Number(x.n), bytes: Number(x.bytes), createdAt: x.created_at.toISOString() }));
+  }
+
+  // Забрать альбом у владельца вместе с файлами: у человека исчезают и альбом, и записи о файлах (место освобождается),
+  // а сами файлы остаются на диске без владельца в сейфе. Файл, который лежит ещё и у другого человека, у того остаётся.
+  async toVault(albumId: string, note: unknown): Promise<{ vaultId: string; files: number }> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const text = typeof note === 'string' ? note.trim().slice(0, 300) : '';
+    return this.db.tx(async (c) => {
+      const a = (await c.query<{ id: string; name: string; login: string }>('SELECT a.id, a.name, u.login FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.id = $1 FOR UPDATE OF a', [albumId])).rows[0];
+      if (!a) throw new NotFoundException('Альбом не найден');
+      const items = (await c.query<{ id: string; blob_id: string; original_name: string; taken_at: Date }>(
+        'SELECT f.id, f.blob_id, f.original_name, f.taken_at FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = $1 AND f.blob_id IS NOT NULL ORDER BY f.taken_at, f.id', [albumId])).rows;
+      if (items.length === 0) throw new ConflictException('В альбоме нет файлов: нечего класть в сейф');
+      const v = (await c.query<{ id: string }>('INSERT INTO vault_albums (name, note, from_login) VALUES ($1, $2, $3) RETURNING id', [a.name, text, a.login])).rows[0];
+      for (const it of items) {
+        await c.query('INSERT INTO vault_items (vault_album_id, blob_id, name, taken_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [v.id, it.blob_id, it.original_name, it.taken_at]);
+      }
+      await c.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [items.map((i) => i.id)]);
+      await c.query('DELETE FROM albums WHERE id = $1', [albumId]);
+      await c.query('UPDATE blobs SET orphaned_at = NULL, orphan_note = NULL WHERE id = ANY($1::bigint[])', [items.map((i) => i.blob_id)]);
+      return { vaultId: v.id, files: items.length };
+    });
+  }
+
+  // Вернуть альбом из сейфа человеку: у него появляется альбом (с суффиксом, если такое имя занято) и записи о файлах.
+  async vaultReturn(vaultId: string, login: unknown): Promise<{ albumId: string; linked: number }> {
+    if (!ID_RE.test(vaultId)) throw new NotFoundException('Альбом в сейфе не найден');
+    if (typeof login !== 'string') throw new BadRequestException('login: кому вернуть');
+    return this.db.tx(async (c) => {
+      const v = (await c.query<{ id: string; name: string }>('SELECT id, name FROM vault_albums WHERE id = $1 FOR UPDATE', [vaultId])).rows[0];
+      if (!v) throw new NotFoundException('Альбом в сейфе не найден');
+      const u = (await c.query<{ id: string }>('SELECT id FROM users WHERE login = $1 AND NOT disabled', [login])).rows[0];
+      if (!u) throw new NotFoundException('Нет такого человека');
+      let name = v.name;
+      for (let n = 2; (await c.query('SELECT 1 FROM albums WHERE owner_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL', [u.id, name])).rows[0]; n++) name = `${v.name.slice(0, 90)} (${n})`;
+      const album = (await c.query<{ id: string }>('INSERT INTO albums (owner_id, name) VALUES ($1, $2) RETURNING id', [u.id, name])).rows[0];
+      const items = (await c.query<{ blob_id: string; name: string; taken_at: Date; path: string; mime: string; size_bytes: string; sha256: string }>(
+        'SELECT i.blob_id, i.name, i.taken_at, b.path, b.mime, b.size_bytes, b.sha256 FROM vault_items i JOIN blobs b ON b.id = i.blob_id WHERE i.vault_album_id = $1 ORDER BY i.taken_at', [vaultId])).rows;
+      let linked = 0;
+      for (const it of items) {
+        await c.query(
+          `INSERT INTO files (owner_id, path, original_name, mime, size_bytes, sha256, taken_at, blob_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (owner_id, sha256) WHERE trashed_at IS NULL DO NOTHING`,
+          [u.id, it.path, it.name, it.mime, it.size_bytes, it.sha256, it.taken_at, it.blob_id],
+        );
+        const f = (await c.query<{ id: string }>('SELECT id FROM files WHERE owner_id = $1 AND sha256 = $2 AND trashed_at IS NULL', [u.id, it.sha256])).rows[0];
+        if (f) {
+          await c.query('INSERT INTO album_items (album_id, file_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [album.id, f.id]);
+          linked++;
+        }
+      }
+      await c.query('DELETE FROM vault_albums WHERE id = $1', [vaultId]); // записи vault_items уходят каскадом, файлы остаются у человека
+      return { albumId: album.id, linked };
+    });
+  }
+
+  // Стереть альбом из сейфа насовсем. С диска уходят только файлы, которых нет ни у одного человека и ни в другом альбоме сейфа.
+  async vaultErase(vaultId: string): Promise<{ files: number; bytes: number; kept: number }> {
+    if (!ID_RE.test(vaultId)) throw new NotFoundException('Альбом в сейфе не найден');
+    const blobs = (await this.db.query<BlobRow>('SELECT b.* FROM vault_items i JOIN blobs b ON b.id = i.blob_id WHERE i.vault_album_id = $1', [vaultId])).rows;
+    const gone = await this.db.query('DELETE FROM vault_albums WHERE id = $1', [vaultId]);
+    if (!gone.rowCount) throw new NotFoundException('Альбом в сейфе не найден');
+    let files = 0, bytes = 0, kept = 0;
+    for (const b of blobs) {
+      const extra = (await this.db.query<{ path: string }>('SELECT path FROM blob_extra_paths WHERE blob_id = $1', [b.id])).rows.map((x) => x.path);
+      const del = await this.db.query(
+        'DELETE FROM blobs b WHERE b.id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id) AND NOT EXISTS (SELECT 1 FROM vault_items v WHERE v.blob_id = b.id)', [b.id]);
+      if (!del.rowCount) { kept++; continue; }
+      for (const p of new Set<string>([b.path, ...extra])) await this.storage.remove(p);
+      await this.storage.remove(`videos/${b.id}.mp4`);
+      await this.removeDerived(b.id, []);
+      files++;
+      bytes += Number(b.size_bytes);
+    }
+    return { files, bytes, kept };
   }
 }

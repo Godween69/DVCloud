@@ -54,7 +54,11 @@ export interface Album {
   ownerName: string | null;
   sharedWith: number;
   show: AlbumShow; // где файлы альбома видны в ленте (внутри самого альбома видны всегда)
+  kind: AlbumKind; // тип выбирается при создании: универсальный или только фото, видео, скриншоты
+  favorite: boolean; // избранные альбомы идут первыми
 }
+
+export type AlbumKind = 'any' | 'photos' | 'videos' | 'screenshots';
 
 export interface AlbumShow {
   library: boolean;
