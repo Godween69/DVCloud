@@ -172,17 +172,11 @@ describe('единое хранение и общий доступ (настоя
     assert.equal((await api('PATCH', `/api/albums/${album}`, { cookie: e.boris, body: body({ name: 'моё' }), ...J })).status, 404);
     assert.equal((await api('DELETE', `/api/albums/${album}`, { cookie: e.boris })).status, 404);
     assert.equal((await api('PUT', `/api/albums/${album}/shares/anna`, { cookie: e.boris, body: '{}', ...J })).status, 404);
-    // Борис сохраняет альбом себе: диск не растёт, у него свои записи
-    const before = (await libraryFiles()).length;
-    const save = await api('POST', `/api/albums/${album}/save`, { cookie: e.boris, body: '{}', ...J });
-    assert.deepEqual([save.json.added, save.json.skipped, save.json.quota], [2, 0, false]);
-    assert.equal((await libraryFiles()).length, before);
-    assert.equal((await api('POST', `/api/albums/${album}/save`, { cookie: e.boris, body: '{}', ...J })).json.added, 0);
-    // Анна скрыла файл: у Бориса в общем альбоме он пропал, а сохранённая запись осталась
+    // Анна скрыла файл: у Бориса в общем альбоме он пропал (своей копии у него нет: «Сохранить себе» убрано в 0.12.5)
     await api('DELETE', `/api/files/${f1}`, { cookie: e.anna });
     assert.deepEqual((await api('GET', `/api/albums/${album}/files`, { cookie: e.boris })).json.files.map((x: any) => x.id), [f2]);
     assert.equal((await api('GET', `/api/files/${f1}`, { cookie: e.boris })).status, 404);
-    assert.ok((await api('GET', '/api/files', { cookie: e.boris })).json.files.some((x: any) => x.name === 'sh1.jpg'));
+    assert.ok(!(await api('GET', '/api/files', { cookie: e.boris })).json.files.some((x: any) => x.name === 'sh1.jpg'), 'в библиотеке Бориса общих файлов нет');
     // закрыть доступ
     assert.equal((await api('DELETE', `/api/albums/${album}/shares/boris`, { cookie: e.anna })).status, 200);
     assert.equal((await api('GET', `/api/albums/${album}/files`, { cookie: e.boris })).status, 404);

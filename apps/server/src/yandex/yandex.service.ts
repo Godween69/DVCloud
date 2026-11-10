@@ -320,6 +320,31 @@ export class YandexService implements OnModuleInit, OnModuleDestroy {
     return { queued: q.rowCount ?? 0 };
   }
 
+  // Больше не пробовать файлы, которые Яндекс не отдаёт (ждут повтора или упали): они получают отметку «пропущен» и остаются в списке с причиной.
+  // Если больше нечего забирать, забор закрывается. Новая сверка их не возвращает; снова взять их можно кнопкой «Повторить неудачные» только для упавших,
+  // а пропущенные возвращает «Вернуть пропущенные».
+  async skipUnavailable(user: UserRow): Promise<{ skipped: number }> {
+    const a = await this.mustAccount(user.id);
+    const r = await this.db.query(
+      "UPDATE yandex_items SET state = 'skipped', updated_at = now() WHERE account_id = $1 AND state IN ('waiting', 'failed')",
+      [a.id],
+    );
+    const left = Number((await this.db.query<{ n: string }>("SELECT count(*) AS n FROM yandex_items WHERE account_id = $1 AND state = 'queued'", [a.id])).rows[0].n);
+    if (left === 0 && (r.rowCount ?? 0) > 0) await this.db.query("UPDATE yandex_accounts SET import_state = 'idle', import_note = 'Всё забрано, что Яндекс отдаёт. Остальное пропущено' WHERE id = $1 AND import_state = 'running'", [a.id]);
+    return { skipped: r.rowCount ?? 0 };
+  }
+
+  // Вернуть в очередь то, что пропустили (когда Яндекс снова отдаёт эти файлы).
+  async unskip(user: UserRow): Promise<{ queued: number }> {
+    const a = await this.mustAccount(user.id);
+    const r = await this.db.query(
+      "UPDATE yandex_items SET state = 'queued', attempts = 0, error = NULL, updated_at = now() WHERE account_id = $1 AND state = 'skipped' AND (error IS NULL OR error NOT LIKE 'Не фото и не видео%')",
+      [a.id],
+    );
+    if ((r.rowCount ?? 0) > 0) await this.db.query("UPDATE yandex_accounts SET import_state = 'running', import_note = NULL WHERE id = $1", [a.id]);
+    return { queued: r.rowCount ?? 0 };
+  }
+
   async resumeImport(user: UserRow): Promise<void> {
     const a = await this.mustAccount(user.id);
     if (a.state === 'expired') throw new ConflictException('Вход в Яндекс устарел: подтвердите его на телефоне снова');

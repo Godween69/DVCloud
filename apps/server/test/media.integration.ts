@@ -253,4 +253,19 @@ describe('настройки превью и видео в админке (на�
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('кэш статистики «Медиа»: повторный ответ мгновенный, но настройки всегда свежие, а после изменений кэш сбрасывается', async () => {
+    const was = process.env.DVCLOUD_MEDIA_CACHE_SEC;
+    process.env.DVCLOUD_MEDIA_CACHE_SEC = '300';
+    try {
+      const first = await intCall('GET', '/internal/media');
+      assert.equal((await patch({ previewQuality: first.settings.previewQuality === 80 ? 75 : 80 })).status, 200);
+      const second = await intCall('GET', '/internal/media');
+      assert.notEqual(second.settings.previewQuality, first.settings.previewQuality, 'настройки не должны отставать');
+      // из кэша: статистика та же, что и в прошлый раз (поля, которых настройки не касаются)
+      assert.deepEqual(second.search, (await intCall('GET', '/internal/media')).search);
+    } finally {
+      if (was === undefined) delete process.env.DVCLOUD_MEDIA_CACHE_SEC; else process.env.DVCLOUD_MEDIA_CACHE_SEC = was;
+    }
+  });
 });

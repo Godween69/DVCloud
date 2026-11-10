@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { ArrowLeft, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Save, Share2, Star, Trash2, Users, Zap } from 'lucide-react';
+import { ArrowLeft, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Share2, Star, Trash2, Users, Zap } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, thumbUrl } from '../api';
 import { albumZipHref } from '../lib/albums';
@@ -14,8 +14,8 @@ interface ListProps {
   onError: (m: string) => void;
   quickId?: string; // какой альбом сейчас «быстрый»
   onQuick: (a: Album | null) => void; // сделать быстрым или выключить (null)
-  filter: AlbumKind | 'all'; // какие альбомы показывать: все или только один тип
-  onFilter: (f: AlbumKind | 'all') => void;
+  filter: AlbumKind | 'all' | 'shared'; // какие альбомы показывать: свои (все или один тип) или те, которыми поделились
+  onFilter: (f: AlbumKind | 'all' | 'shared') => void;
   onFavorite: (a: Album) => void; // звёздочка
 }
 
@@ -107,6 +107,10 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
     }
   }
 
+  const sharedCount = albums ? albums.filter((a) => !a.mine).length : 0;
+  // Если вкладку «Поделились со мной» выбрали, а такие альбомы пропали (владелец закрыл доступ), возвращаемся к своим.
+  const ownCount = albums ? albums.length - sharedCount : 0;
+  const effective = filter === 'shared' && sharedCount === 0 ? 'all' : filter === 'all' && ownCount === 0 && sharedCount > 0 ? 'shared' : filter;
   if (albums === null) return <div className="flex justify-center py-24 text-gray-500"><Loader2 className="size-6 animate-spin" aria-label="Загружаем" /></div>;
   return (
     <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-6 sm:px-6">
@@ -126,13 +130,16 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
         )}
       </div>
       {albums.length > 0 && (
-        <div role="group" aria-label="Тип альбомов" className="mb-4 flex flex-wrap gap-2">
+        <div role="tablist" aria-label="Разделы альбомов" className="ftabs mb-5">
           {CHIPS.map((c) => {
             const n = albums.filter((a) => a.mine && (c.key === 'all' || a.kind === c.key)).length;
             return (
-              <button key={c.key} type="button" aria-pressed={filter === c.key} onClick={() => onFilter(c.key)} className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${filter === c.key ? 'bg-violet-600 text-white' : 'bg-paper-200 text-gray-700 hover:bg-paper-300 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}`}>{c.label}{c.key !== 'all' || n > 0 ? ` (${n})` : ''}</button>
+              <button key={c.key} type="button" role="tab" aria-selected={effective === c.key} onClick={() => onFilter(c.key)} className="ftab">{c.label}<span className="n">{n}</span></button>
             );
           })}
+          {sharedCount > 0 && (
+            <button type="button" role="tab" aria-selected={effective === 'shared'} onClick={() => onFilter('shared')} className="ftab shared"><Users className="size-4" aria-hidden />Поделились со мной<span className="n">{sharedCount}</span></button>
+          )}
         </div>
       )}
       {albums.length === 0 ? (
@@ -143,7 +150,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
         </div>
       ) : (
         <ul className="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(13rem,16rem))]">
-          {albums.filter((a) => filter === 'all' || !a.mine || a.kind === filter).map((a) => {
+          {albums.filter((a) => (effective === 'shared' ? !a.mine : a.mine && (effective === 'all' || a.kind === effective))).map((a) => {
             const quick = a.id === quickId;
             return (
               <li key={a.id} className="group relative">
@@ -184,12 +191,11 @@ interface HeaderProps {
   isQuick: boolean;
   onQuick: () => void;
   onShare: () => void;
-  onSaved: (r: { added: number; skipped: number; quota: boolean }) => void;
   onLeft: () => void;
 }
 
 // Шапка открытого альбома: назад, название (можно переименовать), скачать целиком, удалить альбом.
-export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick, onShare, onSaved, onLeft }: HeaderProps) {
+export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick, onShare, onLeft }: HeaderProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(album.name);
   const [confirm, setConfirm] = useState(false);
@@ -221,13 +227,6 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
     }
   }
 
-  async function saveAll() {
-    try {
-      onSaved(await api.saveAlbum(album.id));
-    } catch (err) {
-      onError(err instanceof ApiError ? err.message : 'Не получилось сохранить');
-    }
-  }
   async function leave() {
     try {
       await api.leave(album.id);
@@ -252,7 +251,6 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
       <span className="text-sm text-gray-500">{countFiles(count)}{!album.mine && album.ownerName ? ` · поделился ${album.ownerName}` : ''}</span>
       {!album.mine ? (
         <div className="ml-auto flex flex-wrap items-center gap-1">
-          {count > 0 && <button type="button" onClick={saveAll} className={`${ghost} text-violet-700 dark:text-violet-300`} title="Копии появятся в вашей библиотеке, место на диске почти не тратится"><Save className="size-4" aria-hidden /><span className="hidden sm:inline">Сохранить себе</span></button>}
           {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
           <button type="button" onClick={leave} className={ghost} title="Альбом исчезнет из вашего списка, у владельца он останется"><LogOut className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из списка</span></button>
         </div>

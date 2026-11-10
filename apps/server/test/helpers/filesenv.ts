@@ -8,6 +8,7 @@ import { createApps } from '../../src/bootstrap';
 import { loadConfig } from '../../src/config';
 import { createTestDb } from './testdb';
 
+process.env.DVCLOUD_MEDIA_CACHE_SEC ??= '0'; // кэш статистики «Медиа» в тестах выключен: они сразу проверяют изменения
 const ADMIN_URL: string = process.env.DVCLOUD_TEST_DATABASE_URL ?? '';
 if (!ADMIN_URL) throw new Error('Не задан DVCLOUD_TEST_DATABASE_URL: интеграционные тесты без базы не запускаются');
 const TOKEN = 'integration-test-token-'.padEnd(40, 'x');

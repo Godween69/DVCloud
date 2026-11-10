@@ -351,4 +351,27 @@ describe('Яндекс Диск (настоящий Postgres, поддельны
     assert.equal((await jr('POST', '/api/yandex/import', e.boris, {})).status, 200);
     assert.ok(await wait(async () => (await status(e.boris)).counts.done >= 4), JSON.stringify(await status(e.boris)) + JSON.stringify(await dbq("SELECT a.id, u.login, a.import_state, a.state FROM yandex_accounts a JOIN users u ON u.id = a.owner_id ORDER BY a.id")));
   });
+
+  it('«Больше не пробовать»: недоступные Яндекса пропускаются и не повторяются, вернуть их можно', async () => {
+    // после прошлого теста у Анны все файлы отложены (waiting), забор идёт
+    const before = await status(e.anna);
+    const hard = before.counts.waiting + before.counts.failed;
+    assert.ok(hard > 0, JSON.stringify(before.counts));
+    const r = await jr('POST', '/api/yandex/skip', e.anna, {});
+    assert.equal(r.status, 200);
+    assert.equal(r.json.skipped, hard);
+    const after = await status(e.anna);
+    assert.equal(after.counts.waiting, 0);
+    assert.equal(after.counts.failed, 0);
+    assert.equal(after.counts.skipped, before.counts.skipped + hard);
+    assert.equal(after.import.state, 'idle', 'забор закрыт, когда брать больше нечего');
+    // повторять нечего: через паузу ожидания файлы не возвращаются в очередь
+    await new Promise((r2) => setTimeout(r2, 1500));
+    assert.equal((await status(e.anna)).counts.queued, 0);
+    // вернуть пропущенные (не-фото остаются пропущенными)
+    const back = await jr('POST', '/api/yandex/unskip', e.anna, {});
+    assert.equal(back.status, 200);
+    assert.ok(back.json.queued >= hard, JSON.stringify(back.json));
+    assert.equal((await status(e.anna)).import.state, 'running');
+  });
 });

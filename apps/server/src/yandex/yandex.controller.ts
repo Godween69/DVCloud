@@ -93,6 +93,22 @@ export class YandexController {
     return { ok: true };
   }
 
+  // Больше не пробовать файлы, которые Яндекс не отдаёт.
+  @Post('skip')
+  @HttpCode(200)
+  async skip(@Req() req: Req_): Promise<{ skipped: number }> {
+    requireJson(req);
+    return this.yandex.skipUnavailable(req.user);
+  }
+
+  // Вернуть пропущенные в очередь.
+  @Post('unskip')
+  @HttpCode(200)
+  async unskip(@Req() req: Req_): Promise<{ queued: number }> {
+    requireJson(req);
+    return this.yandex.unskip(req.user);
+  }
+
   @Post('resume')
   @HttpCode(200)
   async resume(@Req() req: Req_): Promise<{ ok: true }> {

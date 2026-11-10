@@ -232,6 +232,8 @@ export function YandexView({ onError }: { onError: (m: string) => void }) {
               {mode === 'running' && <button type="button" className={quiet} disabled={busy} onClick={() => act(() => api.yandexPause())}><Pause className="size-4" />Приостановить</button>}
               {mode === 'paused' && <button type="button" className={primary} disabled={busy} onClick={() => act(() => api.yandexResume())}><Play className="size-4" />Продолжить</button>}
               {(c?.failed ?? 0) > 0 && mode !== 'running' && <button type="button" className={quiet} disabled={busy} onClick={() => act(() => api.yandexImport({ retryFailed: true }))}>Повторить неудачные</button>}
+              {(c?.waiting ?? 0) + (c?.failed ?? 0) > 0 && <button type="button" className={quiet} disabled={busy} title="Яндекс не отдаёт эти файлы. Они останутся в списке с причиной, облако перестанет их повторять" onClick={() => act(() => api.yandexSkip())}>Больше не пробовать: {(c?.waiting ?? 0) + (c?.failed ?? 0)}</button>}
+              {(c?.skipped ?? 0) > 0 && <button type="button" className={quiet} disabled={busy} title="Вернуть в очередь пропущенные файлы (кроме не-фото и не-видео)" onClick={() => act(() => api.yandexUnskip())}>Вернуть пропущенные</button>}
               {mode === 'nothing' && total > 0 && <span className={muted}>Всё забрано.</span>}
             </div>
 

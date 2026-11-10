@@ -13,14 +13,15 @@ function messageOf(json) {
 }
 
 export function createApi({ baseUrl, token, fetchImpl = fetch }) {
-  async function call(method, path, body) {
+  // Тяжёлые вкладки (Медиа) ждут дольше: под нагрузкой сервер отвечает не за десять секунд, а он при этом жив.
+  async function call(method, path, body, timeoutMs = 10000) {
     let r;
     try {
       r = await fetchImpl(baseUrl + path, {
         method,
         headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new ApiError(0, 'Сервер DVCloud недоступен');
@@ -60,8 +61,8 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     deleteAlbum: (id) => call('DELETE', `/internal/albums/${encodeURIComponent(id)}`),
     transfer: (id, login, move) => call('POST', `/internal/albums/${encodeURIComponent(id)}/transfer`, { login, move }),
     transferPreview: (id) => call('GET', `/internal/albums/${encodeURIComponent(id)}/transfer-preview`),
-    media: () => call('GET', '/internal/media'),
-    dates: async () => (await call('GET', '/internal/media/dates')).job,
+    media: () => call('GET', '/internal/media', undefined, 60000),
+    dates: async () => (await call('GET', '/internal/media/dates', undefined, 60000)).job,
     startDates: (apply) => call('POST', '/internal/media/dates', { apply }),
     saveMedia: (patch) => call('PATCH', '/internal/media/settings', patch),
     clearMedia: (what) => call('POST', '/internal/media/clear', { what }),

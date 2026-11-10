@@ -435,7 +435,7 @@ export function mediaPage({ media, dates, csrf, flash, loadError }) {
   const sw = (name, on, label) => `<label class="switch"><input type="checkbox" name="${name}" value="1"${on ? ' checked' : ''}><span>${label}</span></label>`;
   const crfOptions = QUALITY_VIDEO.some(([v]) => v === s?.videoCrf) ? QUALITY_VIDEO : [...QUALITY_VIDEO, [s?.videoCrf, `Своё (${s?.videoCrf})`]].sort((a, b) => a[0] - b[0]);
   const form = s
-    ? `<form method="post" action="/media/settings">${csrfInput(csrf)}
+    ? `<form method="post" action="/media/settings" autocomplete="off">${csrfInput(csrf)}
 <section class="panel"><h2>Фото</h2>
 <div class="setting"><div><b>Превью для просмотра</b> ${info(`Облегчённая копия, которую сайт открывает вместо оригинала. Выключено: сайт открывает оригинал, скачивание всегда отдаёт оригинал.`)}</div>${sw('previewEnabled', s.previewEnabled, 'Использовать')}</div>
 <div class="setting"><div><b>Размер превью</b> ${info(`Длинная сторона в пикселях, от 600 до 4000. Для телефона и ноутбука хватает 1600–2000.`)}</div><input class="narrow" type="number" name="previewMaxSide" min="600" max="4000" step="100" value="${s.previewMaxSide}" aria-label="Размер превью, px"></div>

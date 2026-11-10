@@ -48,7 +48,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const [album, setAlbum] = useState<Album | null>(null); // открытый альбом (внутри вкладки «Альбомы»)
   const [albums, setAlbums] = useState<Album[] | null>(null);
-  const [albumFilter, setAlbumFilter] = useState<AlbumKind | 'all'>('all');
+  const [albumFilter, setAlbumFilter] = useState<AlbumKind | 'all' | 'shared'>('all');
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
@@ -266,25 +266,6 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     }
   }
 
-  async function saveSelected() {
-    if (!album) return;
-    const ids = [...selected];
-    try {
-      const r = await api.saveAlbum(album.id, ids);
-      savedToast(r);
-      endSelect();
-    } catch (e) {
-      say(e instanceof Error ? e.message : 'Не получилось сохранить');
-    }
-  }
-  function savedToast(r: { added: number; skipped: number; quota: boolean }) {
-    library.loadMore(true);
-    refreshUsage();
-    if (r.quota) say(`Сохранено: ${r.added}. Остальное не влезло в вашу квоту`);
-    else if (r.added === 0) say('Эти фото уже в вашей библиотеке');
-    else say(`Сохранено в библиотеку: ${r.added}${r.skipped ? `, уже были: ${r.skipped}` : ''}`);
-  }
-
   async function removeSelectedFromAlbum() {
     if (!album) return;
     const ids = [...selected];
@@ -419,8 +400,8 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
           quickId={quick.target?.id} onQuick={(a) => { quick.set(a ? { id: a.id, name: a.name } : null); say(a ? `Быстрый альбом: «${a.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
         {view === 'albums' && album && (
           <>
-            <AlbumHeader album={album} count={albumFeed.loaded ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
-              onShare={() => setSharing(true)} onSaved={savedToast} onLeft={() => { say('Альбом убран из вашего списка'); changeView('albums'); }}
+            <AlbumHeader album={album} count={albumFeed.loaded && !albumFeed.hasMore ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
+              onShare={() => setSharing(true)} onLeft={() => { say('Альбом убран из вашего списка'); changeView('albums'); }}
               isQuick={quick.target?.id === album.id} onQuick={() => { const on = quick.target?.id !== album.id; quick.set(on ? { id: album.id, name: album.name } : null); say(on ? `Быстрый альбом: «${album.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />
             {gallery(albumFeed, undefined, true)}
           </>
@@ -448,7 +429,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <HelpSheet topic={helpKeyFor(view)} open={helpOpen} onClose={() => setHelpOpen(false)} />
       <AnimatePresence>
         {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum || inPerson) && (
-          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onSave={() => { void saveSelected(); }} onHide={() => { void hideSelected(); }}
+          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum} shared={foreign} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={removeSelectedFromAlbum} inPerson={inPerson} onRemoveFromPerson={() => { void removeSelectedFromPerson(); }} kinds={view === 'screenshots' ? ['photo'] : view === 'photos' || view === 'library' ? ['screenshot'] : ['screenshot', 'photo']} onKind={(k) => { void changeKind([...selected], k); }} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
         )}

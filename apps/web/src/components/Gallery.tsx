@@ -78,7 +78,7 @@ export function Tile({ file, onOpen, onPick, selecting, picked, quick, box }: { 
   const video = isVideo(file.mime);
   const inQuick = !!quick && quick.has(file.id);
   return (
-    <div data-tile={file.id} style={box ? { width: box.w, height: box.h } : undefined} className={`group relative ${box ? 'shrink-0' : 'aspect-square w-full [contain-intrinsic-size:8rem]'} isolate transform-gpu overflow-hidden rounded-xl bg-paper-200 shadow-[0_1px_8px_-3px_rgba(15,23,42,0.35)] ring-1 ring-black/5 [content-visibility:auto] dark:bg-gray-800 dark:ring-white/10 ${ready || broken ? '' : 'dv-shimmer'}`}>
+    <div data-tile={file.id} style={box ? { width: box.w, height: box.h } : undefined} className={`group relative ${box ? 'shrink-0' : 'aspect-square w-full'} isolate transform-gpu overflow-hidden rounded-xl bg-paper-200 shadow-[0_1px_8px_-3px_rgba(15,23,42,0.35)] ring-1 ring-black/5 dark:bg-gray-800 dark:ring-white/10 ${ready || broken ? '' : 'dv-shimmer'}`}>
     <button type="button" onClick={() => { if (hold.current.fired) { hold.current.fired = false; return; } onOpen(file.id); }}
       onPointerDown={(e) => { if (e.pointerType !== 'touch' || selecting) return; hold.current.fired = false; stopHold(); hold.current.t = setTimeout(() => { hold.current.fired = true; hold.current.t = null; onPick(file.id); }, 450); }}
       onPointerUp={stopHold} onPointerLeave={stopHold} onPointerCancel={stopHold} onContextMenu={(e) => { if (hold.current.fired) e.preventDefault(); }}
@@ -237,6 +237,28 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
     return () => { window.removeEventListener('scroll', onScroll); if (t) clearTimeout(t); };
   }, [loaded, files, layout, density]);
 
+  // После перехода к месяцу держим его на том же месте экрана, пока всё догружается и перестраивается сверху (новые месяцы, смена высоты плиток).
+  // Закрепление снимается, как только человек сам прокрутил (колесо, касание, клавиша, нажатие мышью) или через 6 секунд.
+  const pinMonth = (key: string) => {
+    const t0 = performance.now();
+    let want: number | null = null;
+    let raf = 0;
+    const events = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
+    const end = () => { cancelAnimationFrame(raf); events.forEach((e) => window.removeEventListener(e, end)); };
+    events.forEach((e) => window.addEventListener(e, end, { passive: true }));
+    const tick = () => {
+      if (performance.now() - t0 > 6000) { end(); return; }
+      const sec = document.querySelector<HTMLElement>(`section[data-month="${key}"]`);
+      if (sec) {
+        const top = sec.getBoundingClientRect().top;
+        if (want === null) want = top;
+        else if (Math.abs(top - want) > 2) window.scrollBy(0, top - want);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+  };
+
   const railEl = railMonths ? (
         <TimeRail months={railMonths} current={jumping ?? cur ?? (at ?? monthKey(railMonths[0].y, railMonths[0].m))} onPick={(i) => {
           const x = railMonths[i];
@@ -251,7 +273,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
           // Месяц ещё не загружен: полоса и экран реагируют сразу (наверх, заглушка вместо старой ленты), а данные приходят в фоне.
           setJumping(key);
           window.scrollTo({ top: 0 });
-          void rail?.onJump(i === 0 ? null : key).finally(() => setJumping(null));
+          void rail?.onJump(i === 0 ? null : key).finally(() => { setJumping(null); pinMonth(key); });
         }} />
   ) : null;
 
