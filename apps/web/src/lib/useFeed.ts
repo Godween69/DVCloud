@@ -40,7 +40,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'library' | '
       setError(null);
       try {
         const before = reset ? undefined : (cursor.current ?? undefined);
-        const r = albumId ? await api.albumFiles(albumId, before, reset ? (atRef.current ?? undefined) : undefined) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
+        const r = albumId?.startsWith('s') ? await api.suggestionFiles(albumId.slice(1)) : albumId ? await api.albumFiles(albumId, before, reset ? (atRef.current ?? undefined) : undefined) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;

@@ -44,3 +44,32 @@ export function plural(n: number, one: string, few: string, many: string): strin
 export function countFiles(n: number): string {
   return `${n} ${plural(n, 'файл', 'файла', 'файлов')}`;
 }
+
+// Заголовок дня для группировки: «Сегодня», «Вчера» или «12 июня 2026» (по местному времени).
+export function dayHeading(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+}
+
+// Ключ дня для группировки (по местному времени).
+export function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+// Разбить файлы на группы по дню удаления, сохраняя порядок.
+export function groupByDay<T extends { trashedAt: string | null }>(items: T[], now = new Date()): { key: string; title: string; items: T[] }[] {
+  const out: { key: string; title: string; items: T[] }[] = [];
+  for (const it of items) {
+    const at = it.trashedAt ?? new Date(0).toISOString();
+    const key = dayKey(at);
+    const last = out[out.length - 1];
+    if (last && last.key === key) last.items.push(it);
+    else out.push({ key, title: dayHeading(at, now), items: [it] });
+  }
+  return out;
+}

@@ -14,6 +14,7 @@
     "lucide-react": "^1.66.0",
     "qrcode-generator": "^2.0.4",
     "react": "^19.2.7",
+    "react-day-picker": "^9.4.4",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {

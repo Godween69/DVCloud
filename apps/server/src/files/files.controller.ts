@@ -166,7 +166,7 @@ export class FilesController {
   @Get(':id/preview')
   async preview(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
     const f = await this.files.getReadable(req.user.id, id);
-    const rel = f.trashed_at ? null : await this.thumbs.ensurePreview(f);
+    const rel = await this.thumbs.ensurePreview(f); // в корзине файл виден только владельцу (getReadable), ему превью можно: посмотреть, что за снимок
     if (!rel) {
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.status(404).json({ message: 'Превью нет' });
@@ -201,6 +201,13 @@ export class FilesController {
     }, (err) => {
       if (err && !res.headersSent) res.status(404).json({ message: 'Копии для просмотра нет' });
     });
+  }
+
+  // Окно «Инфо»: метаданные файла и следы даты съёмки.
+  @Get(':id/info')
+  async info(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): ReturnType<FilesService['info']> {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.files.info(req.user.id, id);
   }
 
   // Отдача оригинала. sendFile сам умеет Range (докачка и перемотка видео) и не выходит за каталог данных.

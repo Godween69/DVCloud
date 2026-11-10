@@ -108,7 +108,7 @@ export class AdminMediaService {
       for (;;) {
         const rows = (
           await this.db.query<{ id: string; original_name: string; mime: string; path: string; taken_at: Date }>(
-            'SELECT id, original_name, mime, path, taken_at FROM files WHERE id > $1 ORDER BY id LIMIT 200',
+            'SELECT id, original_name, mime, path, taken_at FROM files WHERE id > $1 AND NOT taken_manual ORDER BY id LIMIT 200',
             [last],
           )
         ).rows;

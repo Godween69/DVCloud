@@ -433,9 +433,21 @@ export class AlbumsService {
   }
 
   // Создать альбом из предложенного события (название можно поменять). Предложение пропадает, потому что файлы теперь в альбоме.
-  async acceptSuggestion(userId: string, id: unknown, rawName: unknown): Promise<{ album: PublicAlbum; added: number }> {
+  // Файлы события для предпросмотра (номера), чтобы открыть предложение и посмотреть, что в нём.
+  async suggestionFileIds(userId: string, id: unknown): Promise<string[]> {
     const s = (await this.suggestions(userId)).find((x) => x.id === id);
     if (!s) throw new NotFoundException('Такого предложения уже нет: обновите список');
+    return s.fileIds;
+  }
+
+  // exclude: номера файлов, которые человек убрал из предложения при просмотре (в альбом не попадут).
+  async acceptSuggestion(userId: string, id: unknown, rawName: unknown, exclude?: unknown): Promise<{ album: PublicAlbum; added: number }> {
+    const s = (await this.suggestions(userId)).find((x) => x.id === id);
+    if (!s) throw new NotFoundException('Такого предложения уже нет: обновите список');
+    if (exclude !== undefined && exclude !== null && (!Array.isArray(exclude) || !exclude.every((x) => typeof x === 'string' && ID_RE.test(x)))) throw new BadRequestException('exclude: список номеров');
+    const skip = new Set<string>((exclude as string[] | undefined) ?? []);
+    s.fileIds = s.fileIds.filter((f) => !skip.has(f));
+    if (s.fileIds.length === 0) throw new BadRequestException('В предложении не осталось файлов');
     const album = await this.create(userId, rawName === undefined || rawName === null || rawName === '' ? s.name : rawName, 'any');
     let added = 0;
     for (let i = 0; i < s.fileIds.length; i += 1000) added += (await this.addFiles(userId, album.id, s.fileIds.slice(i, i + 1000))).added;

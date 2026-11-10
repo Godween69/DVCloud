@@ -1,10 +1,11 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, HelpCircle, Image as ImageIcon, Loader2, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { api, ApiError, cropUrl } from '../api';
+import { api, ApiError, cropUrl, thumbUrl } from '../api';
 import { countFiles } from '../lib/format';
 import { mergePlan, sortGroups } from '../lib/people';
 import type { FaceGuess, PeopleGroup, PeopleList } from '../types';
 
+const tbtn = 'flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm text-gray-700 transition-colors hover:bg-black/5 aria-pressed:bg-violet-600/15 aria-pressed:text-violet-800 dark:text-gray-300 dark:hover:bg-white/10 dark:aria-pressed:text-violet-200';
 const msg = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
 
 function Cover({ p, size }: { p: PeopleGroup; size: string }) {
@@ -76,45 +77,103 @@ function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: ()
 }
 
 // «Проверить догадки»: лица, похожие на названного человека, но не настолько, чтобы облако присоединило их само.
-// Ответ «Да» или «Нет» применяется на месте, страница не перезагружается; ответы учат облако узнавать человека точнее.
+// Вопросы идут по одному. «Да» назначает лицо. «Нет» запоминается сразу (этого человека для этого лица больше не предложат),
+// и открывается выбор: кто же это на самом деле, «не знаю» (лицо больше не спрашивается), «другой» (вписать имя), «не человек».
+// Страница не перезагружается, ответы учат облако узнавать человека точнее.
 function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () => void }) {
   const [items, setItems] = useState<FaceGuess[] | null>(null);
+  const [people, setPeople] = useState<PeopleGroup[]>([]);
+  const [stage, setStage] = useState<'ask' | 'pick'>('ask');
+  const [q, setQ] = useState('');
+  const [other, setOther] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [asked, setAsked] = useState(0);
-  const load = () => { setItems(null); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
-  useEffect(() => { load(); }, []);
-  async function answer(g: FaceGuess, yes: boolean) {
-    setProblem(null);
-    try {
-      if (yes) await api.assignFace(g.detectionId, g.personId); else await api.rejectFace(g.detectionId, g.personId);
-      setItems((prev) => (prev ?? []).filter((x) => x.detectionId !== g.detectionId));
-      setAsked((n) => n + 1);
-      onAnswered();
-    } catch (e) { setProblem(msg(e, 'Не получилось')); }
+  const load = () => { setItems(null); setStage('ask'); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
+  useEffect(() => { load(); api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name && p.kind === 'person'))).catch(() => undefined); }, []);
+  const cur = items && items.length > 0 ? items[0] : null;
+  const next = () => { setItems((prev) => (prev ?? []).slice(1)); setStage('ask'); setQ(''); setOther(false); setNewName(''); setAsked((n) => n + 1); onAnswered(); };
+  async function run(fn: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(true); setProblem(null);
+    try { await fn(); next(); } catch (e) { setProblem(msg(e, 'Не получилось')); } finally { setBusy(false); }
   }
+  async function no() {
+    if (!cur || busy) return;
+    setBusy(true); setProblem(null);
+    try { await api.rejectFace(cur.detectionId, cur.personId); setStage('pick'); } catch (e) { setProblem(msg(e, 'Не получилось')); } finally { setBusy(false); }
+  }
+  // Клавиши: Д / Y / Enter / → : да; Н / N / ← : нет. В выборе клавиши отданы поиску.
+  useEffect(() => {
+    if (!cur || stage !== 'ask') return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'Enter' || e.key === 'ArrowRight' || e.code === 'KeyY') { e.preventDefault(); void run(() => api.assignFace(cur.detectionId, cur.personId)); }
+      else if (e.key === 'ArrowLeft' || e.code === 'KeyN') { e.preventDefault(); void no(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur?.detectionId, stage, busy]);
+  const filtered = people.filter((p) => cur && p.id !== cur.personId && (q.trim() === '' || (p.name ?? '').toLowerCase().includes(q.trim().toLowerCase())));
+  const ghost = 'rounded-xl px-3 py-2 text-sm text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10';
   return (
-    <section aria-label="Проверить догадки" className="glass mb-6 rounded-xl p-4">
+    <section aria-label="Проверить догадки" className="glass mb-6 rounded-2xl p-4">
       <div className="mb-3 flex items-start gap-3">
-        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Облако не уверено в этих лицах. Скажите, кто это: так оно узнаёт человека точнее. {asked > 0 ? `Отвечено: ${asked}.` : ''}</p>
-        <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800"><X className="size-4" aria-hidden /></button>
+        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Облако не уверено в этих лицах. Ваши ответы учат его узнавать людей точнее, а одно и то же лицо больше не спрашивается.{asked > 0 ? ` Отвечено: ${asked}.` : ''}{items && items.length > 0 ? ` Осталось: ${items.length}.` : ''}</p>
+        <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-black/5 dark:text-gray-400 dark:hover:bg-white/10"><X className="size-4" aria-hidden /></button>
       </div>
       {items === null && <p className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-4 animate-spin" aria-hidden />Ищем сомнительные лица…</p>}
-      {items && items.length === 0 && <p className="text-sm text-gray-600 dark:text-gray-400">{asked > 0 ? 'Больше вопросов нет. ' : 'Сомнительных лиц нет. '}<button type="button" onClick={load} className="text-violet-700 underline dark:text-violet-300">Проверить ещё раз</button></p>}
-      {items && items.length > 0 && (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-          {items.map((g) => (
-            <li key={g.detectionId} className="flex flex-col items-center gap-2 rounded-xl border border-paper-300 p-2 text-center dark:border-gray-700">
-              <img src={cropUrl(g.detectionId)} alt="" loading="lazy" draggable={false} className="aspect-square w-full max-w-36 rounded-lg object-cover" />
-              <span className="text-sm text-gray-900 dark:text-white">Это {g.name}?</span>
-              <span className="flex gap-2">
-                <button type="button" onClick={() => void answer(g, true)} className="rounded-lg bg-violet-600 px-3 py-1 text-sm font-medium text-white hover:bg-violet-500">Да</button>
-                <button type="button" onClick={() => void answer(g, false)} className="rounded-lg px-3 py-1 text-sm text-gray-700 hover:bg-paper-200 dark:text-gray-300 dark:hover:bg-gray-800">Нет</button>
-              </span>
-            </li>
-          ))}
-        </ul>
+      {items && !cur && <p className="text-sm text-gray-600 dark:text-gray-400">{asked > 0 ? 'Больше вопросов нет. ' : 'Сомнительных лиц нет. '}<button type="button" onClick={load} className="text-violet-700 underline dark:text-violet-300">Проверить ещё раз</button></p>}
+      {cur && (
+        <div className="mx-auto flex max-w-xl flex-col items-center gap-4 sm:flex-row sm:items-start">
+          <div className="flex shrink-0 items-end gap-2">
+            <img key={cur.detectionId} src={cropUrl(cur.detectionId)} alt="Лицо" draggable={false} className="size-40 rounded-2xl object-cover shadow-[0_8px_30px_-8px_rgba(15,23,42,0.5)] ring-1 ring-black/10 sm:size-48" />
+            <img src={thumbUrl(cur.fileId)} alt="Снимок целиком" draggable={false} className="size-16 rounded-xl object-cover opacity-90 ring-1 ring-black/10" title="Снимок, на котором найдено лицо" />
+          </div>
+          <div className="w-full min-w-0 flex-1">
+            {stage === 'ask' ? (
+              <>
+                <p className="mb-3 text-center text-lg font-semibold text-gray-900 dark:text-white sm:text-left">Это {cur.name}?</p>
+                <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
+                  <button type="button" disabled={busy} onClick={() => void run(() => api.assignFace(cur.detectionId, cur.personId))} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_-6px_rgba(16,185,129,0.8)] hover:bg-emerald-500 disabled:opacity-50"><Check className="size-4" aria-hidden />Да</button>
+                  <button type="button" disabled={busy} onClick={() => void no()} className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_-6px_rgba(244,63,94,0.8)] hover:bg-rose-500 disabled:opacity-50"><X className="size-4" aria-hidden />Нет</button>
+                  <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}>Не знаю</button>
+                </div>
+                <p className="mt-3 text-center text-xs text-gray-500 sm:text-left">Клавиши: Enter или → — да, ← — нет.</p>
+              </>
+            ) : (
+              <>
+                <p className="mb-2 text-center text-base font-semibold text-gray-900 dark:text-white sm:text-left">Хорошо, это не {cur.name}. А кто?</p>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти среди людей" aria-label="Найти человека" autoFocus
+                  className="mb-2 w-full rounded-lg border border-paper-300 bg-white/70 px-3 py-1.5 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white" />
+                <ul className="mb-2 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+                  {filtered.map((p) => (
+                    <li key={p.id}><button type="button" disabled={busy} onClick={() => void run(() => api.assignFace(cur.detectionId, p.id))} className="flex items-center gap-2 rounded-full border border-paper-300 bg-white/50 py-1 pl-1 pr-3 text-sm hover:border-violet-400 hover:bg-violet-500/10 disabled:opacity-50 dark:border-white/15 dark:bg-white/5 dark:text-white"><Cover p={p} size="size-7" />{p.name}</button></li>
+                  ))}
+                  {filtered.length === 0 && <li className="text-sm text-gray-500">Никого не нашли. Выберите «Другой» и впишите имя.</li>}
+                </ul>
+                {other ? (
+                  <form onSubmit={(e) => { e.preventDefault(); const n = newName.trim(); if (n) void run(() => api.createPerson(cur.detectionId, n)); }} className="flex flex-wrap items-center gap-2">
+                    <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={80} placeholder="Имя нового человека" aria-label="Имя" autoFocus className="min-w-0 flex-1 rounded-lg border border-paper-300 bg-white/70 px-3 py-1.5 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white" />
+                    <button type="submit" disabled={busy || !newName.trim()} className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">Сохранить</button>
+                  </form>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setOther(true)} className={`${ghost} border border-paper-300 dark:border-white/15`}>Другой…</button>
+                    <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}>Не знаю</button>
+                    <button type="button" disabled={busy} onClick={() => void run(() => api.ignoreFace(cur.detectionId, true))} className={ghost} title="Например, кошка или собака, принятая за лицо">Не человек</button>
+                  </div>
+                )}
+              </>
+            )}
+            {problem && <p className="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">{problem}</p>}
+          </div>
+        </div>
       )}
-      {problem && <p className="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">{problem}</p>}
     </section>
   );
 }
@@ -161,30 +220,34 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
 
   return (
     <div className={`mx-auto max-w-[1200px] px-3 py-6 sm:px-6 ${selecting ? "pb-28" : ""}`}>
-      <div className="mb-5 flex flex-wrap items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Люди и питомцы</h1>
-        {!off && mergeable.length > 1 && (
-          <button type="button" onClick={() => (selecting ? stop() : setSelecting(true))} aria-pressed={selecting} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-pressed:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-pressed:bg-gray-800">
-            <Combine className="size-4" aria-hidden />{selecting ? 'Отменить выбор' : 'Выбрать и объединить'}
-          </button>
-        )}
-        {!off && shown.length > 0 && (
-          <button type="button" onClick={() => setByPeople((v) => !v)} aria-expanded={byPeople} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-expanded:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-expanded:bg-gray-800">
-            <Plus className="size-4" aria-hidden />Альбом по людям
-          </button>
-        )}
-        {!off && list.enabled.faces && shown.some((g) => g.kind === 'person' && g.name) && (
-          <button type="button" onClick={() => setGuessing((v) => !v)} aria-expanded={guessing} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-expanded:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-expanded:bg-gray-800">
-            <HelpCircle className="size-4" aria-hidden />Проверить догадки
-          </button>
-        )}
         {(hiddenCount > 0 || showHidden) && (
-          <button type="button" onClick={() => onShowHidden(!showHidden)} aria-pressed={showHidden} className="ml-auto flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
+          <button type="button" onClick={() => onShowHidden(!showHidden)} aria-pressed={showHidden} className="ml-auto flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-black/5 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white">
             {showHidden ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
             {showHidden ? 'Не показывать скрытых' : `Показать скрытых: ${hiddenCount}`}
           </button>
         )}
       </div>
+      {!off && (
+        <div className="mb-5 flex flex-col gap-2">
+          <div role="toolbar" aria-label="Работа с лицами" className="glass flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
+            <span className="px-2.5 text-xs font-medium text-gray-500">Лица</span>
+            {list.enabled.faces && shown.some((g) => g.kind === 'person' && g.name) && (
+              <button type="button" onClick={() => setGuessing((v) => !v)} aria-pressed={guessing} className={tbtn}><HelpCircle className="size-4" aria-hidden />Проверить догадки</button>
+            )}
+            {mergeable.length > 1 && (
+              <button type="button" onClick={() => (selecting ? stop() : setSelecting(true))} aria-pressed={selecting} className={tbtn}><Combine className="size-4" aria-hidden />{selecting ? 'Отменить выбор' : 'Выбрать и объединить'}</button>
+            )}
+          </div>
+          {shown.length > 0 && (
+            <div role="toolbar" aria-label="Альбомы" className="glass flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
+              <span className="px-2.5 text-xs font-medium text-gray-500">Альбомы</span>
+              <button type="button" onClick={() => setByPeople((v) => !v)} aria-pressed={byPeople} className={tbtn}><Plus className="size-4" aria-hidden />Альбом по людям</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {guessing && !off && <Guesses onClose={() => setGuessing(false)} onAnswered={onReload} />}
       {byPeople && !off && <AlbumByPeople groups={groups.filter((g) => !g.hidden)} onClose={() => setByPeople(false)} />}
@@ -200,16 +263,17 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
       <ul className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
         {shown.map((p) => (
           <li key={p.id}>
-            <button type="button" onClick={() => (selecting ? (p.canMerge ? toggle(p.id) : undefined) : onOpen(p))} aria-pressed={selecting && p.canMerge ? picked.has(p.id) : undefined} aria-disabled={selecting && !p.canMerge ? true : undefined} title={selecting && !p.canMerge ? 'Названные и общие группы объединяет администратор' : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden || (selecting && !p.canMerge) ? 'opacity-50' : ''}`}>
+            <button type="button" onClick={() => (selecting ? (p.canMerge ? toggle(p.id) : undefined) : onOpen(p))} aria-pressed={selecting && p.canMerge ? picked.has(p.id) : undefined} aria-disabled={selecting && !p.canMerge ? true : undefined} title={selecting && !p.canMerge ? 'Названные и общие группы объединяет администратор' : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden ? 'opacity-50' : ''} ${selecting && !p.canMerge ? 'cursor-not-allowed opacity-30 saturate-50' : ''}`}>
               <span className="relative block w-full max-w-32">
                 <Cover p={p} size={`aspect-square w-full transition-transform group-hover:scale-105 ${picked.has(p.id) ? 'ring-[3px] ring-violet-400/80' : ''}`} />
+                {selecting && !p.canMerge && <span className="absolute right-1 top-1 grid size-6 place-items-center rounded-full bg-black/35 text-white" aria-hidden><Lock className="size-3.5" /></span>}
                 {selecting && p.canMerge && <span className={`absolute right-1 top-1 flex size-6 items-center justify-center rounded-full border-2 border-white ${picked.has(p.id) ? 'bg-violet-600 text-white' : 'bg-black/30'}`}>{picked.has(p.id) && <Check className="size-4" aria-hidden />}</span>}
               </span>
               <span className="w-full min-w-0">
                 <span className={`block truncate text-sm font-medium ${p.name ? 'text-gray-900 dark:text-white' : 'text-violet-700 dark:text-violet-300'}`}>
                   {p.name ?? (p.kind === 'pet' ? 'Дайте имя питомцу' : 'Дайте имя')}
                 </span>
-                <span className="block text-xs text-gray-500">{countFiles(p.count)}</span>
+                <span className="block text-xs text-gray-500">{selecting && !p.canMerge ? 'только администратор' : countFiles(p.count)}</span>
               </span>
             </button>
           </li>

@@ -8,6 +8,8 @@ interface Props {
   total: number; // сколько файлов сейчас загружено в сетку
   zipName: string;
   inAlbum: boolean;
+  removeLabel?: string; // подпись кнопки «убрать» (в предложенном альбоме иная)
+  noTrash?: boolean; // без кнопки «В корзину»
   shared?: boolean; // чужой общий альбом: можно только смотреть и скачать
   onHide?: () => void;
   onAlbum: () => void;
@@ -27,7 +29,7 @@ const btn = 'flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium 
 const plain = `${btn} text-gray-800 hover:bg-black/5 disabled:opacity-40 dark:text-gray-100 dark:hover:bg-white/10`; // кнопка без заливки, цвета темы
 
 // Панель внизу экрана, пока включён режим «Выбрать».
-export function SelectionBar({ ids, total, zipName, inAlbum, shared, onHide, onAlbum, quickName, onQuick, onRemoveFromAlbum, inPerson, onRemoveFromPerson, kinds, onKind, onAll, onCancel, onTooMany }: Props) {
+export function SelectionBar({ ids, total, zipName, inAlbum, removeLabel, noTrash, shared, onHide, onAlbum, quickName, onQuick, onRemoveFromAlbum, inPerson, onRemoveFromPerson, kinds, onKind, onAll, onCancel, onTooMany }: Props) {
   const [sure, setSure] = useState(false); // «убрать из группы» нельзя отменить, поэтому нужно нажать дважды
   useEffect(() => { if (!sure) return; const t = setTimeout(() => setSure(false), 4000); return () => clearTimeout(t); }, [sure]);
   useEffect(() => { setSure(false); }, [ids.length]);
@@ -48,14 +50,14 @@ export function SelectionBar({ ids, total, zipName, inAlbum, shared, onHide, onA
             {k === 'screenshot' ? <Smartphone className="size-4" aria-hidden /> : <ImageIcon className="size-4" aria-hidden />}<span className="hidden sm:inline">{k === 'screenshot' ? 'В скриншоты' : 'Это фото'}</span>
           </button>
         ))}
-        {inAlbum && !shared && <button type="button" onClick={onRemoveFromAlbum} disabled={none} className={plain}><FolderMinus className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из альбома</span></button>}
+        {inAlbum && !shared && <button type="button" onClick={onRemoveFromAlbum} disabled={none} className={plain}><FolderMinus className="size-4" aria-hidden /><span className="hidden sm:inline">{removeLabel ?? 'Убрать из альбома'}</span></button>}
         {inPerson && !shared && (
           <button type="button" disabled={none} onClick={() => { if (sure) { setSure(false); onRemoveFromPerson?.(); } else setSure(true); }} title="Эти фото больше не попадут в эту группу"
             className={sure ? `${btn} bg-red-600 text-white hover:bg-red-500` : plain}>
             <UserMinus className="size-4" aria-hidden /><span className={sure ? '' : 'hidden sm:inline'}>{sure ? `Точно убрать ${ids.length}?` : 'Убрать из группы'}</span>
           </button>
         )}
-        {!shared && <button type="button" onClick={onHide} disabled={none} title="В корзину: файлы можно восстановить" className={plain}><Trash2 className="size-4" aria-hidden /><span className="hidden sm:inline">В корзину</span></button>}
+        {!shared && !noTrash && <button type="button" onClick={onHide} disabled={none} title="В корзину: файлы можно восстановить" className={plain}><Trash2 className="size-4" aria-hidden /><span className="hidden sm:inline">В корзину</span></button>}
         {tooMany ? (
           <button type="button" onClick={onTooMany} className={plain}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать ZIP</span></button>
         ) : (

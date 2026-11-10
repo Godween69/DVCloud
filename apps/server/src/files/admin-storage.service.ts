@@ -4,6 +4,7 @@ import { DbService } from '../db/db.service';
 import { BlobRow, FileRow, ID_RE } from './files.service';
 import { MediaSettingsService } from './media-settings';
 import { StorageService } from './storage.service';
+import { dateEvidence, DateEvidence } from './taken';
 
 export interface AdminAlbum {
   id: string;
@@ -238,10 +239,11 @@ export class AdminStorageService {
     copies: string[];
     prev: string | null;
     next: string | null;
+    evidence: DateEvidence;
   }> {
     if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
-    const r = (await this.db.query<{ id: string; name: string; mime: string; size_bytes: string; owner: string; taken_at: Date; created_at: Date; sha256: string; blob_id: string; width: number | null; height: number | null }>(
-      `SELECT f.id, f.original_name AS name, f.mime, b.size_bytes, u.login AS owner, f.taken_at, f.created_at, b.sha256, b.id AS blob_id, p.width, p.height
+    const r = (await this.db.query<{ id: string; name: string; mime: string; size_bytes: string; owner: string; taken_at: Date; created_at: Date; sha256: string; blob_id: string; width: number | null; height: number | null; path: string; taken_manual: boolean }>(
+      `SELECT f.id, f.original_name AS name, f.mime, b.size_bytes, u.login AS owner, f.taken_at, f.created_at, b.sha256, b.id AS blob_id, p.width, p.height, b.path, f.taken_manual
        FROM files f JOIN users u ON u.id = f.owner_id JOIN blobs b ON b.id = f.blob_id LEFT JOIN file_fingerprints p ON p.file_id = f.id
        WHERE f.id = $1 AND f.trashed_at IS NULL`, [fileId])).rows[0];
     if (!r) throw new NotFoundException('Файл не найден');
@@ -265,7 +267,18 @@ export class AdminStorageService {
       copies,
       prev: await side('>'),
       next: await side('<'),
+      evidence: await dateEvidence({ abs: this.storage.abs(r.path), mime: r.mime, name: r.name, tz: (await this.settings.get()).timezone, manual: r.taken_manual }),
     };
+  }
+
+  // Администратор исправляет дату снимка (жалоба человека). Такая дата больше не перезаписывается пересчётом дат.
+  async setTaken(fileId: string, iso: unknown): Promise<string> {
+    if (!ID_RE.test(fileId)) throw new NotFoundException('Файл не найден');
+    const d = typeof iso === 'string' ? new Date(iso) : new Date(NaN);
+    if (!Number.isFinite(d.getTime()) || d.getUTCFullYear() < 1990 || d.getTime() > Date.now() + 86_400_000) throw new BadRequestException('Дата: от 1990 года и не позже завтрашнего дня');
+    const r = await this.db.query('UPDATE files SET taken_at = $2, taken_manual = true WHERE id = $1', [fileId, d]);
+    if (!r.rowCount) throw new NotFoundException('Файл не найден');
+    return d.toISOString();
   }
 
   // Где лежит содержимое файла (для показа админу): путь в хранилище, тип и номер содержимого.

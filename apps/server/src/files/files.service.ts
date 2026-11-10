@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnsupportedMediaTypeException } from '@nestjs/common';
 import { MediaSettingsService } from './media-settings';
-import { detectTakenAt, validTimezone } from './taken';
+import { dateEvidence, DateEvidence, detectTakenAt, validTimezone } from './taken';
 import { rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { Config } from '../config';
@@ -400,6 +400,33 @@ export class FilesService {
     return { files: rows, next, prev };
   }
 
+  // Окно «Инфо»: всё, что известно о файле, и откуда взята дата (свой файл или файл общего альбома).
+  async info(userId: string, id: string): Promise<{
+    id: string; name: string; mime: string; size: number; sha256: string; takenAt: string; createdAt: string; width: number | null; height: number | null;
+    mine: boolean; albums: { id: string; name: string }[]; dates: DateEvidence;
+  }> {
+    const f = await this.getReadable(userId, id);
+    const fp = (await this.db.query<{ width: number | null; height: number | null }>('SELECT width, height FROM file_fingerprints WHERE file_id = $1', [f.id])).rows[0];
+    const blob = f.blob_id ? (await this.db.query<BlobRow>('SELECT * FROM blobs WHERE id = $1', [f.blob_id])).rows[0] : undefined;
+    const manual = (await this.db.query<{ m: boolean }>('SELECT taken_manual AS m FROM files WHERE id = $1', [f.id])).rows[0]?.m === true;
+    const mine = f.owner_id === userId;
+    const albums = mine
+      ? (await this.db.query<{ id: string; name: string }>('SELECT a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = $1 AND a.owner_id = $2 AND a.deleted_at IS NULL ORDER BY lower(a.name)', [f.id, userId])).rows
+      : [];
+    const tz = (await this.settings.get()).timezone;
+    const dates = await dateEvidence({ abs: this.storage.abs(f.path), mime: f.mime, name: f.original_name, tz, manual });
+    return { id: f.id, name: f.original_name, mime: f.mime, size: Number(blob?.size_bytes ?? f.size_bytes), sha256: f.sha256, takenAt: f.taken_at.toISOString(), createdAt: f.created_at.toISOString(), width: fp?.width ?? null, height: fp?.height ?? null, mine, albums, dates };
+  }
+
+  // Свои файлы по номерам (предпросмотр предложенного альбома): от новых к старым, без корзины.
+  async byIds(ownerId: string, ids: string[]): Promise<FileRow[]> {
+    if (!ids.length) return [];
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean }>(
+      `SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id
+       WHERE files.owner_id = $1 AND files.trashed_at IS NULL AND files.id = ANY($2::bigint[]) ORDER BY taken_at DESC, id DESC`, [ownerId, ids]);
+    return r.rows;
+  }
+
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.
   async timeline(ownerId: string, kind: FeedKind | undefined, tz: string, opts: { albumId?: string; person?: string } = {}): Promise<{ y: number; m: number; n: number }[]> {
     if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
@@ -501,38 +528,6 @@ export class FilesService {
       'UPDATE blobs SET orphaned_at = now(), orphan_note = $2, orphan_name = COALESCE($3, orphan_name), orphan_taken_at = COALESCE($4, orphan_taken_at) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
       [blobId, note.slice(0, 500), name ?? null, takenAt ?? null],
     );
-  }
-
-  // Сохранить себе файлы чужого альбома, которым поделились: в облаке они не копируются, у человека появляются свои записи.
-  async saveShared(user: UserRow, ids: string[]): Promise<{ added: number; skipped: number; quota: boolean }> {
-    const r = await this.db.query<FileRow>(
-      `SELECT f.* FROM files f WHERE f.id = ANY($2::bigint[]) AND f.owner_id <> $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND EXISTS (
-         SELECT 1 FROM album_items ai JOIN album_shares s ON s.album_id = ai.album_id WHERE ai.file_id = f.id AND s.user_id = $1)
-       ORDER BY f.taken_at, f.id`,
-      [user.id, ids],
-    );
-    let added = 0;
-    let skipped = 0;
-    for (const f of r.rows) {
-      if (await this.findLiveBySha(user.id, f.sha256)) {
-        skipped++;
-        continue;
-      }
-      const blob = (await this.db.query<BlobRow>('SELECT * FROM blobs WHERE id = $1', [f.blob_id])).rows[0];
-      if (!blob) continue;
-      try {
-        await this.checkRoom(user, Number(blob.size_bytes));
-      } catch {
-        return { added, skipped, quota: true };
-      }
-      const { file, created } = await this.linkBlob(user, blob, f.original_name, f.taken_at);
-      if (created) {
-        added++;
-        this.thumbs.warm(file);
-        this.fingerprints.warm(file);
-      } else skipped++;
-    }
-    return { added, skipped, quota: false };
   }
 
   // Просьба добавить место: администратор увидит её в админке.

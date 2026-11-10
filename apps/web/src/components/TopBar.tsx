@@ -71,7 +71,8 @@ const NAV_ICON: Record<string, typeof Cloud> = { library: LayoutGrid, photos: Im
 const LENS = { background: 'color-mix(in srgb, var(--aur-a) 22%, var(--lens-base))', boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--aur-a) 38%, transparent)' };
 
 export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, peopleOn, yandexOn, theme, onToggleTheme, onLogout, onHelp, hideDock }: Props) {
-  const items = [['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ...(peopleOn ? [['people', 'Люди'] as const] : []), ['similar', 'Похожие'], ['trash', 'Корзина'], ...(yandexOn ? [['yandex', 'Яндекс Диск'] as const] : [])] as const;
+  const child = user.isChild === true; // детский режим: только библиотека, фото, видео и альбомы
+  const items = child ? ([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['albums', 'Альбомы']] as const) : ([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ...(peopleOn ? [['people', 'Люди'] as const] : []), ['similar', 'Похожие'], ['trash', 'Корзина'], ...(yandexOn ? [['yandex', 'Яндекс Диск'] as const] : [])] as const);
   const pct = usage && usage.quotaBytes ? Math.min(100, (usage.usedBytes / usage.quotaBytes) * 100) : null;
   const tone = pct === null ? 'bg-violet-500' : pct >= 90 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-violet-500';
   const textTone = pct !== null && pct >= 85 ? 'font-medium text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400';
@@ -110,15 +111,15 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
               </div>
             </div>
           )}
-          {searchOn && (
+          {searchOn && !child && (
             <button type="button" onClick={() => onView('search')} aria-current={view === 'search' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Поиск" title="Поиск">
               <Search className="size-5" aria-hidden />
             </button>
           )}
-          <AddMenu onAdd={onAdd} onAddFolder={onAddFolder} />
-          <button type="button" onClick={() => onView('security')} aria-current={view === 'security' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Безопасность" title="Безопасность">
+          {!child && <AddMenu onAdd={onAdd} onAddFolder={onAddFolder} />}
+          {!child && <button type="button" onClick={() => onView('security')} aria-current={view === 'security' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Безопасность" title="Безопасность">
             <ShieldCheck className="size-5" aria-hidden />
-          </button>
+          </button>}
           <button type="button" onClick={onHelp} className={iconBtn} aria-label="Справка по разделу" title="Справка по разделу">
             <Info className="size-5" aria-hidden />
           </button>

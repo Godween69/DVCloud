@@ -110,14 +110,22 @@ export class AlbumsController {
     return { suggestions: (await this.albums.suggestions(req.user.id)).map(({ fileIds, ...rest }) => { void fileIds; return rest; }) };
   }
 
-  // {id, name?}: создать альбом из события.
+  // Предпросмотр: все файлы события разом (до 3000), новые сверху.
+  @Get('suggestions/:sid/files')
+  async suggestionFiles(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('sid') sid: string): Promise<{ files: PublicFile[]; next: null; prev: null }> {
+    res.setHeader('Cache-Control', 'no-store');
+    const ids = (await this.albums.suggestionFileIds(req.user.id, sid)).slice(0, 3000);
+    return { files: (await this.files.byIds(req.user.id, ids)).map(toPublicFile), next: null, prev: null };
+  }
+
+  // {id, name?, exclude?}: создать альбом из события (exclude: убранные при просмотре файлы).
   @Post('suggestions/accept')
   @HttpCode(200)
   async acceptSuggestion(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ album: PublicAlbum; added: number }> {
     requireJson(req);
     res.setHeader('Cache-Control', 'no-store');
     const o = asObject(req.body);
-    return this.albums.acceptSuggestion(req.user.id, o.id, o.name);
+    return this.albums.acceptSuggestion(req.user.id, o.id, o.name, o.exclude);
   }
 
   // {id}: «Не нужно».
@@ -228,18 +236,6 @@ export class AlbumsController {
     res.setHeader('Cache-Control', 'no-store');
     await this.albums.leave(req.user.id, id);
     return { ok: true };
-  }
-
-  // Сохранить файлы общего альбома в свою библиотеку (без выбранных ids — весь альбом).
-  @Post(':id/save')
-  @HttpCode(200)
-  async save(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ added: number; skipped: number; quota: boolean }> {
-    requireJson(req);
-    res.setHeader('Cache-Control', 'no-store');
-    const { ownerId } = await this.albums.getVisible(req.user.id, id);
-    const ids = asObject(req.body).ids === undefined ? await this.albums.fileIds(req.user.id, id) : parseIds(asObject(req.body).ids);
-    if (ownerId === req.user.id) return { added: 0, skipped: ids.length, quota: false };
-    return this.files.saveShared(req.user, ids);
   }
 
   @Post(':id/remove')

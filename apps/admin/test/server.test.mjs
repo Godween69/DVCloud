@@ -59,7 +59,8 @@ describe('админка', () => {
         if (req.method === 'DELETE' && req.url === '/internal/albums-deleted/8') return j(200, { ok: true });
         if (req.method === 'GET' && req.url === '/internal/albums') return j(200, { albums: [{ id: '3', name: 'Отпуск', owner: 'anna', count: 12, sharedWith: 1 }] });
         if (req.method === 'GET' && req.url === '/internal/albums/3/transfer-preview') return j(200, { files: 12, inOtherAlbums: 5, owner: 'anna' });
-        if (req.method === 'GET' && req.url.startsWith('/internal/browse/files/41/info')) return j(200, { file: { id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z', width: 800, height: 600, sha256: 'a'.repeat(64), createdAt: '2026-03-06T10:00:00.000Z', blobId: '9' }, albums: [{ id: '3', name: 'Отпуск', owner: 'anna' }], copies: ['boris'], prev: '40', next: null });
+        if (req.method === 'GET' && req.url.startsWith('/internal/browse/files/41/info')) return j(200, { file: { id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z', width: 800, height: 600, sha256: 'a'.repeat(64), createdAt: '2026-03-06T10:00:00.000Z', blobId: '9' }, albums: [{ id: '3', name: 'Отпуск', owner: 'anna' }], copies: ['boris'], prev: '40', next: null, evidence: { exif: { 'Модель': 'Cam <X>', DateTimeOriginal: '2015:06:01 10:00:00' }, exifDate: '2015-06-01T10:00:00.000Z', videoCreation: null, nameDate: null, used: 'meta' } });
+        if (req.method === 'PATCH' && req.url === '/internal/browse/files/41/taken') return j(200, { takenAt: '2019-06-20T08:30:00.000Z' });
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/original?dl=1') { res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': 4, 'content-disposition': "attachment; filename*=UTF-8''IMG_1.jpg" }); return res.end('JPEG'); }
         if (req.method === 'GET' && req.url.startsWith('/internal/browse/files?')) return j(200, { files: [{ id: '41', name: '<b>IMG_1</b>.jpg', mime: 'image/jpeg', size: 2048, owner: 'anna', takenAt: '2026-03-05T10:00:00.000Z' }], next: '2026-03-05T10:00:00.000Z_41', total: 90 });
         if (req.method === 'GET' && req.url === '/internal/browse/files/41/thumb') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
@@ -169,6 +170,23 @@ describe('админка', () => {
     assert.equal(r.headers['cache-control'], 'no-store');
     const again = await req('GET', '/', { cookie });
     assert.ok(!again.text.includes('abcd2345efgh6789'));
+  });
+
+  it('галочка «Ребёнок» при создании, переключение роли, исправление даты снимка', async () => {
+    const cookie = await login();
+    const csrf = csrfOf((await req('GET', '/', { cookie })).text);
+    assert.ok((await req('GET', '/', { cookie })).text.includes('name="isChild"'));
+    await req('POST', '/users', { cookie, form: { csrf, login: 'kid', displayName: 'Малыш', isChild: '1' } });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/users ') && c.includes('"isChild":true')));
+    await req('POST', '/users/anna/child', { cookie, form: { csrf } });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/users/anna') && c.includes('"isChild":true')));
+    const page = await req('GET', '/files/41', { cookie });
+    assert.ok(page.text.includes('взято из метаданных файла') && page.text.includes('2015:06:01 10:00:00') && page.text.includes('Cam &lt;X&gt;'));
+    const r = await req('POST', '/files/41/taken', { cookie, form: { csrf, takenAt: '2019-06-20T08:30' } });
+    assert.equal(r.status, 303);
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/browse/files/41/taken') && c.includes('2019-06-20T08:30:00Z')));
+    await req('POST', '/files/41/taken', { cookie, form: { csrf, takenAt: 'вчера' } });
+    assert.equal(calls.filter((c) => c.startsWith('PATCH /internal/browse/files/41/taken')).length, 1, 'неверная дата не уходит на сервер');
   });
 
   it('дубль логина: сообщение об ошибке, пароль не показан', async () => {

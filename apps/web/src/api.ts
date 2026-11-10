@@ -98,7 +98,10 @@ export const api = {
   rejectFace: (detectionId: string, personId: string) => request<{ ok: true }>('POST', '/api/people/reject', { detectionId, personId }),
   ignoreFace: (detectionId: string, ignored: boolean) => request<{ petsEnabled: boolean; petsOnFile: boolean }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}/ignore`, { ignored }),
   albumSuggestions: () => request<{ suggestions: AlbumSuggestion[] }>('GET', '/api/albums/suggestions').then((r) => r.suggestions),
-  acceptSuggestion: (id: string, name: string) => request<{ album: Album; added: number }>('POST', '/api/albums/suggestions/accept', { id, name }),
+  acceptSuggestion: (id: string, name: string, exclude: string[] = []) => request<{ album: Album; added: number }>('POST', '/api/albums/suggestions/accept', { id, name, exclude }),
+  suggestionFiles: (id: string) => request<{ files: FileItem[]; next: null; prev: null }>('GET', `/api/albums/suggestions/${encodeURIComponent(id)}/files`),
+  skipFace: (detectionId: string) => request<{ ok: true }>('POST', '/api/people/skip', { detectionId }),
+  fileInfo: (id: string) => request<FileInfo>('GET', `/api/files/${encodeURIComponent(id)}/info`),
   dismissSuggestion: (id: string) => request<{ ok: true }>('POST', '/api/albums/suggestions/dismiss', { id }),
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
   removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
@@ -262,3 +265,9 @@ export function sendFile(file: File, onProgress: (fraction: number) => void): Pr
 }
 
 export interface BuilderQuery { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[] }
+
+export interface FileInfo {
+  id: string; name: string; mime: string; size: number; sha256: string; takenAt: string; createdAt: string; width: number | null; height: number | null;
+  mine: boolean; albums: { id: string; name: string }[];
+  dates: { exif: Record<string, string>; exifDate: string | null; videoCreation: string | null; nameDate: string | null; used: 'meta' | 'name' | 'none' | 'manual' };
+}

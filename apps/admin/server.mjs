@@ -359,10 +359,24 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     if (path.startsWith('/sharing/')) return sharingAction(session, res, path, form);
     if (path.startsWith('/vault/')) return vaultAction(session, res, path, form);
     if (path.startsWith('/backup/')) return backupAction(session, res, path, form);
-    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete)$/.exec(path);
+    let fm;
+    if ((fm = /^\/files\/(\d{1,18})\/taken$/.exec(path))) {
+      try {
+        // datetime-local приходит как 2019-06-20T08:30 (время UTC, как показано на странице)
+        const v = (form.get('takenAt') ?? '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)) throw new ApiError(400, 'Дата: год-месяц-день и время');
+        await api.setTaken(fm[1], `${v}:00Z`);
+        session.flash = { kind: 'ok', text: 'Дата снимка исправлена' };
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        session.flash = { kind: 'error', text: e.message };
+      }
+      return redirect(res, `/files/${fm[1]}`);
+    }
+    const m = /^\/users\/([a-z0-9_]{2,32})\/(disable|enable|quota|reset|reset2fa|delete|child|adult)$/.exec(path);
     try {
       if (path === '/users') {
-        const r = await api.create(form.get('login') ?? '', form.get('displayName') ?? '');
+        const r = await api.create(form.get('login') ?? '', form.get('displayName') ?? '', form.get('isChild') === '1');
         return html(res, 200, secretPage({ title: 'Человек создан', login: r.user.login, password: r.password ?? '(задан вручную)' }));
       }
       if (!m) return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
@@ -382,7 +396,10 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         session.flash = { kind: 'ok', text: `${login}: аккаунт удалён${r.links ? `, записей файлов убрано: ${r.links} (сами файлы остались на диске без владельца)` : ''}` };
         return redirect(res, '/');
       }
-      if (action === 'quota') {
+      if (action === 'child' || action === 'adult') {
+        await api.update(login, { isChild: action === 'child' });
+        session.flash = { kind: 'ok', text: `${login}: ${action === 'child' ? 'теперь детский аккаунт' : 'детский режим снят'}` };
+      } else if (action === 'quota') {
         const q = parseQuotaGb(form.get('quota'));
         if (q === undefined) throw new ApiError(400, 'Квота: число гигабайт (например 500) или пусто для снятия лимита');
         await api.update(login, { quotaBytes: q });

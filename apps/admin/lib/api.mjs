@@ -39,7 +39,8 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
   const u = (login) => `/internal/users/${encodeURIComponent(login)}`;
   return {
     list: async () => (await call('GET', '/internal/users')).users,
-    create: (login, displayName) => call('POST', '/internal/users', { login, displayName }),
+    create: (login, displayName, isChild = false) => call('POST', '/internal/users', { login, displayName, ...(isChild ? { isChild: true } : {}) }),
+    setTaken: (id, takenAt) => call('PATCH', `/internal/browse/files/${encodeURIComponent(id)}/taken`, { takenAt }),
     update: (login, patch) => call('PATCH', u(login), patch),
     reset: (login) => call('POST', `${u(login)}/reset-password`, {}),
     reset2fa: (login) => call('POST', `${u(login)}/reset-2fa`, {}),

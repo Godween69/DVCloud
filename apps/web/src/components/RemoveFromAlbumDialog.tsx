@@ -1,51 +1,64 @@
-import { Loader2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { api } from '../api';
+import { FolderMinus, Folders, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 interface Props {
-  albumId: string;
   albumName: string;
-  ids: string[];
-  onThis: () => void; // убрать только из этого альбома
-  onAll: () => void; // убрать из всех альбомов
+  count: number; // сколько файлов убираем
+  other: { files: number; albums: { id: string; name: string }[] } | null; // где ещё лежат (null: не удалось узнать)
+  onThis: () => void; // только из этого альбома
+  onAll: () => void; // из всех альбомов
   onCancel: () => void;
 }
 
-// Окно по клавише Del в альбоме. Корзина не затрагивается: файл остаётся в библиотеке.
-// Enter: только из этого альбома. Ещё раз Del: из всех альбомов. Esc: отмена.
-export function RemoveFromAlbumDialog({ albumId, albumName, ids, onThis, onAll, onCancel }: Props) {
-  const [other, setOther] = useState<{ files: number; albums: { id: string; name: string }[] } | null>(null);
+// Окно по Del в альбоме, когда файл есть и в других альбомах. Корзина не затрагивается.
+// Стрелки переключают вариант, Enter подтверждает, Del ещё раз: из всех альбомов, Esc: отмена.
+export function RemoveFromAlbumDialog({ albumName, count, other, onThis, onAll, onCancel }: Props) {
+  const [idx, setIdx] = useState(0);
   const opened = useRef(Date.now());
-  useEffect(() => { api.albumsInOther(albumId, ids).then(setOther).catch(() => setOther({ files: 0, albums: [] })); }, [albumId, ids]);
+  const actions = [onThis, onAll, onCancel];
+  const act = useRef(actions);
+  act.current = actions;
+  const cur = useRef(0);
+  cur.current = idx;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); onCancel(); }
-      else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); if (!e.repeat) onThis(); }
+      const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      if (e.key === 'Escape') { stop(); act.current[2](); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || (e.key === 'Tab' && !e.shiftKey)) { stop(); setIdx((i) => (i + 1) % 3); }
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey)) { stop(); setIdx((i) => (i + 2) % 3); }
+      else if (e.key === 'Enter') { stop(); if (!e.repeat) act.current[cur.current](); }
       else if (e.key === 'Delete') {
-        e.preventDefault(); e.stopImmediatePropagation();
+        stop();
         // повтор от зажатой клавиши и слишком быстрый второй удар не считаются
-        if (!e.repeat && Date.now() - opened.current > 400) onAll();
+        if (!e.repeat && Date.now() - opened.current > 400) act.current[1]();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onThis, onAll, onCancel]);
-  const many = ids.length > 1;
+  }, []);
+  const many = count > 1;
+  const names = other?.albums.map((a) => `«${a.name}»`).join(', ');
+  const item = (i: number, icon: ReactNode, title: string, hint: string, key: string, onClick: () => void) => (
+    <button type="button" onClick={onClick} onMouseEnter={() => setIdx(i)} aria-current={idx === i}
+      className={`group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${idx === i ? 'border-violet-400/70 bg-violet-500/15 shadow-[0_0_24px_-8px_rgba(139,92,246,0.7)]' : 'border-black/5 bg-white/40 hover:bg-white/70 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'}`}>
+      <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${idx === i ? 'bg-violet-600 text-white' : 'bg-black/5 text-gray-700 dark:bg-white/10 dark:text-gray-200'}`}>{icon}</span>
+      <span className="min-w-0 flex-1"><span className="block text-[15px] font-medium text-gray-900 dark:text-white">{title}</span><span className="block text-sm text-gray-600 dark:text-gray-400">{hint}</span></span>
+      <kbd className="rounded-md border border-black/10 bg-white/60 px-1.5 py-0.5 text-xs text-gray-700 dark:border-white/15 dark:bg-white/10 dark:text-gray-200">{key}</kbd>
+    </button>
+  );
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div role="dialog" aria-modal="true" aria-label="Убрать из альбома" className="glass w-full max-w-md rounded-2xl p-5 text-gray-900 dark:text-white">
-        <h3 className="text-lg font-semibold">{many ? `Убрать ${ids.length} файлов из альбома?` : 'Убрать файл из альбома?'}</h3>
-        <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">В корзину ничего не попадёт: {many ? 'файлы останутся' : 'файл останется'} в библиотеке.</p>
-        <div className="mt-3 min-h-10 text-sm">
-          {other === null ? <Loader2 className="size-4 animate-spin" aria-label="Проверяем" /> : other.files === 0
-            ? <p className="text-gray-700 dark:text-gray-300">Больше ни в каких альбомах {many ? 'их' : 'его'} нет.</p>
-            : <p>{many ? `Ещё в других альбомах: ${other.files} из ${ids.length}` : 'Этот файл есть и в других альбомах'}: {other.albums.map((a) => `«${a.name}»`).join(', ')}.</p>}
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/45 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div role="dialog" aria-modal="true" aria-label="Убрать из альбома" className="glass-strong w-full max-w-md rounded-3xl p-5 text-gray-900 dark:text-white">
+        <h3 className="text-lg font-semibold">{many ? `Убрать ${count} файлов из альбома?` : 'Убрать файл из альбома?'}</h3>
+        <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">
+          {other && other.files > 0 ? (many ? `Ещё в других альбомах: ${other.files} из ${count} (${names}).` : `Файл есть и в других альбомах: ${names}.`) : 'Файлы есть и в других альбомах.'} В корзину ничего не попадёт.
+        </p>
+        <div className="mt-4 space-y-2">
+          {item(0, <FolderMinus className="size-5" aria-hidden />, `Только из «${albumName}»`, 'В других альбомах останется', 'Enter', onThis)}
+          {item(1, <Folders className="size-5" aria-hidden />, 'Из всех альбомов', 'Файл останется в библиотеке', 'Del', onAll)}
+          {item(2, <X className="size-5" aria-hidden />, 'Отмена', 'Ничего не менять', 'Esc', onCancel)}
         </div>
-        <div className="mt-4 flex flex-col gap-2">
-          <button type="button" autoFocus onClick={onThis} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">Только из «{albumName}» <kbd className="ml-1 rounded bg-white/20 px-1.5 text-xs">Enter</kbd></button>
-          <button type="button" onClick={onAll} className="rounded-lg border border-paper-300 bg-white/50 px-4 py-2 text-sm font-medium hover:bg-white/80 dark:border-white/15 dark:bg-white/5 dark:hover:bg-white/10">Из всех альбомов <kbd className="ml-1 rounded bg-black/10 px-1.5 text-xs dark:bg-white/15">Del</kbd></button>
-          <button type="button" onClick={onCancel} className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800">Отмена <kbd className="ml-1 text-xs">Esc</kbd></button>
-        </div>
+        <p className="mt-3 text-center text-xs text-gray-500 dark:text-gray-400">Стрелки выбирают вариант, Enter подтверждает</p>
       </div>
     </div>
   );

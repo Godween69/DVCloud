@@ -10,6 +10,7 @@ import type { Album, AlbumKind, AlbumShow, AlbumSuggestion } from '../types';
 
 interface ListProps {
   albums: Album[] | null;
+  onPreview: (x: AlbumSuggestion) => void; // открыть предложенное событие для просмотра
   onOpen: (a: Album) => void;
   onCreated: (a: Album) => void;
   onError: (m: string) => void;
@@ -18,52 +19,55 @@ interface ListProps {
   filter: AlbumKind | 'all' | 'shared' | 'archive'; // какие альбомы показывать: свои (все или один тип), архив (не входят в библиотеку) или те, которыми поделились
   onFilter: (f: AlbumKind | 'all' | 'shared' | 'archive') => void;
   onFavorite: (a: Album) => void; // звёздочка
+  child?: boolean; // детский режим: только смотреть
 }
 
-// «Предложенные альбомы»: события по времени съёмки из фото, которых нет ни в одном альбоме. Всё происходит на месте.
-function Suggestions({ onCreated, onError }: { onCreated: (a: Album) => void; onError: (m: string) => void }) {
+// «Предложенные альбомы»: события по времени съёмки из фото, которых нет ни в одном альбоме. Карточка открывает событие целиком:
+// там можно посмотреть фото, убрать лишнее и только потом нажать «OK» или «Не нужно».
+function Suggestions({ onPreview }: { onPreview: (x: AlbumSuggestion) => void }) {
   const [items, setItems] = useState<AlbumSuggestion[]>([]);
-  const [names, setNames] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => { api.albumSuggestions().then(setItems).catch(() => setItems([])); }, []);
   if (items.length === 0) return null;
-  const drop = (id: string) => setItems((prev) => prev.filter((x) => x.id !== id));
-  async function accept(x: AlbumSuggestion) {
-    if (busy) return;
-    setBusy(x.id);
-    try {
-      const r = await api.acceptSuggestion(x.id, (names[x.id] ?? x.name).trim() || x.name);
-      drop(x.id);
-      onCreated(r.album);
-    } catch (e) { onError(e instanceof ApiError ? e.message : 'Не получилось создать альбом'); } finally { setBusy(null); }
-  }
-  async function dismiss(x: AlbumSuggestion) {
-    drop(x.id);
-    try { await api.dismissSuggestion(x.id); } catch { /* предложение вернётся при следующем заходе */ }
-  }
+  const fmt = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   return (
     <section aria-label="Предложенные альбомы" className="glass mb-6 rounded-2xl p-4">
       <h3 className="mb-1 text-base font-semibold text-gray-900 dark:text-white">Предложенные альбомы</h3>
-      <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">Облако нашло события по времени съёмки. Назовите и создайте альбом одним нажатием.</p>
+      <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">Облако нашло события по времени съёмки. Откройте событие, посмотрите фото и решите, создавать ли альбом.</p>
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.slice(0, 6).map((x) => (
-          <li key={x.id} className="flex gap-3 rounded-xl border border-paper-300/70 bg-white/40 p-2 dark:border-white/10 dark:bg-white/5">
-            <img src={thumbUrl(x.coverFileId)} alt="" loading="lazy" draggable={false} className="size-20 shrink-0 rounded-lg object-cover" />
-            <form onSubmit={(e) => { e.preventDefault(); void accept(x); }} className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <span className="text-xs text-gray-600 dark:text-gray-400">{countFiles(x.count)}</span>
-              <input value={names[x.id] ?? x.name} onChange={(e) => setNames((p) => ({ ...p, [x.id]: e.target.value }))} maxLength={100} aria-label="Название альбома"
-                className="min-w-0 rounded-lg border border-paper-300 bg-white/70 px-2 py-1 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white" />
-              <span className="flex gap-2">
-                <button type="submit" disabled={busy === x.id} className="flex items-center gap-1 rounded-lg bg-violet-600 px-3 py-1 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">
-                  {busy === x.id ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Check className="size-3.5" aria-hidden />}OK
-                </button>
-                <button type="button" onClick={() => void dismiss(x)} className="rounded-lg px-2 py-1 text-sm text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800">Не нужно</button>
+          <li key={x.id}>
+            <button type="button" onClick={() => onPreview(x)} aria-label={`Открыть: ${x.name}, ${countFiles(x.count)}`}
+              className="group flex w-full gap-3 rounded-xl border border-paper-300/70 bg-white/40 p-2 text-left transition hover:-translate-y-0.5 hover:bg-white/70 hover:shadow-[0_0_24px_-6px_rgba(139,92,246,0.5)] focus-visible:outline-2 focus-visible:outline-violet-500 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10">
+              <img src={thumbUrl(x.coverFileId)} alt="" loading="lazy" draggable={false} className="size-20 shrink-0 rounded-lg object-cover" />
+              <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+                <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">{x.name}</span>
+                <span className="text-xs text-gray-600 dark:text-gray-400">{countFiles(x.count)} · {fmt(x.start)}{fmt(x.end) !== fmt(x.start) ? ` — ${fmt(x.end)}` : ''}</span>
+                <span className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-700 dark:text-violet-300"><Eye className="size-3.5" aria-hidden />Посмотреть</span>
               </span>
-            </form>
+            </button>
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+// Шапка открытого предложения: название можно поправить, «OK» создаёт альбом из того, что осталось, «Не нужно» скрывает предложение.
+export function SuggestionHeader({ sug, count, onBack, onAccept, onDismiss }: { sug: AlbumSuggestion; count: number; onBack: () => void; onAccept: (name: string) => void; onDismiss: () => void }) {
+  const [name, setName] = useState(sug.name);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="glass mx-auto mb-3 mt-4 max-w-[1600px] rounded-2xl p-3 sm:mx-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onBack} aria-label="Назад к альбомам" className="grid size-9 place-items-center rounded-full hover:bg-black/5 dark:text-white dark:hover:bg-white/10"><ArrowLeft className="size-5" aria-hidden /></button>
+        <div className="min-w-0 flex-1 basis-56">
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} aria-label="Название альбома" className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-semibold text-gray-900 outline-none hover:border-paper-300 focus:border-violet-500 dark:text-white dark:hover:border-white/20" />
+          <p className="px-2 text-xs text-gray-600 dark:text-gray-400">Предложенный альбом · {countFiles(count)}. Нажмите «Выбрать», отметьте лишнее и уберите кнопкой внизу.</p>
+        </div>
+        <button type="button" disabled={busy || count === 0 || !name.trim()} onClick={() => { setBusy(true); onAccept(name.trim()); }} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">{busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Check className="size-4" aria-hidden />}OK, создать альбом</button>
+        <button type="button" onClick={onDismiss} className="rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10">Не нужно</button>
+      </div>
+    </div>
   );
 }
 
@@ -150,7 +154,7 @@ function ShowMenu({ album, onChanged, onError }: { album: Album; onChanged: (a: 
 }
 
 // Список альбомов: карточки с обложкой и кнопка «Новый альбом».
-export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuick, filter, onFilter, onFavorite }: ListProps) {
+export function AlbumsView({ albums, onPreview, onOpen, onCreated, onError, quickId, onQuick, filter, onFilter, onFavorite, child }: ListProps) {
   const [adding, setAdding] = useState(false);
   const [building, setBuilding] = useState(false);
   const [name, setName] = useState('');
@@ -185,7 +189,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
     <div className="mx-auto max-w-[1600px] px-3 pb-24 pt-6 sm:px-6">
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">Альбомы</h2>
-        {adding ? (
+        {child ? null : adding ? (
           <form onSubmit={create} className="flex gap-2">
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setAdding(false)} maxLength={100} placeholder="Название" aria-label="Название альбома" className="w-52 rounded-lg border border-paper-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
             <select value={kind} onChange={(e) => setKind(e.target.value as AlbumKind)} aria-label="Тип альбома" title="Тип выбирается один раз и потом не меняется" className="rounded-lg border border-paper-300 bg-white px-2 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-white">
@@ -201,8 +205,8 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
           </>
         )}
       </div>
-      {building && <AlbumBuilder albums={albums} onClose={() => setBuilding(false)} onCreated={onCreated} onError={onError} />}
-      <Suggestions onCreated={onCreated} onError={onError} />
+      {building && !child && <AlbumBuilder albums={albums} onClose={() => setBuilding(false)} onCreated={onCreated} onError={onError} />}
+      {!child && <Suggestions onPreview={onPreview} />}
       {albums.length > 0 && (
         <div role="tablist" aria-label="Разделы альбомов" className="ftabs mb-5">
           {CHIPS.map((c) => {
@@ -211,7 +215,7 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
               <button key={c.key} type="button" role="tab" aria-selected={effective === c.key} onClick={() => onFilter(c.key)} className="ftab">{c.label}<span className="n">{n}</span></button>
             );
           })}
-          {archiveCount > 0 && (
+          {archiveCount > 0 && !child && (
             <button type="button" role="tab" aria-selected={effective === 'archive'} onClick={() => onFilter('archive')} className="ftab" title="Альбомы, которые не показываются в библиотеке"><Archive className="size-4" aria-hidden />Архив<span className="n">{archiveCount}</span></button>
           )}
           {sharedCount > 0 && (
@@ -246,11 +250,11 @@ export function AlbumsView({ albums, onOpen, onCreated, onError, quickId, onQuic
                     {a.mine && a.sharedWith > 0 && <p className="mt-0.5 flex items-center gap-1 text-xs text-white/80"><Share2 className="size-3.5 shrink-0" aria-hidden />Общий, людей: {a.sharedWith}</p>}
                   </div>
                 </button>
-                {a.mine && <button type="button" onClick={() => onFavorite(a)} aria-pressed={a.favorite} aria-label={a.favorite ? `Убрать «${a.name}» из избранных` : `Добавить «${a.name}» в избранные`} title={a.favorite ? 'Избранный альбом. Нажмите, чтобы убрать' : 'В избранные: такие альбомы идут первыми'}
+                {a.mine && !child && <button type="button" onClick={() => onFavorite(a)} aria-pressed={a.favorite} aria-label={a.favorite ? `Убрать «${a.name}» из избранных` : `Добавить «${a.name}» в избранные`} title={a.favorite ? 'Избранный альбом. Нажмите, чтобы убрать' : 'В избранные: такие альбомы идут первыми'}
                   className={`orb left-3 top-3 ${a.favorite ? 'orb-star opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
                   <Star className={`size-5 ${a.favorite ? 'fill-amber-300 text-amber-300' : 'text-white'}`} strokeWidth={1.75} aria-hidden />
                 </button>}
-                {a.mine && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
+                {a.mine && !child && <button type="button" onClick={() => onQuick(quick ? null : a)} aria-pressed={quick} aria-label={quick ? `Выключить быстрый альбом «${a.name}»` : `Сделать «${a.name}» быстрым альбомом`} title={quick ? 'Быстрый альбом. Нажмите, чтобы выключить' : 'Сделать быстрым: фото будут кладываться сюда одним нажатием'}
                   className={`orb right-3 top-3 ${quick ? 'orb-zap opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100'}`}>
                   <Zap className={`size-5 ${quick ? 'fill-white text-white' : 'text-white'}`} strokeWidth={1.75} aria-hidden />
                 </button>}

@@ -46,8 +46,9 @@ export class InternalUsersController {
       strField(o, 'login', 1, 64),
       strField(o, 'displayName', 1, 64),
       optStrField(o, 'password', 1, 200),
+      o.isChild === true,
     );
-    await this.audit.write('user.create', user.login);
+    await this.audit.write('user.create', user.login, o.isChild === true ? { child: true } : undefined);
     return { user: toPublic(user), password: generatedPassword };
   }
 
@@ -55,7 +56,11 @@ export class InternalUsersController {
   async update(@Param('login') login: string, @Body() body: unknown, @Req() req: Request): Promise<{ user: PublicUser }> {
     requireJson(req);
     const o = asObject(body);
-    const patch: { disabled?: boolean; quotaBytes?: number | null } = {};
+    const patch: { disabled?: boolean; quotaBytes?: number | null; isChild?: boolean } = {};
+    if (o.isChild !== undefined) {
+      if (typeof o.isChild !== 'boolean') throw new BadRequestException('Поле isChild: true или false');
+      patch.isChild = o.isChild;
+    }
     if (o.disabled !== undefined) {
       if (typeof o.disabled !== 'boolean') throw new BadRequestException('Поле disabled: true или false');
       patch.disabled = o.disabled;
@@ -283,6 +288,15 @@ export class InternalStorageController {
   async browseInfo(@Param('id') id: string, @Query('login') login?: string, @Query('from') from?: string, @Query('to') to?: string, @Query('q') q?: string, @Query('album') album?: string): ReturnType<AdminStorageService['fileInfo']> {
     const s = (v?: string) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
     return this.admin.fileInfo(id, { login: s(login), from: s(from), to: s(to), q: s(q)?.slice(0, 100), albumId: s(album) });
+  }
+
+  // Исправить дату снимка у файла (по жалобе человека): { takenAt: ISO-время UTC }. Пересчёт дат такой файл больше не трогает.
+  @Patch('browse/files/:id/taken')
+  async setTaken(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ takenAt: string }> {
+    requireJson(req);
+    const takenAt = await this.admin.setTaken(id, asObject(body).takenAt);
+    await this.audit.write('file.taken', id, { takenAt });
+    return { takenAt };
   }
 
   // Миниатюра, если она уже построена людьми (новых не строим: внутренний порт не запускает фоновых работ). Иначе 404.

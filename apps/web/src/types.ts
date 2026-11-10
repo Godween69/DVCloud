@@ -35,6 +35,7 @@ export interface User {
   login: string;
   displayName: string;
   isAdmin: boolean;
+  isChild: boolean; // детский аккаунт: упрощённый интерфейс, только просмотр
   quotaBytes: number | null;
 }
 

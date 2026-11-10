@@ -48,11 +48,17 @@ describe('предложенные альбомы (настоящий Postgres)'
     assert.equal((await jr('POST', '/api/albums/suggestions/dismiss', e.anna, { id: s[0].id })).status, 200);
     assert.equal((await jr('POST', '/api/albums/suggestions/dismiss', e.anna, { id: 'x' })).status, 400);
     assert.deepEqual((await api('GET', '/api/albums/suggestions', { cookie: e.anna })).json.suggestions.map((x: any) => x.name), ['12 июня 2026']);
-    const ok = await jr('POST', '/api/albums/suggestions/accept', e.anna, { id: s[1].id, name: 'Прогулка' });
+    // предпросмотр: файлы события; чужой человек его не видит
+    const pre = await api('GET', `/api/albums/suggestions/${s[1].id}/files`, { cookie: e.anna });
+    assert.equal(pre.status, 200);
+    assert.equal(pre.json.files.length, 5);
+    assert.equal((await api('GET', `/api/albums/suggestions/${s[1].id}/files`, { cookie: e.boris })).status, 404);
+    // убранный при просмотре файл в альбом не попадает
+    const ok = await jr('POST', '/api/albums/suggestions/accept', e.anna, { id: s[1].id, name: 'Прогулка', exclude: [pre.json.files[0].id] });
     assert.equal(ok.status, 200);
-    assert.equal(ok.json.added, 5);
+    assert.equal(ok.json.added, 4);
     assert.equal(ok.json.album.name, 'Прогулка');
-    assert.equal(ok.json.album.count, 5);
+    assert.equal(ok.json.album.count, 4);
     assert.deepEqual((await api('GET', '/api/albums/suggestions', { cookie: e.anna })).json.suggestions, [], 'файлы теперь в альбоме');
     assert.equal((await jr('POST', '/api/albums/suggestions/accept', e.anna, { id: s[1].id })).status, 404);
     assert.equal((await jr('POST', '/api/albums/suggestions/accept', e.boris, { id: s[0].id })).status, 404);
@@ -75,7 +81,7 @@ describe('предложенные альбомы (настоящий Postgres)'
     assert.equal(await count({ source: 'all', from: '2026-07-01' }), 10, 'только нижняя граница');
     assert.equal(await count({ source: 'all', to: '2026-06-30' }), 5, 'только верхняя граница');
     const walk = (await api('GET', '/api/albums', { cookie: e.anna })).json.albums.find((a: any) => a.name === 'Прогулка');
-    assert.equal(await count({ source: 'albums', albumIds: [walk.id] }), 5, 'источник: выбранный альбом');
+    assert.equal(await count({ source: 'albums', albumIds: [walk.id] }), 4, 'источник: выбранный альбом');
     assert.equal(await count({ source: 'albums', albumIds: [walk.id], from: '2026-07-01' }), 0);
     assert.equal(await count({ source: 'videos' }), 0);
     assert.equal((await jr('POST', '/api/albums/builder/count', e.anna, { source: 'all', from: '2026-07-05', to: '2026-07-01' })).status, 400);

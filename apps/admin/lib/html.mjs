@@ -78,6 +78,9 @@ html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figu
 .faces { list-style:none; margin:0 0 10px; padding:0; display:flex; flex-wrap:wrap; gap:14px; }
 .face { width:176px; display:flex; flex-direction:column; gap:6px; padding:8px; border:1px solid var(--line); border-radius:12px; background:var(--soft); }
 .facepic img { display:block; width:160px; height:160px; object-fit:cover; border-radius:10px; }
+.chk { display:inline-flex; align-items:center; gap:6px; font-size:14px; }
+.fixdate { margin-top:16px; padding-top:12px; border-top:1px solid var(--line, #ddd); }
+.fixdate h3 { margin:0 0 4px; font-size:15px; }
 .facemeta { font-size:13px; line-height:1.35; word-break:break-word; }
 .facepick { font-size:13px; display:flex; gap:6px; align-items:center; cursor:pointer; }
 .dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:12px; }
@@ -270,11 +273,13 @@ function userRow(u, csrf) {
   const meter = u.quotaBytes ? `<meter min="0" max="${u.quotaBytes}" low="${Math.floor(u.quotaBytes * 0.85)}" high="${Math.floor(u.quotaBytes * 0.9)}" optimum="0" value="${Math.min(used, u.quotaBytes)}" aria-label="Занято ${esc(formatSize(used))} из ${esc(formatQuota(u.quotaBytes))}"></meter>` : '';
   return `<li class="person${u.disabled ? ' off' : ''}">
 <div class="av ${avatarClass(u.login)}" aria-hidden="true">${esc([...String(u.displayName || u.login)][0] ?? '?')}</div>
-<div class="who"><b>${esc(u.displayName)}</b><span>${login}</span><div class="chips">${u.disabled ? '<span class="chip bad">отключён</span>' : '<span class="chip ok">активен</span>'}${u.twoFactor ? '<span class="chip ok">2FA включена</span>' : ''}${u.isAdmin ? '<span class="chip">админ</span>' : ''}</div></div>
+<div class="who"><b>${esc(u.displayName)}</b><span>${login}</span><div class="chips">${u.disabled ? '<span class="chip bad">отключён</span>' : '<span class="chip ok">активен</span>'}${u.twoFactor ? '<span class="chip ok">2FA включена</span>' : ''}${u.isAdmin ? '<span class="chip">админ</span>' : ''}${u.isChild ? '<span class="chip">ребёнок</span>' : ''}</div></div>
 <div class="quota"><small>${esc(formatSize(used))} из ${esc(formatQuota(u.quotaBytes))}</small>${meter}</div>
 <details class="menu"><summary aria-label="Действия: ${login}" title="Действия">⋯</summary><div class="pop">
 <div class="h">Квота</div>
 ${act('quota', 'Сохранить', '', `<input class="narrow" type="text" name="quota" value="${esc(quotaGb)}" placeholder="ГБ" aria-label="Квота, ГБ"><span class="muted">пусто: без лимита</span>`)}
+<div class="h">Роль</div>
+${act(u.isChild ? 'adult' : 'child', u.isChild ? 'Снять «Ребёнок»' : 'Сделать детским аккаунтом')}
 <div class="h">Доступ</div>
 ${act(u.disabled ? 'enable' : 'disable', u.disabled ? 'Включить' : 'Отключить', u.disabled ? '' : 'danger')}
 ${act('reset', 'Сбросить пароль', 'danger')}
@@ -295,6 +300,7 @@ ${flashHtml(flash, loadError)}
 <form method="post" action="/users">${csrfInput(csrf)}
 <input type="text" name="login" placeholder="логин (a-z, 0-9, _)" pattern="[a-z0-9_]{2,32}" required aria-label="Логин">
 <input type="text" name="displayName" placeholder="имя" maxlength="64" required aria-label="Имя">
+<label class="chk" title="Детский аккаунт: упрощённый интерфейс, только просмотр своих фото и поделённых альбомов. Потом галочку можно снять."><input type="checkbox" name="isChild" value="1"> Ребёнок</label>
 <button class="primary" type="submit">Создать</button></form></details></div>
 <ul class="people">${rows || '<li class="muted">Людей пока нет.</li>'}</ul>
 </section>`);
@@ -631,6 +637,17 @@ ${flashHtml(flash, loadError)}
 
 // ── Просмотр одного файла ──
 const WEB_IMAGE = /^image\/(jpeg|png|webp|gif|avif)$/i;
+// Следы даты в файле: что записано в EXIF и в имени. По ним видно, почему у снимка такая дата.
+function evidenceRows(ev) {
+  const rows = [];
+  const fmt = (v) => esc(String(v).slice(0, 19).replace('T', ' '));
+  const labels = { 'Производитель': 'Камера: производитель', 'Модель': 'Камера: модель', 'Программа': 'Программа', DateTimeOriginal: 'EXIF: дата съёмки', DateTimeDigitized: 'EXIF: дата оцифровки', DateTime: 'EXIF: дата изменения' };
+  for (const [k, v] of Object.entries(ev.exif ?? {})) rows.push(`<dt>${esc(labels[k] ?? k)}</dt><dd>${esc(v)}</dd>`);
+  if (ev.videoCreation) rows.push(`<dt>Видео: creation_time</dt><dd>${esc(ev.videoCreation)}</dd>`);
+  if (ev.nameDate) rows.push(`<dt>Дата в имени</dt><dd>${fmt(ev.nameDate)} (UTC)</dd>`);
+  return rows.join('\n');
+}
+
 export function filePage({ info: x, filter = {}, csrf, flash, loadError }) {
   const f = x.file;
   const qs = (extra = {}) => new URLSearchParams(Object.entries({ login: filter.login, from: filter.from, to: filter.to, q: filter.q, album: filter.album, ...extra }).filter(([, v]) => v)).toString();
@@ -653,7 +670,8 @@ ${flashHtml(flash, loadError)}
 <div class="fview"><div><div class="stage">${shown}</div>${conv}</div>
 <aside class="panel"><h2>${esc(f.name)}</h2>
 <dl class="facts"><dt>Владелец</dt><dd><b>${esc(f.owner)}</b></dd>
-<dt>Снято</dt><dd>${esc(f.takenAt.slice(0, 16).replace('T', ' '))} (UTC)</dd>
+<dt>Снято</dt><dd>${esc(f.takenAt.slice(0, 16).replace('T', ' '))} (UTC)${x.evidence ? ` <span class="muted">${esc({ meta: 'взято из метаданных файла', name: 'взято из имени файла', none: 'нет данных, взята дата загрузки', manual: 'исправлена вручную' }[x.evidence.used] ?? '')}</span>` : ''}</dd>
+${x.evidence ? evidenceRows(x.evidence) : ''}
 <dt>Загружено</dt><dd>${esc(f.createdAt.slice(0, 16).replace('T', ' '))} (UTC)</dd>
 <dt>Размер</dt><dd>${esc(formatSize(f.size))}${f.width && f.height ? `, ${f.width}×${f.height}` : ''}</dd>
 <dt>Тип</dt><dd>${esc(f.mime)}</dd>
@@ -665,7 +683,10 @@ ${flashHtml(flash, loadError)}
 <a class="btn" href="/files?login=${encodeURIComponent(f.owner)}">Все файлы: ${esc(f.owner)}</a>
 <a class="btn" href="/files?from=${esc(day)}&to=${esc(day)}">Все файлы за ${esc(day)}</a>
 <a class="btn" href="/files?q=${encodeURIComponent(f.name)}">Файлы с таким именем</a></div>
-<p class="muted">Раздать, передать или забрать в сейф можно у альбома: нажмите на название альбома выше.</p></aside></div>`, '', SCRIPT);
+<p class="muted">Раздать, передать или забрать в сейф можно у альбома: нажмите на название альбома выше.</p>
+<form class="fixdate" method="post" action="/files/${id}/taken">${csrfInput(csrf)}<h3>Исправить дату снимка</h3>
+<p class="muted">Если человек пожаловался, что у снимка другая дата. Время UTC. После исправления пересчёт дат этот файл не трогает.</p>
+<input type="datetime-local" name="takenAt" value="${esc(f.takenAt.slice(0, 16))}" required aria-label="Новая дата снимка (UTC)"> <button class="primary" type="submit">Сохранить дату</button></form></aside></div>`, '', SCRIPT);
 }
 
 // Передача альбома: подтверждение с точными числами. Само действие делает кнопка внизу (POST).

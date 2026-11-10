@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderMinus, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Smartphone, Image as ImageIcon, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronLeft, Info, ChevronRight, Download, FileQuestion, FolderMinus, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Smartphone, Image as ImageIcon, Trash2, X, Zap } from 'lucide-react';
+import { FileInfoPanel } from './FileInfoPanel';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl, previewUrl, thumbUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
@@ -15,6 +16,7 @@ interface Props {
   index: number;
   onIndex: (i: number) => void;
   onClose: () => void;
+  removeTitle?: string; // подпись кнопки «убрать» вместо стандартной для альбома
   fromAlbum?: boolean; // открыт альбом: Del убирает из альбома, а не в корзину
   onTrash?: (f: FileItem) => void; // нет у файлов чужого общего альбома
   onKind?: (f: FileItem, kind: 'screenshot' | 'photo') => void; // ручная смена «фото» / «скриншот» (только картинки)
@@ -63,7 +65,7 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, removeTitle, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
@@ -92,6 +94,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
   const remember = (id: string, a: AlbumRef[]) => { albums.current.set(id, a); bump((n) => n + 1); };
   const load = (id: string) => { if (!albums.current.has(id)) api.albumOf(id).then((a) => remember(id, a)).catch(() => remember(id, [])); };
   const [picking, setPicking] = useState(false);
+  const [infoOn, setInfoOn] = useState(false); // окно «Инфо»
   const drag = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const moved = useRef(false); // последнее нажатие было перетаскиванием, а не кликом
 
@@ -213,7 +216,8 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
       if (picking) return; // пока открыто окно выбора альбома, листать и закрывать просмотр нельзя
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      if (e.code === 'KeyA' && !readOnly && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
+      if (e.code === 'KeyI' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); setInfoOn((v) => !v); }
+      else if (e.code === 'KeyA' && !readOnly && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
       else if (e.key === 'Delete' && onTrashRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // Del = сразу в корзину, без вопроса (файл можно вернуть кнопкой «Восстановить»). Повтор от зажатой клавиши и быстрый второй
         // удар не считаются: иначе при зажатой клавише улетела бы вся серия снимков.
@@ -223,7 +227,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
         lastDelRef.current = now;
         onTrashRef.current(fileRef.current!);
       }
-      else if (e.key === 'Escape') onClose();
+      else if (e.key === 'Escape') { if (infoOn) setInfoOn(false); else onClose(); }
       else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
       else if (e.key === 'ArrowRight' && index < files.length - 1) onIndex(index + 1);
     };
@@ -234,7 +238,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [index, files.length, onClose, onIndex, picking]);
+  }, [index, files.length, onClose, onIndex, picking, infoOn]);
 
   if (!file) return null;
   const video = isVideo(file.mime);
@@ -257,6 +261,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
         </div>
         {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
+        <button type="button" className={`${btn} ${infoOn ? '!bg-violet-600' : ''}`} onClick={() => setInfoOn((v) => !v)} aria-pressed={infoOn} aria-label="Сведения о файле" title="Инфо о файле (клавиша I)"><Info className="size-5" aria-hidden /></button>
         {people && !video && <button type="button" className={`${btn} ${faces === 'on' ? '!bg-violet-600' : ''}`} onClick={() => setFaces(faces === 'on' ? 'off' : 'on')} aria-pressed={faces === 'on'} aria-label="Показать, кто на фото" title="Кто на фото"><ScanFace className="size-5" aria-hidden /></button>}
         {video && <button type="button" className={btn} onClick={() => setVfit(vfit === 'fit' ? 'orig' : 'fit')} aria-label={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по окну'} title={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по размеру окна'}>{vfit === 'fit' ? <Minimize2 className="size-5" aria-hidden /> : <Maximize2 className="size-5" aria-hidden />}</button>}
         {onKind && !video && !readOnly && (
@@ -265,7 +270,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
           </button>
         )}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label={fromAlbum ? 'Убрать из альбома' : 'В корзину'} title={fromAlbum ? 'Убрать из альбома (клавиша Del)' : 'В корзину (клавиша Del; файл можно восстановить)'}>{fromAlbum ? <FolderMinus className="size-5" aria-hidden /> : <Trash2 className="size-5" aria-hidden />}</button>}
+        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label={fromAlbum ? (removeTitle ?? 'Убрать из альбома') : 'В корзину'} title={fromAlbum ? `${removeTitle ?? 'Убрать из альбома'} (клавиша Del)` : 'В корзину (клавиша Del; файл можно восстановить)'}>{fromAlbum ? <FolderMinus className="size-5" aria-hidden /> : <Trash2 className="size-5" aria-hidden />}</button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">
@@ -314,6 +319,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onK
           {view.scale > 1 ? `${Math.round(view.scale * 100)}%. Клик вернёт масштаб` : 'Клик: дальше. Правый клик: назад. Колесо: масштаб. Клик по фону или Esc: закрыть'}
         </p>
       </div>
+      {infoOn && <FileInfoPanel id={file.id} onClose={() => setInfoOn(false)} />}
       {picking && (
         <AlbumPicker ids={[file.id]} fitKind={video ? 'videos' : file.screenshot ? 'screenshots' : 'photos'} current={list ?? []} onClose={() => setPicking(false)} onError={onError}
           onDone={(r: PickResult) => { setPicking(false); remember(file.id, r.now); onAlbumChanged(file, r); }} />

@@ -675,6 +675,12 @@ export class PeopleService {
     await this.rejectDets(p.id, [d.id]);
   }
 
+  // «Не знаю, кто это» в очереди догадок: эта находка больше не спрашивается у этого человека.
+  async skipDetection(userId: string, detectionId: string): Promise<void> {
+    const d = await this.detection(userId, detectionId);
+    await this.db.query('INSERT INTO face_skips (user_id, detection_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, d.id]);
+  }
+
   // «Это не человек» (кот или собака, принятые за лицо): находка больше не спрашивается и не попадает в группы.
   // Если на фото есть найденный питомец, его можно назвать обычным образом. ignored=false возвращает находку.
   async setIgnored(userId: string, detectionId: string, ignored: boolean): Promise<{ petsEnabled: boolean; petsOnFile: boolean }> {
@@ -745,6 +751,7 @@ export class PeopleService {
       await this.db.query<{ id: string; file_id: string; vector: Buffer }>(
         `SELECT DISTINCT ON (d.id) d.id, f.id AS file_id, d.vector FROM detections d JOIN files f ON f.blob_id = d.blob_id AND f.owner_id = $1 AND f.trashed_at IS NULL
          WHERE d.kind = 'face' AND NOT d.ignored AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id)
+           AND NOT EXISTS (SELECT 1 FROM face_skips sk WHERE sk.detection_id = d.id AND sk.user_id = $1)
          ORDER BY d.id DESC LIMIT 5000`,
         [userId],
       )

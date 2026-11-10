@@ -105,6 +105,16 @@ export class PeopleController {
     return { guesses: await this.people.guesses(req.user.id, n) };
   }
 
+  // «Не знаю»: {detectionId}. Находка пропадает из очереди догадок.
+  @Post('skip')
+  @HttpCode(200)
+  async skip(@Req() req: Req_, @Body() body: unknown): Promise<{ ok: true }> {
+    const o = obj(body);
+    if (typeof o.detectionId !== 'string') throw new BadRequestException('Нужен detectionId');
+    await this.people.skipDetection(req.user.id, o.detectionId);
+    return { ok: true };
+  }
+
   // «Не он» для одной находки: {detectionId, personId}.
   @Post('reject')
   @HttpCode(200)
