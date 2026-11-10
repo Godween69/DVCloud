@@ -83,15 +83,6 @@ body {
   -webkit-backdrop-filter: blur(24px) saturate(1.5);
   backdrop-filter: blur(24px) saturate(1.5);
 }
-/* Выпуклая панель без своего цвета и рамки: только мягкий свет сверху и тень снизу, как рельеф на фоне */
-.raised {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 0 rgba(15, 23, 42, 0.05), 0 8px 18px -12px rgba(15, 23, 42, 0.35);
-}
-:root:not(.light) .raised {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -1px 0 rgba(0, 0, 0, 0.25), 0 8px 18px -12px rgba(0, 0, 0, 0.6);
-}
 /* Панели навигации: почти сплошной фон, лёгкое размытие только как мягкий переход */
 .glass.glass-bar { background: var(--bar-bg); -webkit-backdrop-filter: none; backdrop-filter: none; } /* фон почти сплошной, размытие не нужно: оно перерисовывалось при каждой прокрутке и тормозило ленту */
 /* Если браузер не умеет размывать фон, панели остаются читаемыми */
