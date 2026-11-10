@@ -42,7 +42,7 @@ describe('настройки превью и видео в админке (на�
 
   it('по умолчанию: превью включены (2000, 80), видео выключено', async () => {
     const o = await intCall('GET', '/internal/media');
-    assert.deepEqual(o.settings, { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: false, petsEnabled: false });
+    assert.deepEqual(o.settings, { previewEnabled: true, previewMaxSide: 2000, previewQuality: 80, videoEnabled: false, videoHeight: 720, videoCrf: 28, timezone: 'UTC', searchEnabled: false, searchCutoff: 80, facesEnabled: false, petsEnabled: false, facesSim: 45 });
     assert.equal(o.previews.files, 0);
   });
 
@@ -95,6 +95,30 @@ describe('настройки превью и видео в админке (на�
     } finally {
       await c.end();
     }
+  });
+
+  it('ручная смена «фото» и «скриншот»: выбор сильнее автоматики, видно в списке, чужое не тронуть', async () => {
+    const kinds = async (k: string) => (await api('GET', `/api/files?kind=${k}`, { cookie: e.anna })).json.files as any[];
+    const post = (cookie: string, body: unknown) => api('POST', '/api/files/kind', { cookie, body: JSON.stringify(body), type: 'application/json' });
+    const photo = (await upload(e.anna, 'plain-photo.jpg', await sharp({ create: { width: 800, height: 600, channels: 3, background: '#445566' } }).jpeg().toBuffer())).json.file.id;
+    const shot = (await upload(e.anna, 'real-shot.png', await sharp({ create: { width: 1080, height: 2340, channels: 3, background: '#665544' } }).png().toBuffer())).json.file.id;
+    assert.ok(await wait(async () => (await kinds('screenshots')).some((f) => f.id === shot)), 'автоматика нашла скриншот');
+    assert.ok((await kinds('photos')).some((f) => f.id === photo));
+    assert.equal((await post(e.anna, { kind: 'screenshot', ids: [photo] })).json.changed, 1);
+    assert.ok((await kinds('screenshots')).some((f) => f.id === photo), 'фото отнесено к скриншотам');
+    assert.ok(!(await kinds('photos')).some((f) => f.id === photo));
+    assert.equal((await kinds('screenshots')).find((f) => f.id === photo).screenshot, true, 'в списке видно, что это скриншот');
+    assert.ok(!(await kinds('library')).some((f) => f.id === photo || f.id === shot), 'в «Библиотеке» скриншотов нет, в том числе отмеченных вручную');
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [shot] })).json.changed, 1);
+    assert.ok((await kinds('photos')).some((f) => f.id === shot), 'скриншот отнесён к фото');
+    assert.ok((await kinds('library')).some((f) => f.id === shot), 'отнесённый к фото попал в «Библиотеку»');
+    assert.ok(!(await kinds('screenshots')).some((f) => f.id === shot));
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [shot] })).json.changed, 0, 'повтор ничего не меняет');
+    assert.equal((await post(e.boris, { kind: 'screenshot', ids: [shot] })).json.changed, 0, 'чужие файлы не тронуть');
+    assert.equal((await post(e.anna, { kind: 'другое', ids: [shot] })).status, 400);
+    assert.equal((await post(e.anna, { kind: 'photo', ids: [] })).status, 400);
+    assert.equal((await post(e.anna, { kind: 'auto', ids: [photo, shot] })).json.changed, 2);
+    assert.ok((await kinds('photos')).some((f) => f.id === photo) && (await kinds('screenshots')).some((f) => f.id === shot), 'после сброса снова решает автоматика');
   });
 
   it('дата съёмки: метаданные главнее имени файла, имя главнее даты изменения, пояс берётся из настроек', async () => {
@@ -227,6 +251,21 @@ describe('настройки превью и видео в админке (на�
     } finally {
       await c.end();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('кэш статистики «Медиа»: повторный ответ мгновенный, но настройки всегда свежие, а после изменений кэш сбрасывается', async () => {
+    const was = process.env.DVCLOUD_MEDIA_CACHE_SEC;
+    process.env.DVCLOUD_MEDIA_CACHE_SEC = '300';
+    try {
+      const first = await intCall('GET', '/internal/media');
+      assert.equal((await patch({ previewQuality: first.settings.previewQuality === 80 ? 75 : 80 })).status, 200);
+      const second = await intCall('GET', '/internal/media');
+      assert.notEqual(second.settings.previewQuality, first.settings.previewQuality, 'настройки не должны отставать');
+      // из кэша: статистика та же, что и в прошлый раз (поля, которых настройки не касаются)
+      assert.deepEqual(second.search, (await intCall('GET', '/internal/media')).search);
+    } finally {
+      if (was === undefined) delete process.env.DVCLOUD_MEDIA_CACHE_SEC; else process.env.DVCLOUD_MEDIA_CACHE_SEC = was;
     }
   });
 });

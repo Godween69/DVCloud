@@ -4,7 +4,7 @@ import { SessionGuard } from '../auth/session.guard';
 import { asObject, requireJson } from '../http';
 import { UserRow } from '../users/users.service';
 import { parseIds } from './albums.service';
-import { ClaimResult, Estimate, FilesService, MAX_CLAIM, PublicFile, toPublicFile } from './files.service';
+import { ClaimResult, Estimate, FeedKind, FilesService, MAX_CLAIM, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
@@ -50,20 +50,20 @@ export class FilesController {
 
   @Get()
   async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('trashed') trashed?: string, @Query('limit') limit?: string, @Query('before') before?: string, @Query('kind') kind?: string, @Query('at') at?: string, @Query('tz') tz?: string, @Query('after') after?: string, @Query('person') person?: string): Promise<{ files: PublicFile[]; next: string | null; prev: string | null }> {
-    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots' && kind !== 'library') throw new BadRequestException('kind: library, photos, videos или screenshots');
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
-    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as 'photos' | 'videos' | 'screenshots' | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined, person: typeof person === 'string' ? person : undefined });
+    const r = await this.files.list(req.user.id, { trashed: trashed === '1', limit: lim, before: typeof before === 'string' ? before : undefined, kind: kind as FeedKind | undefined, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined, person: typeof person === 'string' ? person : undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { files: r.files.map(toPublicFile), next: r.next, prev: r.prev };
   }
 
   // Оглавление по месяцам для полосы времени (до маршрутов с :id).
   @Get('timeline')
-  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
-    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots') throw new BadRequestException('kind: photos, videos или screenshots');
+  async timeline(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('kind') kind?: string, @Query('tz') tz?: string, @Query('person') person?: string): Promise<{ months: { y: number; m: number; n: number }[] }> {
+    if (kind !== undefined && kind !== 'photos' && kind !== 'videos' && kind !== 'screenshots' && kind !== 'library') throw new BadRequestException('kind: library, photos, videos или screenshots');
     res.setHeader('Cache-Control', 'no-store');
-    return { months: await this.files.timeline(req.user.id, kind as 'photos' | 'videos' | 'screenshots' | undefined, typeof tz === 'string' ? tz : 'UTC') };
+    return { months: await this.files.timeline(req.user.id, kind as FeedKind | undefined, typeof tz === 'string' ? tz : 'UTC', { person: typeof person === 'string' ? person : undefined }) };
   }
 
   @Get('usage')
@@ -118,6 +118,17 @@ export class FilesController {
     return { changed: await this.files.bulk(req.user, o.action, parseIds(o.ids)) };
   }
 
+  // Ручная смена вида картинки: {kind: 'screenshot' | 'photo' | 'auto', ids}. Видео пропускаются.
+  @Post('kind')
+  @HttpCode(200)
+  async kind(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ changed: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (o.kind !== 'screenshot' && o.kind !== 'photo' && o.kind !== 'auto') throw new BadRequestException('kind: screenshot, photo или auto');
+    return { changed: await this.files.setKind(req.user, o.kind, parseIds(o.ids)) };
+  }
+
   // Очистить корзину: записи человека исчезают, файлы на диске остаются до решения администратора.
   @Delete('trash')
   async emptyTrash(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ removed: number }> {
@@ -126,11 +137,12 @@ export class FilesController {
   }
 
   // Миниатюра фото (маленький WebP). id неизменен и содержимое тоже, поэтому браузер может хранить её год.
-  // Если миниатюру сделать нельзя (видео, HEIC, битый файл), отвечаем 404, и сайт показывает значок.
+  // Если миниатюру сделать нельзя (битый файл), отвечаем 404, и сайт показывает значок.
   @Get(':id/thumb')
-  async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
+  async thumb(@Req() req: Req_, @Res() res: Response, @Param('id') id: string, @Query('fit') fit?: string): Promise<void> {
     const f = await this.files.getReadable(req.user.id, id);
-    const rel = await this.thumbs.ensure(f); // скрытые файлы тоже: они остаются на месте
+    // fit=1: миниатюра целиком в пропорциях снимка (для «Умной плитки»), иначе квадрат
+    const rel = fit === '1' ? await this.thumbs.ensureFit(f) : await this.thumbs.ensure(f); // скрытые файлы тоже: они остаются на месте
     if (!rel) {
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.status(404).json({ message: 'Миниатюры нет' });
@@ -150,11 +162,11 @@ export class FilesController {
     });
   }
 
-  // Превью для просмотра (WebP до 2000 px). Если сделать нельзя (видео, HEIC), 404, и сайт открывает оригинал.
+  // Превью для просмотра (WebP до 2000 px). Если сделать нельзя (видео, битый файл), 404, и сайт открывает оригинал.
   @Get(':id/preview')
   async preview(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
     const f = await this.files.getReadable(req.user.id, id);
-    const rel = f.trashed_at ? null : await this.thumbs.ensurePreview(f);
+    const rel = await this.thumbs.ensurePreview(f); // в корзине файл виден только владельцу (getReadable), ему превью можно: посмотреть, что за снимок
     if (!rel) {
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.status(404).json({ message: 'Превью нет' });
@@ -189,6 +201,13 @@ export class FilesController {
     }, (err) => {
       if (err && !res.headersSent) res.status(404).json({ message: 'Копии для просмотра нет' });
     });
+  }
+
+  // Окно «Инфо»: метаданные файла и следы даты съёмки.
+  @Get(':id/info')
+  async info(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): ReturnType<FilesService['info']> {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.files.info(req.user.id, id);
   }
 
   // Отдача оригинала. sendFile сам умеет Range (докачка и перемотка видео) и не выходит за каталог данных.

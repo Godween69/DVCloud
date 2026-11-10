@@ -191,3 +191,66 @@ describe('альбомы (настоящий Postgres и диск)', () => {
     assert.equal((await api('GET', '/api/albums', { cookie: e.anna })).json.albums.find((x: any) => x.name === 'Временный').count, 0);
   });
 });
+
+describe('альбомы по типам и избранные (настоящий Postgres и диск)', () => {
+  const e = startEnv();
+  const { api, upload, jpeg } = e;
+  let photo = '';
+  let shot = '';
+  let video = '';
+  const ids: Record<string, string> = {};
+  const mk = async (name: string, kind?: string) => {
+    const r = await api('POST', '/api/albums', { cookie: e.anna, body: body(kind === undefined ? { name } : { name, kind }), ...J });
+    assert.equal(r.status, 201, JSON.stringify(r.json));
+    ids[name] = r.json.album.id;
+    return r.json.album;
+  };
+  before(async () => {
+    await e.start();
+    photo = (await upload(e.anna, 'p.jpg', jpeg('photo'), '2026-05-01T10:00:00Z')).json.file.id;
+    shot = (await upload(e.anna, 's.jpg', jpeg('shot'), '2026-05-02T10:00:00Z')).json.file.id;
+    video = (await upload(e.anna, 'v.mp4', Buffer.from('0000ftypmp42' + 'x'.repeat(500)), '2026-05-03T10:00:00Z')).json.file.id;
+    assert.equal((await api('POST', '/api/files/kind', { cookie: e.anna, body: body({ kind: 'screenshot', ids: [shot] }), ...J })).status, 200);
+  });
+  after(async () => { await e.stop(); });
+
+  it('тип задаётся при создании, по умолчанию универсальный, неверный тип отклоняется', async () => {
+    assert.equal((await mk('Всё')).kind, 'any');
+    assert.equal((await mk('Фотки', 'photos')).kind, 'photos');
+    assert.equal((await mk('Ролики', 'videos')).kind, 'videos');
+    assert.equal((await mk('Экраны', 'screenshots')).kind, 'screenshots');
+    assert.equal((await api('POST', '/api/albums', { cookie: e.anna, body: body({ name: 'Левый', kind: 'music' }), ...J })).status, 400);
+    assert.equal((await api('PATCH', `/api/albums/${ids['Экраны']}`, { cookie: e.anna, body: body({ name: 'Экраны', kind: 'photos' }), ...J })).json.album.kind, 'screenshots', 'тип после создания не меняется');
+  });
+
+  it('альбом принимает только свой тип, остальное пропускается и считается', async () => {
+    const all = [photo, shot, video];
+    const add = async (name: string) => (await api('POST', `/api/albums/${ids[name]}/add`, { cookie: e.anna, body: body({ ids: all }), ...J })).json;
+    assert.deepEqual(await add('Всё'), { added: 3, rejected: 0 });
+    assert.deepEqual(await add('Фотки'), { added: 1, rejected: 2 });
+    assert.deepEqual(await add('Ролики'), { added: 1, rejected: 2 });
+    assert.deepEqual(await add('Экраны'), { added: 1, rejected: 2 });
+    const fid = (name: string) => api('GET', `/api/albums/${ids[name]}/ids`, { cookie: e.anna }).then((r) => r.json.ids);
+    assert.deepEqual(await fid('Фотки'), [photo]);
+    assert.deepEqual(await fid('Ролики'), [video]);
+    assert.deepEqual(await fid('Экраны'), [shot]);
+  });
+
+  it('порядок: избранные первыми, потом по типу (универсальные, фото, видео, скриншоты), потом тяжёлые вперёд', async () => {
+    const names = async () => (await api('GET', '/api/albums', { cookie: e.anna })).json.albums.map((a: any) => a.name);
+    assert.deepEqual(await names(), ['Всё', 'Фотки', 'Ролики', 'Экраны']);
+    const f = await api('PATCH', `/api/albums/${ids['Экраны']}/favorite`, { cookie: e.anna, body: body({ favorite: true }), ...J });
+    assert.equal(f.status, 200);
+    assert.equal(f.json.album.favorite, true);
+    assert.deepEqual(await names(), ['Экраны', 'Всё', 'Фотки', 'Ролики']);
+    assert.equal((await api('PATCH', `/api/albums/${ids['Экраны']}/favorite`, { cookie: e.anna, body: body({ favorite: 'да' }), ...J })).status, 400);
+    assert.equal((await api('PATCH', `/api/albums/${ids['Экраны']}/favorite`, { cookie: e.boris, body: body({ favorite: true }), ...J })).status, 404, 'чужой альбом');
+    // среди одного типа тяжёлые вперёд
+    const small = await mk('Мало', 'photos');
+    const big = await mk('Много', 'photos');
+    const extra = (await upload(e.anna, 'p2.jpg', jpeg('photo2'), '2026-05-04T10:00:00Z')).json.file.id;
+    await api('POST', `/api/albums/${big.id}/add`, { cookie: e.anna, body: body({ ids: [photo, extra] }), ...J });
+    await api('POST', `/api/albums/${small.id}/add`, { cookie: e.anna, body: body({ ids: [photo] }), ...J });
+    assert.deepEqual((await names()).filter((n: string) => ['Фотки', 'Мало', 'Много'].includes(n)), ['Много', 'Мало', 'Фотки']); // при равенстве по названию
+  });
+});

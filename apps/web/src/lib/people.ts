@@ -36,3 +36,13 @@ export function sameName(list: PeopleGroup[], text: string, kind: FaceBox['kind'
 export function sortGroups(list: PeopleGroup[]): PeopleGroup[] {
   return [...list].sort((a, b) => Number(!!b.name) - Number(!!a.name) || b.count - a.count);
 }
+
+// Объединение нескольких групп: куда сливать и чьи имена пропадут. Целью становится названная группа (из названных та, где
+// больше файлов), а если названных нет, самая большая. Имена остальных названных групп после слияния исчезнут.
+export function mergePlan(selected: PeopleGroup[]): { into: PeopleGroup; from: PeopleGroup[]; lostNames: string[] } | null {
+  const kind = selected[0]?.kind;
+  if (selected.length < 2 || selected.some((p) => p.kind !== kind)) return null;
+  const into = [...selected].sort((a, b) => Number(!!b.name) - Number(!!a.name) || b.count - a.count)[0];
+  const from = selected.filter((p) => p.id !== into.id);
+  return { into, from, lostNames: from.filter((p) => p.name).map((p) => p.name!) };
+}

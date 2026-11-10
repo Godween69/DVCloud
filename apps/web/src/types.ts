@@ -8,6 +8,9 @@ export interface FileItem {
   takenAt: string;
   createdAt: string;
   trashedAt: string | null;
+  width?: number | null; // размеры снимка (нужны «Умной плитке»), могут быть неизвестны
+  height?: number | null;
+  screenshot?: boolean; // картинка считается скриншотом (автоматически или по ручной отметке)
 }
 
 // Похожие фото (см. docs/SIMILAR.md): группа, лучший снимок первым
@@ -32,6 +35,7 @@ export interface User {
   login: string;
   displayName: string;
   isAdmin: boolean;
+  isChild: boolean; // детский аккаунт: упрощённый интерфейс, только просмотр
   quotaBytes: number | null;
 }
 
@@ -50,6 +54,18 @@ export interface Album {
   mine: boolean; // false: альбом чужой, им поделились
   ownerName: string | null;
   sharedWith: number;
+  show: AlbumShow; // где файлы альбома видны в ленте (внутри самого альбома видны всегда)
+  kind: AlbumKind; // тип выбирается при создании: универсальный или только фото, видео, скриншоты
+  favorite: boolean; // избранные альбомы идут первыми
+}
+
+export type AlbumKind = 'any' | 'photos' | 'videos' | 'screenshots';
+
+export interface AlbumShow {
+  library: boolean;
+  photos: boolean;
+  videos: boolean;
+  screenshots: boolean;
 }
 
 export interface Person {
@@ -125,10 +141,15 @@ export interface PeopleGroup {
   id: string;
   name: string | null; // null: группа ещё не названа
   kind: 'person' | 'pet';
-  hidden: boolean;
+  hidden: boolean; // скрыто у этого человека (личный выбор)
+  shared: boolean; // на группе фото нескольких людей: она общая
+  canName: boolean; // можно дать имя (безымянной — любому, смена имени — только администратору)
+  canMerge: boolean; // можно объединять и распускать (названные и общие — только администратору)
   count: number; // файлов
   cover: string; // номер находки для обложки
 }
+export interface FaceGuess { detectionId: string; fileId: string; personId: string; name: string; sim: number }
+export interface AlbumSuggestion { id: string; start: string; end: string; count: number; name: string; coverFileId: string }
 export interface PeopleList {
   enabled: { faces: boolean; pets: boolean };
   people: PeopleGroup[];
@@ -143,4 +164,27 @@ export interface FaceBox {
 export interface FoundPerson {
   id: string;
   name: string;
+}
+
+// Раздел «Яндекс Диск» (см. docs/YANDEX.md).
+export type YandexItemState = 'new' | 'queued' | 'done' | 'waiting' | 'failed' | 'skipped';
+export interface YandexStatus {
+  enabled: boolean;
+  connected: boolean;
+  state?: 'connected' | 'expired';
+  list?: { state: 'idle' | 'running' | 'error'; note: string | null; at: string | null };
+  counts?: Record<YandexItemState, number>;
+  bytes?: { total: number; done: number; remaining: number };
+  years?: { year: number | null; n: number; bytes: number; todo: number }[];
+  import?: { state: 'idle' | 'running' | 'paused'; note: string | null; intoAlbum: boolean; current: { name: string; size: number; got: number } | null; speed: number; etaSec: number | null };
+  sync?: { auto: boolean; days: number; autoImport: boolean; at: string | null; found: number | null; foundBytes: number | null; pending: number };
+  quota?: { freeBytes: number | null; needBytes: number; fits: boolean };
+}
+export interface YandexItem {
+  name: string;
+  size: number;
+  takenHint: string | null;
+  state: YandexItemState;
+  error: string | null;
+  fileId: string | null;
 }

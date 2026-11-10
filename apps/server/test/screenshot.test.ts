@@ -17,3 +17,11 @@ test('фото: данные камеры, обычные пропорции, м
   assert.ok(!looksLikeScreenshot(f('jpeg', false, 1080, 1080)));
   assert.ok(!looksLikeScreenshot(f('png', false, 120, 120)), 'иконка');
 });
+
+test('квадратные и почти квадратные PNG не скриншоты, экран планшета и телефона скриншоты', () => {
+  assert.ok(!looksLikeScreenshot(f('png', false, 2000, 2000)), 'квадратная картинка');
+  assert.ok(!looksLikeScreenshot(f('png', false, 1080, 1080)));
+  assert.ok(!looksLikeScreenshot(f('png', false, 1600, 1350)), 'почти квадратная');
+  assert.ok(looksLikeScreenshot(f('png', false, 2048, 1536)), 'экран планшета 4:3');
+  assert.ok(looksLikeScreenshot(f('png', false, 1284, 2778)));
+});

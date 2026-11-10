@@ -1,8 +1,9 @@
 import { motion } from 'framer-motion';
-import { Check, FolderPlus, Loader2, X, Zap, ZapOff } from 'lucide-react';
+import { Check, FolderPlus, Loader2, Star, X, Zap, ZapOff } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError } from '../api';
-import type { Album, AlbumRef } from '../types';
+import { KIND_LABEL, kindRank } from '../lib/albumKinds';
+import type { Album, AlbumKind, AlbumRef } from '../types';
 
 interface Props {
   ids: string[]; // что переносим в альбом (один файл из просмотра или выбранные в сетке)
@@ -11,24 +12,27 @@ interface Props {
   onDone: (r: PickResult) => void;
   onError: (message: string) => void;
   target?: boolean; // выбираем «быстрый альбом»: файлы никуда не кладём, только запоминаем выбор
+  fitKind?: Exclude<AlbumKind, 'any'>; // что кладём (все файлы одного вида): подходящие альбомы показываются первыми
 }
 
 export interface PickResult {
   album: AlbumRef | null;
   n: number;
+  rejected?: number; // сколько файлов не подошло по типу альбома
   removed: boolean; // true: файл убран из album
   now: AlbumRef[]; // в каких альбомах файл теперь (для одного файла)
 }
 
 // Окно выбора альбома: «В альбом», а если файл уже лежит в альбоме, «Сменить альбом».
-export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: Props) {
+export function AlbumPicker({ ids, current, onClose, onDone, onError, target, fitKind }: Props) {
   const [albums, setAlbums] = useState<Album[] | null>(null);
   const [name, setName] = useState('');
+  const [newKind, setNewKind] = useState<AlbumKind>(fitKind ?? 'any');
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.albums().then((l) => setAlbums(l.filter((a) => a.mine))).catch((e) => { onError(e instanceof ApiError ? e.message : 'Не удалось загрузить альбомы'); onClose(); });
+    api.albums().then((l) => setAlbums(l.filter((a) => a.mine).sort((a, b) => Number(b.favorite) - Number(a.favorite) || kindRank(a.kind, fitKind) - kindRank(b.kind, fitKind) || b.count - a.count))).catch((e) => { onError(e instanceof ApiError ? e.message : 'Не удалось загрузить альбомы'); onClose(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -40,12 +44,12 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
 
   const single = !target && ids.length === 1;
   const has = (id: string) => current.some((c) => c.id === id);
-  async function run(job: () => Promise<{ album: AlbumRef | null; n: number; removed?: boolean }>) {
+  async function run(job: () => Promise<{ album: AlbumRef | null; n: number; rejected?: number; removed?: boolean }>) {
     setBusy(true);
     try {
       const r = await job();
       const now = r.album && !r.removed ? [...current.filter((c) => c.id !== r.album!.id), r.album] : current.filter((c) => c.id !== r.album?.id);
-      onDone({ album: r.album, n: r.n, removed: r.removed === true, now });
+      onDone({ album: r.album, n: r.n, rejected: r.rejected, removed: r.removed === true, now });
     } catch (e) {
       onError(e instanceof ApiError ? e.message : 'Не получилось');
       setBusy(false);
@@ -54,15 +58,19 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
   const pick = (a: Album) => run(async () => {
     const ref = { id: a.id, name: a.name };
     if (single && has(a.id)) return { album: ref, n: await api.albumRemoveFiles(a.id, ids), removed: true }; // повторное нажатие убирает фото из альбома
-    return { album: ref, n: target ? 0 : await api.albumAdd(a.id, ids) };
+    if (target) return { album: ref, n: 0 };
+    const r = await api.albumAdd(a.id, ids);
+    return { album: ref, n: r.added, rejected: r.rejected };
   });
   const create = (e: FormEvent) => {
     e.preventDefault();
     const n = name.trim();
     if (!n) return;
     run(async () => {
-      const a = await api.albumCreate(n);
-      return { album: { id: a.id, name: a.name }, n: target ? 0 : await api.albumAdd(a.id, ids) };
+      const a = await api.albumCreate(n, newKind);
+      if (target) return { album: { id: a.id, name: a.name }, n: 0 };
+      const r = await api.albumAdd(a.id, ids);
+      return { album: { id: a.id, name: a.name }, n: r.added, rejected: r.rejected };
     });
   };
   const leave = () => run(async () => ({ album: null, n: 0 }));
@@ -70,7 +78,7 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
   const row = 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-50';
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" onClick={onClose} onTouchStart={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
-      <motion.div role="dialog" aria-modal="true" aria-label={target ? 'Быстрый альбом' : 'В альбом'} initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col rounded-t-2xl bg-paper-50 text-gray-900 shadow-2xl sm:rounded-2xl dark:bg-gray-900 dark:text-gray-100">
+      <motion.div role="dialog" aria-modal="true" aria-label={target ? 'Быстрый альбом' : 'В альбом'} initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-md flex-col glass-strong rounded-t-3xl text-gray-900 sm:rounded-3xl dark:text-gray-100">
         <div className="flex items-center gap-2 border-b border-paper-300 px-4 py-3 dark:border-gray-800">
           <h2 className="flex-1 text-lg font-semibold">{target ? 'Быстрый альбом' : 'В альбом'}{!target && ids.length > 1 ? ` (${ids.length})` : ''}</h2>
           <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 items-center justify-center rounded-lg text-gray-500 hover:bg-paper-200 dark:hover:bg-gray-800"><X className="size-5" aria-hidden /></button>
@@ -86,7 +94,9 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
               {albums.map((a) => (
                 <li key={a.id}>
                   <button type="button" disabled={busy} onClick={() => pick(a)} className={`${row} hover:bg-paper-200 dark:hover:bg-gray-800`}>
-                    <span className="min-w-0 flex-1 truncate font-medium">{a.name}</span>
+                    {a.favorite && <Star className="size-3.5 shrink-0 fill-amber-400 text-amber-400" aria-label="Избранный" />}
+                    <span className={`min-w-0 flex-1 truncate font-medium ${fitKind && a.kind !== 'any' && a.kind !== fitKind ? 'opacity-50' : ''}`}>{a.name}</span>
+                    {a.kind !== 'any' && <span className="shrink-0 rounded bg-paper-200 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-400">{KIND_LABEL[a.kind]}</span>}
                     {has(a.id) ? <span className="flex items-center gap-1 text-violet-700 dark:text-violet-300"><Check className="size-4" aria-hidden />{target ? 'быстрый' : 'здесь, нажмите чтобы убрать'}</span> : <span className="text-gray-500">{a.count}</span>}
                   </button>
                 </li>
@@ -101,6 +111,9 @@ export function AlbumPicker({ ids, current, onClose, onDone, onError, target }: 
         </div>
         <form onSubmit={create} className="flex gap-2 border-t border-paper-300 p-3 dark:border-gray-800">
           <input ref={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Новый альбом" aria-label="Название нового альбома" className="min-w-0 flex-1 rounded-lg border border-paper-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-950" />
+          <select value={newKind} onChange={(e) => setNewKind(e.target.value as AlbumKind)} aria-label="Тип нового альбома" title="Тип выбирается один раз и потом не меняется" className="rounded-lg border border-paper-300 bg-white px-2 py-2 text-sm dark:border-gray-700 dark:bg-gray-950">
+            {(['any', 'photos', 'videos', 'screenshots'] as const).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+          </select>
           <button type="submit" disabled={busy || !name.trim()} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">
             <FolderPlus className="size-4" aria-hidden /> Создать
           </button>

@@ -6,13 +6,13 @@ import { ChallengePanel } from './ChallengePanel';
 import { QrCode } from './QrCode';
 
 const field =
-  'mt-1.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-600';
+  'mt-1.5 w-full rounded-lg border border-paper-300 bg-white/70 px-3.5 py-2.5 text-base text-gray-900 placeholder:text-gray-400 dark:border-white/10 dark:bg-white/5 dark:text-gray-100 dark:placeholder:text-gray-500';
 const primary = 'flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-70';
 const quiet = 'rounded-lg border border-paper-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-paper-200 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800';
 
 function Card({ icon, title, note, children }: { icon: ReactNode; title: string; note: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-paper-300 bg-paper-50 p-5 dark:border-gray-800 dark:bg-gray-900">
+    <section className="glass rounded-2xl p-5">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-600/10 text-violet-700 dark:text-violet-300" aria-hidden>{icon}</span>
         <div>

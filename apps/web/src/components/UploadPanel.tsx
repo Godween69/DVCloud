@@ -26,7 +26,7 @@ export function UploadPanel({ jobs, onClear, onCancel, onRetry }: { jobs: Upload
   return (
     <AnimatePresence>
       {jobs.length > 0 && (
-        <motion.aside initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 24 }} aria-label="Загрузка файлов" className="fixed bottom-3 right-3 z-30 w-[calc(100vw-1.5rem)] max-w-sm overflow-hidden rounded-xl border border-paper-300 bg-paper-50 shadow-xl dark:border-gray-800 dark:bg-gray-900">
+        <motion.aside initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 24 }} aria-label="Загрузка файлов" className="fixed bottom-20 right-3 z-30 sm:bottom-3 w-[calc(100vw-1.5rem)] max-w-sm glass-strong overflow-hidden rounded-2xl">
           <div className="border-b border-paper-300 px-4 py-2.5 dark:border-gray-800">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-gray-900 dark:text-white" aria-live="polite">{allDone ? (s.failed ? `Готово, не загрузились: ${s.failed}` : 'Загрузка завершена') : `Загружено ${s.finished} из ${s.total}`}</p>

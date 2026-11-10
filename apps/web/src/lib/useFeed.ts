@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { FileItem } from '../types';
 import { insertSorted } from './group';
 
 // Список файлов с подгрузкой страницами. trashed=true даёт корзину, albumId даёт файлы одного альбома.
-export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'videos' | 'screenshots', person?: string) {
+export function useFeed(trashed: boolean, albumId?: string, kind?: 'library' | 'photos' | 'videos' | 'screenshots', person?: string) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -20,14 +20,17 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const atRef = useRef<string | null>(null); // лента начата с выбранного месяца ("2015-03"), null: с самых новых
   const [at, setAt] = useState<string | null>(null);
 
+  // Другой альбом или другой человек: переход к месяцу из прошлого альбома не переносится.
+  useEffect(() => { atRef.current = null; setAt(null); }, [albumId, person]);
+
   const loadMore = useCallback(
-    async (reset = false) => {
+    async (reset = false, clear = false) => {
       if (!reset && (busy.current || done.current)) return;
       const my = reset ? ++gen.current : gen.current;
       if (reset) {
         cursor.current = null;
         done.current = false;
-        if (albumId || person) {
+        if (albumId || person || clear) {
           setFiles([]);
           setLoaded(false);
         }
@@ -37,7 +40,7 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
       setError(null);
       try {
         const before = reset ? undefined : (cursor.current ?? undefined);
-        const r = albumId ? await api.albumFiles(albumId, before) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
+        const r = albumId?.startsWith('s') ? await api.suggestionFiles(albumId.slice(1)) : albumId ? await api.albumFiles(albumId, before, reset ? (atRef.current ?? undefined) : undefined) : await api.list(trashed, before, kind, atRef.current ?? undefined, undefined, person);
         if (my !== gen.current) return;
         cursor.current = r.next;
         done.current = r.next === null;
@@ -64,11 +67,11 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   // Догрузить файлы новее самого верхнего (лента начата с выбранного месяца). Вызывающий сам сохраняет положение прокрутки.
   const loadNewer = useCallback(async () => {
     const key = prevRef.current;
-    if (!key || newerBusy.current || trashed || albumId || person) return;
+    if (!key || newerBusy.current || trashed) return;
     const my = gen.current;
     newerBusy.current = true;
     try {
-      const r = await api.list(false, undefined, kind, undefined, key, person);
+      const r = albumId ? await api.albumFiles(albumId, undefined, undefined, key) : await api.list(false, undefined, kind, undefined, key, person);
       if (my !== gen.current) return;
       prevRef.current = r.prev ?? null;
       setHasNewer(prevRef.current !== null);
@@ -87,12 +90,14 @@ export function useFeed(trashed: boolean, albumId?: string, kind?: 'photos' | 'v
   const jump = useCallback(async (to: string | null) => {
     atRef.current = to;
     setAt(to);
-    await loadMore(true);
+    await loadMore(true, true); // старая лента убирается сразу: экран откликается на нажатие, а новые данные приходят следом
   }, [loadMore]);
 
   // Новый файл попадает наверх ленты; пока выше есть ещё не загруженные новые файлы, он покажется при догрузке.
   const add = useCallback((f: FileItem) => { if (prevRef.current === null) setFiles((prev) => insertSorted(prev, f)); }, []);
   const remove = useCallback((id: string) => setFiles((prev) => prev.filter((f) => f.id !== id)), []);
 
-  return { files, hasMore, loading, loaded, error, loadMore, add, remove, at, jump, hasNewer, loadNewer };
+  const patch = useCallback((ids: Set<string>, change: Partial<FileItem>) => setFiles((prev) => prev.map((f) => (ids.has(f.id) ? { ...f, ...change } : f))), []);
+
+  return { files, hasMore, loading, loaded, error, loadMore, add, remove, patch, at, jump, hasNewer, loadNewer };
 }

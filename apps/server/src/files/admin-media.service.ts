@@ -8,6 +8,9 @@ import { MlClient, MlHealth } from './ml-client';
 import { IndexStats, indexStats } from './search-index';
 import { detectTakenAt } from './taken';
 
+function sumStats(a: DirStat[]): DirStat {
+  return { files: a.reduce((n, x) => n + x.files, 0), bytes: a.reduce((n, x) => n + x.bytes, 0) };
+}
 export type ClearTarget = 'thumbs' | 'previews' | 'videos' | 'index' | 'index-failed' | 'people';
 
 export interface DirStat {
@@ -105,7 +108,7 @@ export class AdminMediaService {
       for (;;) {
         const rows = (
           await this.db.query<{ id: string; original_name: string; mime: string; path: string; taken_at: Date }>(
-            'SELECT id, original_name, mime, path, taken_at FROM files WHERE id > $1 ORDER BY id LIMIT 200',
+            'SELECT id, original_name, mime, path, taken_at FROM files WHERE id > $1 AND NOT taken_manual ORDER BY id LIMIT 200',
             [last],
           )
         ).rows;
@@ -132,7 +135,28 @@ export class AdminMediaService {
     }
   }
 
+  // Статистика вкладки «Медиа» тяжёлая (обход каталогов миниатюр и превью, подсчёты по лицам и векторам). Под нагрузкой она не должна задерживать
+  // админку, поэтому свежий результат живёт DVCLOUD_MEDIA_CACHE_SEC секунд (по умолчанию 20; 0 выключает кэш), устаревший отдаётся сразу, а
+  // пересчёт идёт в фоне. Настройки читаются всегда заново, а после сохранения настроек и стирания кэш сбрасывается.
+  private overviewCache: { at: number; value: MediaOverview } | null = null;
+  private overviewRun: Promise<MediaOverview> | null = null;
+
+  private refreshOverview(): Promise<MediaOverview> {
+    this.overviewRun ??= this.computeOverview()
+      .then((value) => { this.overviewCache = { at: Date.now(), value }; return value; })
+      .finally(() => { this.overviewRun = null; });
+    return this.overviewRun;
+  }
+
   async overview(): Promise<MediaOverview> {
+    const ttl = Number(process.env.DVCLOUD_MEDIA_CACHE_SEC ?? '20') * 1000;
+    if (!(ttl > 0)) return this.computeOverview();
+    if (!this.overviewCache) return this.refreshOverview();
+    if (Date.now() - this.overviewCache.at >= ttl) void this.refreshOverview().catch(() => undefined);
+    return { ...this.overviewCache.value, settings: await this.settings.get(true) };
+  }
+
+  private async computeOverview(): Promise<MediaOverview> {
     const settings = await this.settings.get(true);
     const p = videoParams(settings);
     const r = await this.db.query<{ total: string; total_bytes: string; ready: string; skipped: string; failed: string; pending: string }>(
@@ -150,7 +174,7 @@ export class AdminMediaService {
     const size = Number((await this.db.query<{ n: string }>("SELECT COALESCE(sum(octet_length(vector)), 0) AS n FROM embeddings")).rows[0].n);
     return {
       settings,
-      thumbs: await dirStat(this.storage.abs('thumbs')),
+      thumbs: await sumStats([await dirStat(this.storage.abs('thumbs-fit')), await dirStat(this.storage.abs('thumbs'))]), // единая миниатюра в thumbs-fit, прежние квадратные ещё могут лежать в thumbs
       previews: await dirStat(this.storage.abs('previews')),
       videos: {
         copies: await dirStat(this.storage.abs('videos')),
@@ -195,6 +219,7 @@ export class AdminMediaService {
   // Сохраняет настройки. Если поменялись параметры, от которых зависят готовые файлы, они стираются и строятся заново.
   async save(patch: Partial<MediaSettings>): Promise<{ settings: MediaSettings; cleared: ClearTarget[] }> {
     const { before, after } = await this.settings.save(patch);
+    this.overviewCache = null;
     const cleared: ClearTarget[] = [];
     if (before.previewMaxSide !== after.previewMaxSide || before.previewQuality !== after.previewQuality) {
       await this.clear('previews');
@@ -208,6 +233,7 @@ export class AdminMediaService {
   }
 
   async clear(what: string): Promise<DirStat> {
+    this.overviewCache = null;
     if (what === 'index' || what === 'index-failed') {
       // Векторы стираются только в базе; пересчитываются в фоне, пока поиск включён. «index-failed» стирает лишь неудачные записи.
       const r = await this.db.query(what === 'index' ? 'DELETE FROM embeddings' : "DELETE FROM embeddings WHERE status = 'failed'");
@@ -224,9 +250,13 @@ export class AdminMediaService {
       return { files: n, bytes: 0 };
     }
     if (what !== 'thumbs' && what !== 'previews' && what !== 'videos') throw new BadRequestException('Очистить можно: thumbs, previews, videos, index, index-failed или people');
-    const before = await dirStat(this.storage.abs(what));
-    await rm(this.storage.abs(what), { recursive: true, force: true });
-    await mkdir(this.storage.abs(what), { recursive: true });
+    const dirs = what === 'thumbs' ? ['thumbs-fit', 'thumbs'] : [what];
+    const before = await sumStats(await Promise.all(dirs.map((d) => dirStat(this.storage.abs(d)))));
+    for (const d of dirs) {
+      await rm(this.storage.abs(d), { recursive: true, force: true });
+      await mkdir(this.storage.abs(d), { recursive: true });
+    }
+    if (what === 'thumbs') await this.db.query('UPDATE blobs SET thumb_at = NULL, thumb_failed_at = NULL'); // фон построит заново
     if (what === 'videos') await this.db.query('DELETE FROM video_copies');
     return before;
   }

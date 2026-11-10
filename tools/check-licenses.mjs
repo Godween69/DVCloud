@@ -63,9 +63,12 @@ function licenseOf(pkg) {
 
 export function check(root) {
   const seen = new Map();
-  for (const pkg of walk(join(root, 'node_modules'))) {
-    if (!pkg.name || !pkg.version || pkg.name.startsWith('@dvcloud/')) continue;
-    seen.set(`${pkg.name}@${pkg.version}`, licenseOf(pkg));
+  // Корневые зависимости и зависимости помощника входа (он вне workspaces, у него свой package-lock.json).
+  for (const dir of [join(root, 'node_modules'), join(root, 'apps', 'login', 'node_modules')]) {
+    for (const pkg of walk(dir)) {
+      if (!pkg.name || !pkg.version || pkg.name.startsWith('@dvcloud/')) continue;
+      seen.set(`${pkg.name}@${pkg.version}`, licenseOf(pkg));
+    }
   }
   const visible = [];
   const copyleft = [];

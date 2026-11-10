@@ -6,6 +6,7 @@ import { FileRow } from './files.service';
 import { ActivityService } from './activity.service';
 import { StorageService } from './storage.service';
 import { ThumbsService } from './thumbs.service';
+import { readableImage } from './heic';
 import { looksLikeScreenshot } from './screenshot';
 
 // Отпечатки фото для поиска похожих. Считаются в фоне: сразу после загрузки и пачками для старых файлов.
@@ -34,8 +35,9 @@ export class FingerprintService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  async compute(path: string): Promise<Fingerprint> {
-    const base = () => sharp(path, { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: true }).rotate(); // поворот по EXIF
+  async compute(file: string): Promise<Fingerprint> {
+    const path = await readableImage(file); // HEIC превращается в JPEG один раз, дальше всё как у обычной картинки
+    const base = () => sharp(path, { failOn: 'error', limitInputPixels: 300_000_000, sequentialRead: typeof path === 'string' }).rotate(); // поворот по EXIF
     const { data, info } = await base().resize(SIZE, SIZE, { fit: 'inside' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
     // Исходные размеры после поворота: после .rotate() они в метаданных результата не видны, поэтому считаем отдельно.
     const m = await sharp(path, { limitInputPixels: 300_000_000 }).metadata();

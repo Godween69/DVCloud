@@ -1,4 +1,4 @@
-import type { Album, AlbumRef, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User } from './types';
+import type { Album, AlbumKind, AlbumRef, AlbumShow, AlbumSuggestion, FaceGuess, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -14,13 +14,15 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, high = false): Promise<T> {
   let r: Response;
   try {
     r = await fetch(path, {
       method,
       headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Быстрые ответы на действия (Del) обгоняют загрузку крупных картинок в очереди браузера.
+      ...(high ? ({ priority: 'high' } as RequestInit) : {}),
     });
   } catch {
     throw new ApiError(0, 'Сервер недоступен. Проверьте подключение и попробуйте ещё раз.');
@@ -62,7 +64,7 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
-  list: (trashed: boolean, before?: string, kind?: 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
+  list: (trashed: boolean, before?: string, kind?: 'library' | 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');
     if (before) q.set('before', before);
@@ -73,9 +75,10 @@ export const api = {
     return request<{ files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/files?${q}`);
   },
   // Оглавление ленты по месяцам для полосы времени (месяцы считаются в часовом поясе браузера, как и заголовки месяцев).
-  timeline: (kind?: 'photos' | 'videos' | 'screenshots') => {
+  timeline: (kind?: 'library' | 'photos' | 'videos' | 'screenshots', person?: string) => {
     const q = new URLSearchParams({ tz: timeZone() });
     if (kind) q.set('kind', kind);
+    if (person) q.set('person', person);
     return request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/files/timeline?${q}`);
   },
   usage: () => request<Usage>('GET', '/api/files/usage'),
@@ -83,37 +86,82 @@ export const api = {
   peopleGroups: (hidden = false) => request<PeopleList>('GET', `/api/people${hidden ? '?hidden=1' : ''}`),
   facesOf: (fileId: string) => request<{ faces: FaceBox[] }>('GET', `/api/people/file/${encodeURIComponent(fileId)}`).then((r) => r.faces),
   assignFace: (detectionId: string, personId: string | null) => request<{ ok: true }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}`, { personId }),
-  createPerson: (detectionId: string, name: string) => request<{ id: string }>('POST', '/api/people', { detectionId, name }),
+  createPerson: (detectionId: string, name: string) => request<{ id: string; created: boolean }>('POST', '/api/people', { detectionId, name }),
+  undoGuess: (detectionId: string, rejectedPersonId?: string, createdPersonId?: string) => request<{ ok: true }>('POST', '/api/people/guess-undo', { detectionId, rejectedPersonId, createdPersonId }),
   renamePerson: (id: string, name: string | null) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { name }),
   hidePerson: (id: string, hidden: boolean) => request<{ ok: true }>('PATCH', `/api/people/${encodeURIComponent(id)}`, { hidden }),
+  setKind: (kind: 'screenshot' | 'photo' | 'auto', ids: string[]) => request<{ changed: number }>('POST', '/api/files/kind', { kind, ids }),
+  setPersonCover: (id: string, fileId: string | null) => request<{ ok: true }>('PUT', `/api/people/${encodeURIComponent(id)}/cover`, { fileId }),
+  removeManyFromPerson: (id: string, fileIds: string[]) => request<{ removed: number }>('POST', `/api/people/${encodeURIComponent(id)}/not-them`, { fileIds }),
   mergePeople: (into: string, from: string) => request<unknown>('POST', `/api/people/${encodeURIComponent(into)}/merge`, { from }),
+  mergePeopleMany: (into: string, from: string[]) => request<{ merged: number }>('POST', '/api/people/merge-many', { into, from }),
+  matchPeople: (include: string[], exclude: string[], only = false) => request<{ count: number }>('POST', '/api/people/match', { include, exclude, only }),
+  albumByPeople: (name: string, include: string[], exclude: string[], only = false) => request<{ id: string; name: string; added: number }>('POST', '/api/people/album', { name, include, exclude, only }),
+  guesses: (limit = 24) => request<{ guesses: FaceGuess[] }>('GET', `/api/people/guesses?limit=${limit}`).then((r) => r.guesses),
+  rejectFace: (detectionId: string, personId: string) => request<{ ok: true }>('POST', '/api/people/reject', { detectionId, personId }),
+  ignoreFace: (detectionId: string, ignored: boolean) => request<{ petsEnabled: boolean; petsOnFile: boolean }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}/ignore`, { ignored }),
+  albumSuggestions: () => request<{ suggestions: AlbumSuggestion[] }>('GET', '/api/albums/suggestions').then((r) => r.suggestions),
+  acceptSuggestion: (id: string, name: string, exclude: string[] = []) => request<{ album: Album; added: number }>('POST', '/api/albums/suggestions/accept', { id, name, exclude }),
+  suggestionFiles: (id: string) => request<{ files: FileItem[]; next: null; prev: null }>('GET', `/api/albums/suggestions/${encodeURIComponent(id)}/files`),
+  skipFace: (detectionId: string) => request<{ ok: true }>('POST', '/api/people/skip', { detectionId }),
+  fileInfo: (id: string) => request<FileInfo>('GET', `/api/files/${encodeURIComponent(id)}/info`),
+  dismissSuggestion: (id: string) => request<{ ok: true }>('POST', '/api/albums/suggestions/dismiss', { id }),
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
   removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),
+  yandexStatus: () => request<YandexStatus>('GET', '/api/yandex'),
+  yandexConnect: () => request<{ id: string }>('POST', '/api/yandex/connect', {}),
+  // QR приходит картинкой; пока помощник не готов, сервер отвечает 204 (null).
+  yandexQr: async (id: string): Promise<string | null> => {
+    const r = await fetch(`/api/yandex/connect/${id}/qr`, { cache: 'no-store' });
+    if (r.status === 204) return null;
+    if (!r.ok) throw new ApiError(r.status, 'Не удалось получить QR-код.');
+    return URL.createObjectURL(await r.blob());
+  },
+  yandexConnectStatus: (id: string) => request<{ state: 'waiting' | 'done' | 'failed'; note?: string }>('GET', `/api/yandex/connect/${id}`),
+  yandexDisconnect: () => request<{ ok: true }>('DELETE', '/api/yandex'),
+  yandexList: () => request<{ ok: true }>('POST', '/api/yandex/list', {}),
+  yandexSkip: () => request<{ skipped: number }>('POST', '/api/yandex/skip', {}),
+  yandexUnskip: () => request<{ queued: number }>('POST', '/api/yandex/unskip', {}),
+  yandexImport: (opts: { years?: (number | null)[]; retryFailed?: boolean; intoAlbum?: boolean }) => request<{ queued: number }>('POST', '/api/yandex/import', opts),
+  yandexSettings: (s: { autoSync?: boolean; autoImport?: boolean; syncDays?: number }) => request<{ ok: true }>('POST', '/api/yandex/settings', s),
+  yandexPause: () => request<{ ok: true }>('POST', '/api/yandex/pause', {}),
+  yandexResume: () => request<{ ok: true }>('POST', '/api/yandex/resume', {}),
+  yandexItems: (state: string | null, offset: number) => request<{ items: YandexItem[]; total: number }>('GET', `/api/yandex/items?limit=50&offset=${offset}${state ? `&state=${state}` : ''}`),
   search: (q: string) => request<SearchResult>('GET', `/api/search?${new URLSearchParams({ q })}`),
   similar: (kind: 'duplicates' | 'series') => request<SimilarResult>('GET', `/api/similar/${kind}`),
   trash: (id: string) => request<{ file: FileItem }>('DELETE', `/api/files/${id}`),
   restore: (id: string) => request<{ file: FileItem }>('POST', `/api/files/${id}/restore`, {}),
   purge: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${id}?permanent=1`),
   albums: () => request<{ albums: Album[] }>('GET', '/api/albums').then((r) => r.albums),
-  albumCreate: (name: string) => request<{ album: Album }>('POST', '/api/albums', { name }).then((r) => r.album),
+  albumCreate: (name: string, kind: AlbumKind = 'any') => request<{ album: Album }>('POST', '/api/albums', { name, kind }).then((r) => r.album),
+  albumFavorite: (id: string, favorite: boolean) => request<{ album: Album }>('PATCH', `/api/albums/${id}/favorite`, { favorite }).then((r) => r.album),
   albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
+  albumShow: (id: string, show: Partial<AlbumShow>) => request<{ album: Album }>('PATCH', `/api/albums/${id}/show`, show).then((r) => r.album),
   albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
-  albumFiles: (id: string, before?: string) => {
+  albumFiles: (id: string, before?: string, at?: string, after?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (before) q.set('before', before);
-    return request<{ album: Album; files: FileItem[]; next: string | null }>('GET', `/api/albums/${id}/files?${q}`);
+    if (at) { q.set('at', at); q.set('tz', timeZone()); }
+    if (after) q.set('after', after);
+    return request<{ album: Album; files: FileItem[]; next: string | null; prev?: string | null }>('GET', `/api/albums/${id}/files?${q}`);
   },
+  albumTimeline: (id: string) => request<{ months: { y: number; m: number; n: number }[] }>('GET', `/api/albums/${id}/timeline?${new URLSearchParams({ tz: timeZone() })}`),
   albumIds: (id: string) => request<{ ids: string[] }>('GET', `/api/albums/${id}/ids`).then((r) => r.ids),
-  albumAdd: (id: string, ids: string[]) => request<{ added: number }>('POST', `/api/albums/${id}/add`, { ids }).then((r) => r.added),
+  // added: сколько положено, rejected: сколько не подошло по типу альбома (в альбоме «Видео» нет фото и наоборот)
+  albumAdd: (id: string, ids: string[]) => request<{ added: number; rejected: number }>('POST', `/api/albums/${id}/add`, { ids }),
   albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),
+  builderBounds: () => request<{ min: string | null; max: string }>('GET', '/api/albums/builder/bounds'),
+  builderCount: (q: BuilderQuery) => request<{ count: number }>('POST', '/api/albums/builder/count', q).then((r) => r.count),
+  builderCreate: (q: BuilderQuery & { name: string }) => request<{ album: Album; added: number }>('POST', '/api/albums/builder/create', q),
+  albumsInOther: (albumId: string, fileIds: string[]) => request<{ files: number; albums: { id: string; name: string }[] }>('POST', '/api/albums/in-other', { albumId, fileIds }, true),
+  removeEverywhere: (fileIds: string[]) => request<{ removed: number }>('POST', '/api/albums/remove-everywhere', { fileIds }).then((r) => r.removed),
   albumOf: (fileId: string) => request<{ album: AlbumRef | null; albums: AlbumRef[] }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.albums),
   people: () => request<{ people: Person[] }>('GET', '/api/albums/people').then((r) => r.people),
   shares: (id: string) => request<{ people: Person[] }>('GET', `/api/albums/${id}/shares`).then((r) => r.people),
   share: (id: string, login: string) => request<{ ok: true }>('PUT', `/api/albums/${id}/shares/${encodeURIComponent(login)}`, {}),
   unshare: (id: string, login: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}/shares/${encodeURIComponent(login)}`),
   leave: (id: string) => request<{ ok: true }>('POST', `/api/albums/${id}/leave`, {}),
-  saveAlbum: (id: string, ids?: string[]) => request<{ added: number; skipped: number; quota: boolean }>('POST', `/api/albums/${id}/save`, ids ? { ids } : {}),
   claim: (items: { sha256: string; name: string; modified?: string }[]) => request<{ results: ClaimResult[] }>('POST', '/api/files/claim', { items }).then((r) => r.results),
   estimate: (bytes: number) => request<Estimate>('POST', '/api/files/estimate', { bytes }),
   quotaRequest: (needBytes: number, note = '') => request<{ ok: true }>('POST', '/api/files/quota-request', { needBytes, note }),
@@ -122,7 +170,8 @@ export const api = {
 };
 
 // Миниатюра для плиток: маленький WebP, который сервер строит сам (для видео и неразбираемых форматов её нет).
-export const thumbUrl = (id: string): string => `/api/files/${id}/thumb`;
+// fit: миниатюра целиком в пропорциях снимка (для «Умной плитки»), иначе квадрат
+export const thumbUrl = (id: string, fit = false): string => `/api/files/${id}/thumb${fit ? '?fit=1' : ''}`;
 
 // Превью для просмотра (WebP до 2000 px): грузится в разы быстрее оригинала.
 export const previewUrl = (id: string): string => `/api/files/${id}/preview`;
@@ -216,4 +265,12 @@ async function sendChunked(file: File, onProgress: (fraction: number) => void): 
 export function sendFile(file: File, onProgress: (fraction: number) => void): Promise<{ status: number; json: any }> {
   if (file.size > CHUNKED_FROM) return sendChunked(file, onProgress);
   return xhrSend('POST', `/api/files?name=${encodeURIComponent(file.name)}`, file, { 'Content-Type': 'application/octet-stream', 'X-File-Modified': String(file.lastModified) }, (loaded) => onProgress(loaded / file.size));
+}
+
+export interface BuilderQuery { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[]; only?: boolean }
+
+export interface FileInfo {
+  id: string; name: string; mime: string; size: number; sha256: string; takenAt: string; createdAt: string; width: number | null; height: number | null;
+  mine: boolean; albums: { id: string; name: string }[];
+  dates: { exif: Record<string, string>; exifDate: string | null; videoCreation: string | null; nameDate: string | null; used: 'meta' | 'name' | 'none' | 'manual' };
 }

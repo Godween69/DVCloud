@@ -15,6 +15,7 @@ export interface MediaSettings {
   searchCutoff: number; // в выдаче остаются совпадения не слабее этого процента от лучшего (50-95)
   facesEnabled: boolean; // искать лица на фото и собирать людей (нужна служба ML с моделью лиц)
   petsEnabled: boolean; // искать кошек и собак и собирать питомцев
+  facesSim: number; // строгость объединения лиц в процентах сходства (30-55): ниже число, больше лиц в одной группе, но и больше чужих
 }
 
 export const DEFAULT_MEDIA: MediaSettings = {
@@ -29,14 +30,16 @@ export const DEFAULT_MEDIA: MediaSettings = {
   searchCutoff: 80,
   facesEnabled: false, // это биометрия: включается осознанно
   petsEnabled: false,
+  facesSim: 45, // осторожно: лишнюю группу легко объединить вручную, а чужое лицо в группе придётся искать глазами
 };
 
 export const VIDEO_HEIGHTS = [480, 720, 1080];
-const RANGES: Record<'previewMaxSide' | 'previewQuality' | 'videoCrf' | 'searchCutoff', [number, number]> = {
+const RANGES: Record<'previewMaxSide' | 'previewQuality' | 'videoCrf' | 'searchCutoff' | 'facesSim', [number, number]> = {
   previewMaxSide: [600, 4000],
   previewQuality: [30, 95],
   videoCrf: [18, 35],
   searchCutoff: [50, 95],
+  facesSim: [30, 55],
 };
 
 // Проверяет частичное изменение настроек; неизвестные поля и значения вне границ дают 400 с понятным текстом.
@@ -48,7 +51,7 @@ export function parseMediaPatch(input: unknown): Partial<MediaSettings> {
     if (k === 'previewEnabled' || k === 'videoEnabled' || k === 'searchEnabled' || k === 'facesEnabled' || k === 'petsEnabled') {
       if (typeof v !== 'boolean') throw new BadRequestException(`${k}: ожидалось да или нет`);
       out[k] = v;
-    } else if (k === 'previewMaxSide' || k === 'previewQuality' || k === 'videoCrf' || k === 'searchCutoff') {
+    } else if (k === 'previewMaxSide' || k === 'previewQuality' || k === 'videoCrf' || k === 'searchCutoff' || k === 'facesSim') {
       const [lo, hi] = RANGES[k];
       if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) throw new BadRequestException(`${k}: целое число от ${lo} до ${hi}`);
       out[k] = v;

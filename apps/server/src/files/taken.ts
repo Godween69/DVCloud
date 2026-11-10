@@ -135,3 +135,81 @@ export async function detectTakenAt(o: { abs: string; mime: string; name: string
   if (byName) return { date: byName, source: 'name' };
   return { date: null, source: 'none' };
 }
+
+// Текстовые поля EXIF для окна «Инфо»: производитель, модель, программа и три даты в том виде, как записаны в файле.
+export function exifFields(exif: Buffer): Record<string, string> {
+  const res: Record<string, string> = {};
+  try {
+    let base = 0;
+    if (exif.length > 6 && exif.toString('latin1', 0, 4) === 'Exif') base = 6;
+    const bo = exif.toString('latin1', base, base + 2);
+    const le = bo === 'II';
+    if (!le && bo !== 'MM') return res;
+    const u16 = (o: number) => (le ? exif.readUInt16LE(base + o) : exif.readUInt16BE(base + o));
+    const u32 = (o: number) => (le ? exif.readUInt32LE(base + o) : exif.readUInt32BE(base + o));
+    if (u16(2) !== 42) return res;
+    const names: Record<number, string> = { 0x010f: 'Производитель', 0x0110: 'Модель', 0x0131: 'Программа', 0x0132: 'DateTime', 0x9003: 'DateTimeOriginal', 0x9004: 'DateTimeDigitized' };
+    const walk = (ifd: number): number | null => {
+      const n = u16(ifd);
+      if (n > 500) return null;
+      let sub: number | null = null;
+      for (let i = 0; i < n; i++) {
+        const e = ifd + 2 + i * 12;
+        const tag = u16(e);
+        const type = u16(e + 2);
+        const count = u32(e + 4);
+        if (tag === 0x8769) sub = u32(e + 8);
+        else if (names[tag] && type === 2 && count >= 2 && count <= 128) {
+          const at = count > 4 ? u32(e + 8) : e + 8;
+          res[names[tag]] = exif.toString('latin1', base + at, base + at + count - 1).replace(/\0.*$/, '').trim();
+        }
+      }
+      return sub;
+    };
+    const sub = walk(u32(4));
+    if (sub !== null) walk(sub);
+  } catch {
+    /* повреждённый блок EXIF: покажем то, что успели прочитать */
+  }
+  return res;
+}
+
+// Дата и время создания видео из метаданных файла (как записано) или null.
+export async function videoCreationRaw(abs: string): Promise<string | null> {
+  try {
+    const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'format_tags=creation_time', '-of', 'csv=p=0', abs], { timeout: 15_000, maxBuffer: 1 << 16 });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export interface DateEvidence {
+  exif: Record<string, string>; // поля EXIF как записаны в файле (камера, программа, три даты)
+  exifDate: string | null; // дата, которую берёт облако из EXIF (ISO, UTC)
+  videoCreation: string | null; // creation_time видео как записано
+  nameDate: string | null; // дата, найденная в имени файла (ISO, UTC)
+  used: TakenSource | 'manual'; // откуда взята дата в ленте
+}
+
+// Все следы даты в файле: нужны окну «Инфо» и админу, чтобы понять, почему у снимка именно такая дата.
+export async function dateEvidence(o: { abs: string; mime: string; name: string; tz: string; manual?: boolean }): Promise<DateEvidence> {
+  const ev: DateEvidence = { exif: {}, exifDate: null, videoCreation: null, nameDate: parseFilenameDate(o.name, o.tz)?.toISOString() ?? null, used: o.manual ? 'manual' : 'none' };
+  if (o.mime.startsWith('image/')) {
+    try {
+      const m = await sharp(o.abs, { limitInputPixels: 300_000_000 }).metadata();
+      if (m.exif) {
+        ev.exif = exifFields(m.exif);
+        ev.exifDate = parseExifDate(m.exif, o.tz)?.toISOString() ?? null;
+      }
+    } catch {
+      /* формат не читается */
+    }
+  } else if (o.mime.startsWith('video/')) {
+    ev.videoCreation = await videoCreationRaw(o.abs);
+    const t = ev.videoCreation ? new Date(ev.videoCreation) : null;
+    if (t && Number.isFinite(t.getTime()) && plausible(t, Date.now()) && t.getUTCFullYear() >= 2000) ev.exifDate = t.toISOString();
+  }
+  if (!o.manual) ev.used = ev.exifDate ? 'meta' : ev.nameDate ? 'name' : 'none';
+  return ev;
+}

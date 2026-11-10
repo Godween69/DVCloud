@@ -29,10 +29,15 @@ import { MlClient } from './files/ml-client';
 import { EmbedService } from './files/embed.service';
 import { SearchService } from './files/search.service';
 import { SearchController } from './files/search.controller';
+import { LoginClient } from './yandex/login.client';
+import { YandexController } from './yandex/yandex.controller';
+import { YandexService } from './yandex/yandex.service';
 import { HealthController } from './health.controller';
 import { InternalTokenGuard } from './internal/internal-token.guard';
-import { InternalHealthController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
+import { InternalHealthController, InternalBackupController, InternalFacesController, InternalMediaController, InternalStorageController, InternalUsersController } from './internal/internal.controller';
 import { AdminStorageService } from './files/admin-storage.service';
+import { AdminDuplicatesService } from './files/admin-duplicates.service';
+import { BackupService } from './files/backup.service';
 import { StorageService as StorageForAdmin } from './files/storage.service';
 import { CONFIG } from './tokens';
 import { UsersService } from './users/users.service';
@@ -54,8 +59,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController],
-      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService],
+      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController, YandexController],
+      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService, LoginClient, YandexService],
     };
   }
 }
@@ -67,8 +72,8 @@ export class InternalModule {
     return {
       module: InternalModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController],
-      providers: [InternalTokenGuard, StorageForAdmin, AdminStorageService, MediaSettingsService, MlClient, AdminMediaService],
+      controllers: [InternalHealthController, InternalUsersController, InternalStorageController, InternalMediaController, InternalFacesController, InternalBackupController],
+      providers: [InternalTokenGuard, ActivityService, StorageForAdmin, AdminStorageService, AdminDuplicatesService, MediaSettingsService, MlClient, PeopleService, AdminMediaService, BackupService],
     };
   }
 }

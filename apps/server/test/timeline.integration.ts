@@ -88,6 +88,38 @@ describe('полоса времени: оглавление по месяцам 
     assert.ok(bob.json.files.every((f: { name: string }) => f.name === 'b.jpg'), 'у другого человека только его файлы');
   });
 
+  it('альбом: своё оглавление и лента с месяца, «есть ли новее» считается только внутри альбома', async () => {
+    const J = { type: 'application/json' };
+    const alb = await api('POST', '/api/albums', { cookie: e.anna, body: JSON.stringify({ name: 'Полоса времени' }), ...J });
+    assert.equal(alb.status, 201);
+    const id = alb.json.album.id;
+    // в альбоме три снимка: 31 марта 2026 (t1), 15 марта 2026 (t2), 2 марта 2015 (t4); майский t0 и остальные не входят
+    assert.equal((await api('POST', `/api/albums/${id}/add`, { cookie: e.anna, body: JSON.stringify({ ids: [ids[1], ids[2], ids[4]] }), ...J })).status, 200);
+    const tl = await api('GET', `/api/albums/${id}/timeline?tz=UTC`, { cookie: e.anna });
+    assert.equal(tl.status, 200);
+    assert.deepEqual(tl.json.months, [{ y: 2026, m: 3, n: 2 }, { y: 2015, m: 3, n: 1 }]);
+    const old = await api('GET', `/api/albums/${id}/files?at=2015-03&tz=UTC`, { cookie: e.anna });
+    assert.deepEqual(old.json.files.map((f: { name: string }) => f.name), ['t4.jpg']);
+    assert.ok(old.json.prev, 'в альбоме есть файлы новее');
+    const up = await api('GET', `/api/albums/${id}/files?after=${encodeURIComponent(old.json.prev)}`, { cookie: e.anna });
+    assert.deepEqual(up.json.files.map((f: { name: string }) => f.name), ['t1.jpg', 't2.jpg']);
+    assert.equal(up.json.prev, null, 'новее в альбоме ничего нет, хотя в библиотеке майский t0 есть');
+    const top = await api('GET', `/api/albums/${id}/files?at=2026-03&tz=UTC`, { cookie: e.anna });
+    assert.equal(top.json.prev, null, 't0 вне альбома и не считается «новее»');
+    assert.deepEqual(top.json.files.map((f: { name: string }) => f.name), ['t1.jpg', 't2.jpg', 't4.jpg']);
+    // обычная прокрутка вниз по курсору в альбоме тоже работает
+    const one = await api('GET', `/api/albums/${id}/files?limit=1`, { cookie: e.anna });
+    assert.deepEqual(one.json.files.map((f: { name: string }) => f.name), ['t1.jpg']);
+    const two = await api('GET', `/api/albums/${id}/files?limit=1&before=${encodeURIComponent(one.json.next)}`, { cookie: e.anna });
+    assert.deepEqual(two.json.files.map((f: { name: string }) => f.name), ['t2.jpg']);
+    // чужой альбом недоступен, плохие значения отвергаются
+    assert.notEqual((await api('GET', `/api/albums/${id}/timeline?tz=UTC`, { cookie: e.boris })).status, 200);
+    assert.equal((await api('GET', `/api/albums/${id}/timeline?tz=Не/Пояс`, { cookie: e.anna })).status, 400);
+    assert.equal((await api('GET', `/api/albums/${id}/files?at=2026-13`, { cookie: e.anna })).status, 400);
+    assert.equal((await api('GET', '/api/files/timeline?person=x')).status, 401);
+    assert.equal((await api('GET', '/api/files/timeline?person=мусор', { cookie: e.anna })).status, 400);
+  });
+
   it('лента с месяца: плохие значения отвергаются', async () => {
     for (const q of ['at=2026-13', 'at=26-3', 'at=2026-03&tz=Nope/Nope', 'at=1900-01']) assert.equal((await api('GET', `/api/files?${q}`, { cookie: e.anna })).status, 400, q);
   });

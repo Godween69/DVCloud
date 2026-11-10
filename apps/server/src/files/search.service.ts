@@ -1,6 +1,6 @@
 import { Inject, Injectable, ServiceUnavailableException, BadRequestException } from '@nestjs/common';
 import { DbService } from '../db/db.service';
-import { FileRow } from './files.service';
+import { FileRow, hiddenFromLibrary } from './files.service';
 import { MediaSettingsService } from './media-settings';
 import { MlClient, MlError } from './ml-client';
 import { PeopleService } from './people.service';
@@ -151,7 +151,7 @@ export class SearchService {
     const status = await this.status(ownerId);
     if (m.index.size === 0 || m.dim !== qv.vector.length) return { hits: [], status };
     const mine = await this.db.query<{ id: string; blob_id: string }>(
-      'SELECT id, blob_id FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND blob_id IS NOT NULL',
+      `SELECT id, blob_id FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND blob_id IS NOT NULL AND NOT ${hiddenFromLibrary('files', '$1')}`, // файлы из альбомов, скрытых из библиотеки, в поиске не видны
       [ownerId],
     );
     const scored: { id: string; score: number }[] = [];

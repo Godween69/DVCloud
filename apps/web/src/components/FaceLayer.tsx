@@ -1,4 +1,4 @@
-import { Check, Loader2, UserMinus } from 'lucide-react';
+import { Check, Loader2, PawPrint, UserMinus } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { api, ApiError } from '../api';
 import { boxRect, faceLabel, sameName, suggest, type Rect } from '../lib/people';
@@ -13,11 +13,13 @@ interface Props {
   tick: number; // растёт, когда фото загрузилось или поменяло размер
   groups: PeopleGroup[];
   onChanged: () => void; // группы изменились (новый человек, новое имя)
+  onLeft?: (fileId: string) => void; // фото убрали из группы человека: вид не трогаем, лента обновится после закрытия
+  onNote?: (m: string) => void; // короткая подсказка (не ошибка)
   onError: (m: string) => void;
 }
 
 // Рамки лиц и питомцев поверх фото. Нажатие на рамку открывает окошко: назвать, выбрать из знакомых или сказать «это не он».
-export function FaceLayer({ fileId, img, stage, view, tick, groups, onChanged, onError }: Props) {
+export function FaceLayer({ fileId, img, stage, view, tick, groups, onChanged, onLeft, onNote, onError }: Props) {
   const [faces, setFaces] = useState<FaceBox[]>([]);
   const [rects, setRects] = useState<Record<string, Rect>>({});
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
@@ -65,15 +67,15 @@ export function FaceLayer({ fileId, img, stage, view, tick, groups, onChanged, o
       })}
       {cur && rects[cur.id] && (
         <NamePopover key={cur.id} face={cur} rect={rects[cur.id]} stageW={stageSize.w} stageH={stageSize.h} groups={groups} fileId={fileId}
-          onClose={() => setOpen(null)} onDone={() => { setOpen(null); load(); onChanged(); }} onError={onError} />
+          onClose={() => setOpen(null)} onDone={(left) => { setOpen(null); load(); onChanged(); if (left) onLeft?.(fileId); }} onNote={onNote} onError={onError} />
       )}
     </div>
   );
 }
 
-function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDone, onError }: {
+function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDone, onNote, onError }: {
   face: FaceBox; rect: Rect; stageW: number; stageH: number; groups: PeopleGroup[]; fileId: string;
-  onClose: () => void; onDone: () => void; onError: (m: string) => void;
+  onClose: () => void; onDone: (left?: boolean) => void; onNote?: (m: string) => void; onError: (m: string) => void;
 }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -84,10 +86,10 @@ function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDo
   const hints = suggest(groups, text, face.kind).filter((p) => p.id !== face.personId);
   const existing = sameName(groups, text, face.kind);
 
-  async function run(fn: () => Promise<void>) {
+  async function run(fn: () => Promise<boolean | void>) {
     if (busy) return;
     setBusy(true);
-    try { await fn(); onDone(); } catch (e) { onError(e instanceof ApiError ? e.message : 'Не получилось'); setBusy(false); }
+    try { const left = await fn(); onDone(left === true); } catch (e) { onError(e instanceof ApiError ? e.message : 'Не получилось'); setBusy(false); }
   }
   const pick = (p: PeopleGroup) => run(async () => { await api.assignFace(face.id, p.id); });
   const submit = () => {
@@ -95,11 +97,17 @@ function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDo
     if (!v) return;
     return run(async () => { if (existing) await api.assignFace(face.id, existing.id); else await api.createPerson(face.id, v); });
   };
-  const notThem = () => run(async () => { if (face.personId) await api.removeFromPerson(face.personId, fileId); });
+  const notThem = () => run(async () => { if (face.personId) await api.removeFromPerson(face.personId, fileId); return true; });
+  // Модель приняла кота или собаку за лицо: такая рамка перестаёт спрашиваться, питомца на фото называют обычным образом.
+  const notPerson = () => run(async () => {
+    const r = await api.ignoreFace(face.id, true);
+    onNote?.(r.petsOnFile ? 'Готово. Нажмите на рамку животного и дайте ему имя' : r.petsEnabled ? 'Готово. Питомца на этом фото пока не нашли: он появится после просмотра' : 'Готово. Поиск питомцев выключен администратором');
+    return face.personId !== null;
+  });
 
   return (
     <div role="dialog" aria-label="Кто это" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} style={{ left, width: W, ...pos }}
-      className="pointer-events-auto absolute max-h-[60%] overflow-y-auto rounded-xl border border-white/15 bg-gray-900/95 p-3 text-white shadow-2xl backdrop-blur">
+      className="pointer-events-auto absolute max-h-[60%] overflow-y-auto rounded-xl border border-white/15 bg-gray-900/95 p-3 text-white shadow-[0_0_30px_-6px_rgba(0,0,0,0.6)] backdrop-blur">
       <p className="mb-2 text-sm text-white/70">{face.name ? `Сейчас: ${face.name}` : face.kind === 'face' ? 'Кто это?' : face.kind === 'cat' ? 'Как зовут кота?' : 'Как зовут собаку?'}</p>
       <form onSubmit={(e) => { e.preventDefault(); void submit(); }} className="flex gap-2">
         <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }} maxLength={60} autoComplete="off" aria-label="Имя"
@@ -116,9 +124,15 @@ function NamePopover({ face, rect, stageW, stageH, groups, fileId, onClose, onDo
         </ul>
       )}
       {text.trim() && <p className="mt-2 text-xs text-white/50">{existing ? `Это «${existing.name}», уже знакомый.` : `Новый человек: «${text.trim()}».`}</p>}
+      {face.kind === 'face' && (
+        <button type="button" disabled={busy} onClick={() => void notPerson()} className="mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50">
+          <PawPrint className="size-4 shrink-0" aria-hidden />Это питомец, не человек
+        </button>
+      )}
+      {face.personId && <p className="mt-3 text-xs text-white/50">Если это не тот человек, фото уйдёт из группы и туда больше не вернётся.</p>}
       {face.personId && (
         <button type="button" disabled={busy} onClick={() => void notThem()} className="mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50">
-          <UserMinus className="size-4" aria-hidden />Это не {face.name ?? 'он'}
+          <UserMinus className="size-4 shrink-0" aria-hidden />{face.name ? `Убрать из группы «${face.name}»` : 'Убрать из этой группы'}
         </button>
       )}
     </div>

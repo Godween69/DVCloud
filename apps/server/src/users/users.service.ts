@@ -8,6 +8,7 @@ export interface UserRow {
   display_name: string;
   password_hash: string;
   is_admin: boolean;
+  is_child: boolean;
   disabled: boolean;
   quota_bytes: string | null;
   created_at: Date;
@@ -18,6 +19,7 @@ export interface PublicUser {
   login: string;
   displayName: string;
   isAdmin: boolean;
+  isChild: boolean; // детский аккаунт: упрощённый интерфейс, без загрузки, удаления и создания альбомов
   disabled: boolean;
   quotaBytes: number | null;
   createdAt: string;
@@ -32,6 +34,7 @@ export function toPublic(u: UserRow): PublicUser {
     login: u.login,
     displayName: u.display_name,
     isAdmin: u.is_admin,
+    isChild: u.is_child === true,
     disabled: u.disabled,
     quotaBytes: u.quota_bytes === null ? null : Number(u.quota_bytes),
     createdAt: u.created_at.toISOString(),
@@ -71,7 +74,7 @@ export class UsersService {
   }
 
   // Если пароль не передан, сервер придумывает его сам и возвращает один раз.
-  async create(login: string, displayName: string, password?: string): Promise<{ user: UserRow; generatedPassword?: string }> {
+  async create(login: string, displayName: string, password?: string, isChild = false): Promise<{ user: UserRow; generatedPassword?: string }> {
     if (!LOGIN_RE.test(login)) {
       throw new BadRequestException('Логин: 2-32 символа, только a-z, 0-9 и _');
     }
@@ -83,8 +86,8 @@ export class UsersService {
     const hash = await hashPassword(plain);
     try {
       const r = await this.db.query<UserRow>(
-        'INSERT INTO users (login, display_name, password_hash) VALUES ($1, $2, $3) RETURNING *',
-        [login, displayName.trim(), hash],
+        'INSERT INTO users (login, display_name, password_hash, is_child) VALUES ($1, $2, $3, $4) RETURNING *',
+        [login, displayName.trim(), hash, isChild],
       );
       return { user: r.rows[0], generatedPassword: password === undefined ? plain : undefined };
     } catch (e) {
@@ -93,7 +96,7 @@ export class UsersService {
     }
   }
 
-  async update(login: string, patch: { disabled?: boolean; quotaBytes?: number | null }): Promise<UserRow> {
+  async update(login: string, patch: { disabled?: boolean; quotaBytes?: number | null; isChild?: boolean }): Promise<UserRow> {
     const sets: string[] = [];
     const vals: unknown[] = [];
     if (patch.disabled !== undefined) {
@@ -103,6 +106,10 @@ export class UsersService {
     if (patch.quotaBytes !== undefined) {
       vals.push(patch.quotaBytes);
       sets.push(`quota_bytes = $${vals.length}`);
+    }
+    if (patch.isChild !== undefined) {
+      vals.push(patch.isChild);
+      sets.push(`is_child = $${vals.length}`);
     }
     if (!sets.length) throw new BadRequestException('Нечего менять');
     vals.push(login);

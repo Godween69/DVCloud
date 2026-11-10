@@ -14,10 +14,10 @@ export function Toast({ toast, onDone }: { toast: ToastData | null; onDone: () =
     return () => clearTimeout(t);
   }, [toast, onDone]);
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 sm:bottom-4 flex justify-center px-4">
       <AnimatePresence>
         {toast && (
-          <motion.div key={toast.id} role="status" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 16 }} className="pointer-events-auto flex items-center gap-4 rounded-xl bg-gray-900 px-4 py-3 text-sm text-white shadow-xl dark:bg-paper-100 dark:text-gray-900">
+          <motion.div key={toast.id} role="status" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 16 }} className="pointer-events-auto flex items-center gap-4 rounded-xl bg-gray-900 px-4 py-3 text-sm text-white shadow-[0_0_26px_-6px_rgba(0,0,0,0.5)] dark:bg-paper-100 dark:text-gray-900">
             <span>{toast.text}</span>
             {toast.action && <button type="button" onClick={() => { toast.action!.run(); onDone(); }} className="font-semibold text-violet-300 hover:text-violet-200 dark:text-violet-700">{toast.action.label}</button>}
           </motion.div>

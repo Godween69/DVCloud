@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnsupportedMediaTypeException } from '@nestjs/common';
 import { MediaSettingsService } from './media-settings';
-import { detectTakenAt, validTimezone } from './taken';
+import { dateEvidence, DateEvidence, detectTakenAt, validTimezone } from './taken';
 import { rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { Config } from '../config';
@@ -26,6 +26,7 @@ export interface FileRow {
   created_at: Date;
   trashed_at: Date | null;
   blob_id: string | null;
+  shot_override?: boolean | null; // ручная отметка: true скриншот, false фото, пусто решает автоматика
 }
 
 export interface BlobRow {
@@ -35,6 +36,8 @@ export interface BlobRow {
   mime: string;
   size_bytes: string;
   created_at: Date;
+  orphan_name?: string | null; // у файла без владельца: как он назывался
+  orphan_taken_at?: Date | null; // и когда был снят
 }
 
 // Путь на диске наружу не отдаётся: клиент знает только id.
@@ -47,9 +50,14 @@ export interface PublicFile {
   takenAt: string;
   createdAt: string;
   trashedAt: string | null;
+  // Размеры снимка в пикселях (после поворота), если они уже посчитаны; нужны «Умной плитке». У видео и новых файлов пока null.
+  width: number | null;
+  height: number | null;
+  // Считается ли картинка скриншотом (ручная отметка или автоматика). Есть в списках ленты, в остальных ответах может отсутствовать.
+  screenshot?: boolean;
 }
 
-export function toPublicFile(f: FileRow): PublicFile {
+export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null; shot?: boolean | null }): PublicFile {
   return {
     id: f.id,
     name: f.original_name,
@@ -59,8 +67,18 @@ export function toPublicFile(f: FileRow): PublicFile {
     takenAt: f.taken_at.toISOString(),
     createdAt: f.created_at.toISOString(),
     trashedAt: f.trashed_at ? f.trashed_at.toISOString() : null,
+    width: f.w ?? null,
+    height: f.h ?? null,
+    ...(f.shot !== undefined && f.shot !== null ? { screenshot: f.shot } : {}),
   };
 }
+
+// Условие SQL «файл спрятан из библиотеки допуском альбома» (для поиска и групп лиц). alias: имя таблицы файлов, owner: номер параметра хозяина.
+export const hiddenFromLibrary = (alias: string, owner: string): string =>
+  `EXISTS (SELECT 1 FROM album_items hi JOIN albums ha ON ha.id = hi.album_id WHERE hi.file_id = ${alias}.id AND ha.owner_id = ${owner} AND ha.deleted_at IS NULL AND NOT ha.in_library)`;
+
+// Раздел ленты: library это «Библиотека» (фото и видео без скриншотов), остальные по названию. Без значения: всё подряд (для групп людей и альбомов).
+export type FeedKind = 'photos' | 'videos' | 'screenshots' | 'library';
 
 export const ID_RE = /^\d{1,18}$/;
 export const SHA_RE = /^[0-9a-f]{64}$/;
@@ -305,15 +323,44 @@ export class FilesService {
 
   // Лента: ключ следующей страницы по (дата, id), поэтому вставки сверху её не сдвигают.
   // ownerId здесь тот, чьи файлы показываем (для общего альбома это хозяин альбома).
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: 'photos' | 'videos' | 'screenshots'; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
-    const col = opts.trashed ? 'trashed_at' : 'taken_at';
+  // Условия ленты, общие для списка, оглавления и проверки «есть ли новее»: владелец, корзина, альбом, человек, раздел.
+  private feedFilter(ownerId: string, o: { trashed?: boolean; albumId?: string; kind?: FeedKind; person?: string }): { where: string; params: unknown[] } {
     const params: unknown[] = [ownerId];
-    let where = `owner_id = $1 AND trashed_at IS ${opts.trashed ? 'NOT NULL' : 'NULL'}`;
+    let where = `owner_id = $1 AND trashed_at IS ${o.trashed ? 'NOT NULL' : 'NULL'}`;
+    if (o.albumId !== undefined) {
+      params.push(o.albumId);
+      where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
+    }
+    // Файлы, на которых есть выбранный человек или питомец (группа принадлежит этому человеку).
+    if (o.person !== undefined) {
+      if (!ID_RE.test(o.person)) throw new BadRequestException('person: неверный номер');
+      params.push(o.person);
+      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
+    }
+    // Допуски альбомов: файл не попадает в раздел, если лежит хотя бы в одном своём альбоме, у которого этот раздел выключен.
+    // Внутри самого альбома и в корзине допуски не действуют; группы лиц и поиск считаются «Библиотекой».
+    if (o.albumId === undefined && !o.trashed) {
+      const flag = o.kind === 'photos' ? 'in_photos' : o.kind === 'videos' ? 'in_videos' : o.kind === 'screenshots' ? 'in_screenshots' : 'in_library';
+      where += ` AND NOT EXISTS (SELECT 1 FROM album_items hi JOIN albums ha ON ha.id = hi.album_id WHERE hi.file_id = files.id AND ha.owner_id = $1 AND ha.deleted_at IS NULL AND NOT ha.${flag})`;
+    }
+    // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
+    if (o.albumId === undefined && !o.trashed && o.kind !== undefined) {
+      const shot = 'COALESCE(files.shot_override, EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot))'; // ручная отметка сильнее автоматики
+      where += o.kind === 'videos' ? " AND mime LIKE 'video/%'" : o.kind === 'screenshots' ? ` AND ${shot}` : o.kind === 'library' ? ` AND NOT (mime LIKE 'image/%' AND ${shot})` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
+    }
+    return { where, params };
+  }
+
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: FeedKind; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
+    const col = opts.trashed ? 'trashed_at' : 'taken_at';
+    const filt = this.feedFilter(ownerId, opts);
+    const params: unknown[] = [...filt.params];
+    let where = filt.where;
     if (opts.before !== undefined) {
       const m = CURSOR_RE.exec(opts.before);
       if (!m) throw new BadRequestException('Неверный курсор before');
       params.push(m[1], m[2]);
-      where += ` AND (${col}, id) < ($2::timestamptz, $3::bigint)`;
+      where += ` AND (${col}, id) < ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
     }
     // Лента вверх от курсора: файлы новее ключа after (для прокрутки к новым после перехода к месяцу).
     if (opts.after !== undefined) {
@@ -331,26 +378,10 @@ export class FilesService {
       params.push(`${m[1]}-${m[2]}-01`, tz);
       where += ` AND taken_at < ((($${params.length - 1}::date + interval '1 month')::timestamp) AT TIME ZONE $${params.length})`;
     }
-    if (opts.albumId !== undefined) {
-      params.push(opts.albumId);
-      where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
-    }
-    // Файлы, на которых есть выбранный человек или питомец (группа принадлежит этому человеку).
-    if (opts.person !== undefined) {
-      if (!ID_RE.test(opts.person)) throw new BadRequestException('person: неверный номер');
-      params.push(opts.person);
-      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
-    }
-    // Библиотека без скриншотов, отдельный раздел только со скриншотами (альбомы и скрытые не фильтруются).
-    // Разделы ленты: фото (картинки кроме скриншотов), видео, скриншоты; без kind всё вместе.
-    if (opts.albumId === undefined && !opts.trashed && opts.kind !== undefined) {
-      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
-      where += opts.kind === 'videos' ? " AND mime LIKE 'video/%'" : opts.kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
-    }
     params.push(opts.limit + 1);
     const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
     const dir = up ? 'ASC' : 'DESC';
-    const r = await this.db.query<FileRow>(`SELECT * FROM files WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean }>(`SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
     const more = r.rows.length > opts.limit;
     let rows = more ? r.rows.slice(0, opts.limit) : r.rows;
     if (up) rows = rows.reverse();
@@ -362,23 +393,47 @@ export class FilesService {
     let prev: string | null = null;
     if (up) prev = more && first ? cur(first) : null;
     else if (opts.at !== undefined && opts.before === undefined && first) {
-      const nw = await this.db.query(`SELECT 1 FROM files WHERE owner_id = $1 AND trashed_at IS NULL AND (taken_at, id) > ($2::timestamptz, $3::bigint) LIMIT 1`, [ownerId, first.taken_at.toISOString(), first.id]);
+      // «Есть ли новее» считается в той же ленте: в альбоме, у человека и в разделе только среди их файлов
+      const nw = await this.db.query(`SELECT 1 FROM files WHERE ${filt.where} AND (taken_at, id) > ($${filt.params.length + 1}::timestamptz, $${filt.params.length + 2}::bigint) LIMIT 1`, [...filt.params, first.taken_at.toISOString(), first.id]);
       prev = nw.rowCount ? cur(first) : null;
     }
     return { files: rows, next, prev };
   }
 
+  // Окно «Инфо»: всё, что известно о файле, и откуда взята дата (свой файл или файл общего альбома).
+  async info(userId: string, id: string): Promise<{
+    id: string; name: string; mime: string; size: number; sha256: string; takenAt: string; createdAt: string; width: number | null; height: number | null;
+    mine: boolean; albums: { id: string; name: string }[]; dates: DateEvidence;
+  }> {
+    const f = await this.getReadable(userId, id);
+    const fp = (await this.db.query<{ width: number | null; height: number | null }>('SELECT width, height FROM file_fingerprints WHERE file_id = $1', [f.id])).rows[0];
+    const blob = f.blob_id ? (await this.db.query<BlobRow>('SELECT * FROM blobs WHERE id = $1', [f.blob_id])).rows[0] : undefined;
+    const manual = (await this.db.query<{ m: boolean }>('SELECT taken_manual AS m FROM files WHERE id = $1', [f.id])).rows[0]?.m === true;
+    const mine = f.owner_id === userId;
+    const albums = mine
+      ? (await this.db.query<{ id: string; name: string }>('SELECT a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = $1 AND a.owner_id = $2 AND a.deleted_at IS NULL ORDER BY lower(a.name)', [f.id, userId])).rows
+      : [];
+    const tz = (await this.settings.get()).timezone;
+    const dates = await dateEvidence({ abs: this.storage.abs(f.path), mime: f.mime, name: f.original_name, tz, manual });
+    return { id: f.id, name: f.original_name, mime: f.mime, size: Number(blob?.size_bytes ?? f.size_bytes), sha256: f.sha256, takenAt: f.taken_at.toISOString(), createdAt: f.created_at.toISOString(), width: fp?.width ?? null, height: fp?.height ?? null, mine, albums, dates };
+  }
+
+  // Свои файлы по номерам (предпросмотр предложенного альбома): от новых к старым, без корзины.
+  async byIds(ownerId: string, ids: string[]): Promise<FileRow[]> {
+    if (!ids.length) return [];
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean }>(
+      `SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id
+       WHERE files.owner_id = $1 AND files.trashed_at IS NULL AND files.id = ANY($2::bigint[]) ORDER BY taken_at DESC, id DESC`, [ownerId, ids]);
+    return r.rows;
+  }
+
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.
-  async timeline(ownerId: string, kind: 'photos' | 'videos' | 'screenshots' | undefined, tz: string): Promise<{ y: number; m: number; n: number }[]> {
+  async timeline(ownerId: string, kind: FeedKind | undefined, tz: string, opts: { albumId?: string; person?: string } = {}): Promise<{ y: number; m: number; n: number }[]> {
     if (!validTimezone(tz)) throw new BadRequestException('tz: неизвестный часовой пояс');
-    let where = 'owner_id = $1 AND trashed_at IS NULL';
-    if (kind !== undefined) {
-      const shot = 'EXISTS (SELECT 1 FROM file_fingerprints p WHERE p.file_id = files.id AND p.screenshot)';
-      where += kind === 'videos' ? " AND mime LIKE 'video/%'" : kind === 'screenshots' ? ` AND ${shot}` : ` AND mime LIKE 'image/%' AND NOT ${shot}`;
-    }
+    const f = this.feedFilter(ownerId, { kind, albumId: opts.albumId, person: opts.person });
     const r = await this.db.query<{ y: number; m: number; n: string }>(
-      `SELECT EXTRACT(YEAR FROM taken_at AT TIME ZONE $2)::int AS y, EXTRACT(MONTH FROM taken_at AT TIME ZONE $2)::int AS m, count(*) AS n
-       FROM files WHERE ${where} GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`, [ownerId, tz]);
+      `SELECT EXTRACT(YEAR FROM taken_at AT TIME ZONE $${f.params.length + 1})::int AS y, EXTRACT(MONTH FROM taken_at AT TIME ZONE $${f.params.length + 1})::int AS m, count(*) AS n
+       FROM files WHERE ${f.where} GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`, [...f.params, tz]);
     return r.rows.map((x) => ({ y: x.y, m: x.m, n: Number(x.n) }));
   }
 
@@ -410,12 +465,12 @@ export class FilesService {
   async deletePermanently(user: UserRow, id: string): Promise<void> {
     const f = await this.getOwned(user.id, id);
     if (!f.trashed_at) throw new ConflictException('Сначала переложите файл в корзину');
-    await this.dropLinks([f]);
+    await this.dropLinks([f], 'Убрал насовсем из корзины');
   }
 
   async emptyTrash(user: UserRow): Promise<number> {
     const r = await this.db.query<FileRow>('SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NOT NULL', [user.id]);
-    await this.dropLinks(r.rows);
+    await this.dropLinks(r.rows, 'Очистил корзину');
     return r.rows.length;
   }
 
@@ -435,46 +490,44 @@ export class FilesService {
       return r.rowCount ?? 0;
     }
     const r = await this.db.query<FileRow>('SELECT * FROM files WHERE owner_id = $1 AND trashed_at IS NOT NULL AND id = ANY($2::bigint[])', [user.id, ids]);
-    await this.dropLinks(r.rows);
+    await this.dropLinks(r.rows, 'Убрал насовсем из корзины');
     return r.rows.length;
   }
 
-  private async dropLinks(rows: FileRow[]): Promise<void> {
+  // Ручная отметка «скриншот» или «фото» у картинок (видео не затрагиваются). 'auto' снимает ручную отметку, снова решает автоматика.
+  async setKind(user: UserRow, kind: 'screenshot' | 'photo' | 'auto', ids: string[]): Promise<number> {
+    const v = kind === 'auto' ? null : kind === 'screenshot';
+    const r = await this.db.query(
+      "UPDATE files SET shot_override = $3 WHERE owner_id = $1 AND trashed_at IS NULL AND mime LIKE 'image/%' AND id = ANY($2::bigint[]) AND shot_override IS DISTINCT FROM $3",
+      [user.id, ids, v],
+    );
+    return r.rowCount ?? 0;
+  }
+
+  // why: как это произошло, попадёт в пометку «откуда» у файла без владельца (её видит админ).
+  private async dropLinks(rows: FileRow[], why: string): Promise<void> {
     if (rows.length === 0) return;
-    await this.db.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [rows.map((f) => f.id)]);
+    const ids = rows.map((f) => f.id);
+    // Пока записи живы, запоминаем, чьи они были и в каких альбомах лежали: потом это уже не узнать.
+    const info = await this.db.query<{ blob_id: string; login: string; albums: string; name: string; taken: Date }>(
+      `SELECT f.blob_id, u.login, min(f.original_name) AS name, min(f.taken_at) AS taken,
+              COALESCE(string_agg(DISTINCT a.name || CASE WHEN a.deleted_at IS NOT NULL THEN ' (альбом удалён)' ELSE '' END, ', '), '') AS albums
+       FROM files f JOIN users u ON u.id = f.owner_id
+       LEFT JOIN album_items ai ON ai.file_id = f.id LEFT JOIN albums a ON a.id = ai.album_id
+       WHERE f.id = ANY($1::bigint[]) AND f.blob_id IS NOT NULL GROUP BY f.blob_id, u.login`,
+      [ids],
+    );
+    await this.db.query('DELETE FROM files WHERE id = ANY($1::bigint[])', [ids]);
+    for (const i of info.rows) await this.noteOrphan(i.blob_id, `${why}: ${i.login}${i.albums ? `. Был в альбомах: ${i.albums}` : '. В альбомах не лежал'}`, i.name, i.taken);
     for (const f of rows) await this.thumbs.remove(f);
   }
 
-  // Сохранить себе файлы чужого альбома, которым поделились: в облаке они не копируются, у человека появляются свои записи.
-  async saveShared(user: UserRow, ids: string[]): Promise<{ added: number; skipped: number; quota: boolean }> {
-    const r = await this.db.query<FileRow>(
-      `SELECT f.* FROM files f WHERE f.id = ANY($2::bigint[]) AND f.owner_id <> $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND EXISTS (
-         SELECT 1 FROM album_items ai JOIN album_shares s ON s.album_id = ai.album_id WHERE ai.file_id = f.id AND s.user_id = $1)
-       ORDER BY f.taken_at, f.id`,
-      [user.id, ids],
+  // Если у содержимого не осталось владельцев, записать, откуда оно такое. Если владельцы ещё есть, ничего не делает.
+  async noteOrphan(blobId: string, note: string, name?: string, takenAt?: Date): Promise<void> {
+    await this.db.query(
+      'UPDATE blobs SET orphaned_at = now(), orphan_note = $2, orphan_name = COALESCE($3, orphan_name), orphan_taken_at = COALESCE($4, orphan_taken_at) WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = $1)',
+      [blobId, note.slice(0, 500), name ?? null, takenAt ?? null],
     );
-    let added = 0;
-    let skipped = 0;
-    for (const f of r.rows) {
-      if (await this.findLiveBySha(user.id, f.sha256)) {
-        skipped++;
-        continue;
-      }
-      const blob = (await this.db.query<BlobRow>('SELECT * FROM blobs WHERE id = $1', [f.blob_id])).rows[0];
-      if (!blob) continue;
-      try {
-        await this.checkRoom(user, Number(blob.size_bytes));
-      } catch {
-        return { added, skipped, quota: true };
-      }
-      const { file, created } = await this.linkBlob(user, blob, f.original_name, f.taken_at);
-      if (created) {
-        added++;
-        this.thumbs.warm(file);
-        this.fingerprints.warm(file);
-      } else skipped++;
-    }
-    return { added, skipped, quota: false };
   }
 
   // Просьба добавить место: администратор увидит её в админке.

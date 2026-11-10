@@ -14,7 +14,7 @@ export function QuotaDialog({ est, count, onFit, onAsk, onCancel }: { est: Estim
   const lack = Math.max(0, est.needBytes - (est.freeBytes ?? 0));
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="quota-title">
-      <div className="w-full max-w-md rounded-2xl border border-paper-300 bg-paper-50 p-5 shadow-2xl dark:border-gray-800 dark:bg-gray-900">
+      <div className="glass-strong w-full max-w-md rounded-3xl p-5">
         <h2 id="quota-title" className="text-lg font-semibold text-gray-900 dark:text-white">Не хватает места</h2>
         <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
           Выбрано {countFiles(count)}, это {formatBytes(est.needBytes)}. Свободно {formatBytes(est.freeBytes ?? 0)}, не хватает {formatBytes(lack)}.
