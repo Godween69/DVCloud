@@ -111,6 +111,7 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     saveBackup: (patch) => call('PATCH', '/internal/backup/config', patch),
     checkBackup: () => call('POST', '/internal/backup/check', {}),
     startBackup: () => call('POST', '/internal/backup/start', {}),
+    cancelBackup: () => call('POST', '/internal/backup/cancel', {}),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };

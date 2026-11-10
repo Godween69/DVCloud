@@ -359,6 +359,9 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       } else if (path === '/backup/check') {
         const r = await api.checkBackup();
         session.flash = { kind: 'ok', text: `Место доступно: ${r.where}${r.freeBytes === null ? '' : `, свободно ${formatSize(r.freeBytes)}`}` };
+      } else if (path === '/backup/cancel') {
+        await api.cancelBackup();
+        session.flash = { kind: 'ok', text: 'Останавливаю копирование. Уже скопированное остаётся, в следующий раз копия продолжится с этого места' };
       } else if (path === '/backup/start') {
         await api.startBackup();
         session.flash = { kind: 'ok', text: 'Копирование запущено. Ход виден ниже, страница обновляется сама' };

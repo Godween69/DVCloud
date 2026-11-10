@@ -83,6 +83,7 @@ describe('админка', () => {
         if (req.method === 'GET' && req.url === '/internal/backup') return j(200, backupState());
         if (req.method === 'PATCH' && req.url === '/internal/backup/config') { const b = JSON.parse(body); if (b.host === 'плохо') return j(400, { message: 'Сервер: адрес или имя' }); backupCfg = { ...backupCfg, ...b }; return j(200, backupState()); }
         if (req.method === 'POST' && req.url === '/internal/backup/check') return j(200, { where: '/backup/dvcloud-backup', freeBytes: 5 * 1024 ** 3 });
+        if (req.method === 'POST' && req.url === '/internal/backup/cancel') { backupJob = { ...backupJob, state: 'error', step: 'Остановлено', error: 'Копирование остановлено вами' }; return j(200, { job: backupJob }); }
         if (req.method === 'POST' && req.url === '/internal/backup/start') { backupJob = { state: 'running', step: 'Копирую файлы', percent: 42, startedAt: '2026-11-09T08:00:00.000Z', finishedAt: null, error: null, result: null }; return j(200, { job: backupJob }); }
         if (req.method === 'GET' && req.url === '/internal/quota-requests') return j(200, { requests: [{ id: '9', login: 'anna', displayName: 'Анна', needBytes: 5368709120, note: 'отпуск', createdAt: '2026-11-02T00:00:00.000Z', usedBytes: 1073741824, quotaBytes: 2147483648 }] });
         if (req.method === 'POST' && req.url === '/internal/files/dedupe') return j(200, { checked: 2, removed: JSON.parse(body).apply ? 2 : 0, freedBytes: 4096, mismatched: [] });
@@ -614,6 +615,9 @@ describe('админка', () => {
     assert.ok(page.text.includes('<progress') && page.text.includes('42%') && page.text.includes('http-equiv="refresh"'), 'идёт: ход и автообновление');
     assert.ok(/<button class="primary" type="submit" disabled>/.test(page.text), 'кнопка запуска на время копии выключена');
     assert.equal((await req('POST', '/backup/start', { cookie, form: { csrf: 'wrong' } })).status, 403);
+    assert.ok(page.text.includes('action="/backup/cancel"') && page.text.includes('Остановить копирование'), 'пока копия идёт, есть кнопка остановки');
+    assert.equal((await post('/backup/cancel', {})).status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/cancel')));
     backupJob = null;
   });
 

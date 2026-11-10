@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
-import { spawn } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, statfs, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -103,6 +103,8 @@ interface RunResult { code: number; out: string; err: string }
 @Injectable()
 export class BackupService {
   private job: BackupJob | null = null;
+  private proc: ChildProcess | null = null; // текущая внешняя команда копирования (rsync, pg_dump): её останавливает кнопка «Остановить»
+  private stopRequested = false;
 
   constructor(
     @Inject(CONFIG) private readonly cfg: Config,
@@ -204,11 +206,12 @@ export class BackupService {
       } catch (e) {
         return resolveRun({ code: 127, out: '', err: String(e) });
       }
+      this.proc = p;
       const timer = timeoutMs > 0 ? setTimeout(() => p.kill('SIGKILL'), timeoutMs) : null;
       p.stdout.on('data', (d: Buffer) => { const s = d.toString('utf8'); if (out.length < 4_000_000) out += s; onChunk?.(s); });
       p.stderr.on('data', (d: Buffer) => { if (err.length < 20000) err += d.toString('utf8'); });
       p.on('error', (e) => { if (timer) clearTimeout(timer); resolveRun({ code: 127, out, err: `${cmd}: ${e.message}` }); });
-      p.on('close', (code) => { if (timer) clearTimeout(timer); resolveRun({ code: code ?? 1, out, err }); });
+      p.on('close', (code) => { if (timer) clearTimeout(timer); if (this.proc === p) this.proc = null; resolveRun({ code: code ?? 1, out, err }); });
     });
   }
 
@@ -218,13 +221,24 @@ export class BackupService {
     const c = await this.getConfig();
     if (!c.withDb && !(c.withFiles && (c.mirror || c.readable))) throw new BadRequestException('Отметьте, что копировать: файлы (точная или читаемая копия) и/или базу данных');
     const where = await this.check(c);
+    this.stopRequested = false;
     const job: BackupJob = { state: 'running', step: 'Подготовка', percent: null, startedAt: new Date().toISOString(), finishedAt: null, error: null, result: null };
     this.job = job;
     void this.execute(c, job, where.where).catch(() => undefined);
     return job;
   }
 
+  // Остановка идущего копирования: прерывает rsync или pg_dump. Уже скопированное остаётся, следующая копия продолжит с этого места.
+  async cancel(): Promise<BackupJob> {
+    if (this.job?.state !== 'running') throw new ConflictException('Сейчас копирование не идёт');
+    this.stopRequested = true;
+    this.job.step = 'Останавливаю';
+    this.proc?.kill('SIGTERM');
+    return this.job;
+  }
+
   private async execute(c: BackupConfig, job: BackupJob, where: string): Promise<void> {
+    const stopIf = (): void => { if (this.stopRequested) throw new Error('Копирование остановлено вами'); };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '').replace('T', '-');
     const dumpName = `dvcloud-${stamp}.dump`;
     const tmpDump = resolve(this.cfg.dataDir, 'tmp', `backup-${dumpName}`);
@@ -246,10 +260,12 @@ export class BackupService {
         const u = new URL(this.cfg.databaseUrl);
         await mkdir(dirname(tmpDump), { recursive: true });
         const dump = await this.run('nice', ['-n', '19', 'pg_dump', '-Fc', '-h', u.hostname, '-p', u.port || '5432', '-U', decodeURIComponent(u.username), '-d', u.pathname.slice(1), '-f', tmpDump], 0, undefined, { PGPASSWORD: decodeURIComponent(u.password) });
+        stopIf();
         if (dump.code !== 0) throw new Error(`Не удалось выгрузить базу: ${this.tidy(dump.err) || 'pg_dump не найден в образе сервера'}`);
         dumpBytes = (await stat(tmpDump)).size;
         job.step = 'Копирую базу данных';
         const put = await this.run('nice', rs([tmpDump, `${target}${sep2}db/${dumpName}`]));
+        stopIf();
         if (put.code !== 0) throw new Error(`Не удалось записать выгрузку базы: ${this.tidy(put.err) || `код ${put.code}`}`);
         await this.prune(c, target);
       }
@@ -264,6 +280,7 @@ export class BackupService {
           const m = [...s.matchAll(/(\d{1,3})%/g)].pop();
           if (m) job.percent = Math.min(100, Number(m[1]));
         });
+        stopIf();
         if (sync.code !== 0 && sync.code !== 24) throw new Error(`Копирование файлов остановилось: ${this.tidy(sync.err) || `код ${sync.code}`}`);
         files = num(sync.out, /Number of regular files transferred: ([\d,.]+)/) || num(sync.out, /Number of files: [\d,.]+ \(reg: ([\d,.]+)/);
         bytes = num(sync.out, /Total file size: ([\d,.]+) bytes/);
@@ -271,6 +288,7 @@ export class BackupService {
         job.step = 'Проверяю результат';
         job.percent = null;
         const ver = await this.run('nice', rs(['-n', '--size-only', '--itemize-changes', src, `${target}${sep2}files/`], skip));
+        stopIf();
         if (ver.code !== 0 && ver.code !== 24) throw new Error(`Проверка не получилась: ${this.tidy(ver.err) || `код ${ver.code}`}`);
         pending = ver.out.split('\n').filter((l) => /^>f/.test(l)).length;
       }
@@ -281,12 +299,14 @@ export class BackupService {
         job.percent = null;
         stage = await mkdtemp(join(tmpdir(), 'dvcloud-readable-'));
         readable = await this.buildReadable(c, stage);
+        stopIf();
         job.step = 'Копирую читаемую копию';
         job.percent = 0;
         const rd = await this.run('nice', rs(['-L', '--info=progress2', '--no-inc-recursive', `${stage}/`, `${target}${sep2}`]), 0, (s) => {
           const m = [...s.matchAll(/(\d{1,3})%/g)].pop();
           if (m) job.percent = Math.min(100, Number(m[1]));
         });
+        stopIf();
         if (rd.code !== 0 && rd.code !== 24) throw new Error(`Копирование читаемой копии остановилось: ${this.tidy(rd.err) || `код ${rd.code}`}`);
       }
 

@@ -551,6 +551,15 @@ export class InternalBackupController {
     await this.audit.write('backup.start', 'backup', {});
     return { job };
   }
+
+  // Остановить идущее копирование.
+  @Post('cancel')
+  @HttpCode(200)
+  async cancel(): Promise<{ job: BackupJob }> {
+    const job = await this.backup.cancel();
+    await this.audit.write('backup.cancel', 'backup', {});
+    return { job };
+  }
 }
 
 // Вкладка «Лица» в админке: общие группы людей и питомцев всего хранилища. Здесь администратор может всё:

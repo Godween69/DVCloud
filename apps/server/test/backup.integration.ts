@@ -82,6 +82,26 @@ describe('резервная копия (настоящий Postgres, pg_dump, r
     assert.equal(last.state, 'done');
   });
 
+  it('«Остановить»: когда копии нет, 409; идущая копия прерывается, уже скопированное остаётся, потом копия снова работает', async () => {
+    assert.equal((await j('POST', '/internal/backup/cancel')).status, 409, 'нечего останавливать');
+    // Большой файл и медленный канал: копия заведомо идёт долго
+    await mkdir(join(e.dataDir, 'library'), { recursive: true });
+    await writeFile(join(e.dataDir, 'library', 'big.bin'), Buffer.alloc(20 * 1024 * 1024, 7));
+    assert.equal((await j('PATCH', '/internal/backup/config', { limitMbit: 1 })).status, 200);
+    assert.equal((await j('POST', '/internal/backup/start')).status, 200);
+    for (let i = 0; i < 100 && (await j('GET', '/internal/backup')).json.job?.step !== 'Копирую файлы'; i++) await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    assert.equal((await j('POST', '/internal/backup/cancel')).status, 200);
+    const job = await waitDone();
+    assert.equal(job.state, 'error');
+    assert.match(job.error, /остановлено вами/);
+    assert.ok(Date.now() - t0 < 15000, 'остановилась быстро, а не дождалась конца копирования');
+    // скорость снова без ограничений: следующая копия проходит до конца
+    assert.equal((await j('PATCH', '/internal/backup/config', { limitMbit: 0 })).status, 200);
+    assert.equal((await j('POST', '/internal/backup/start')).status, 200);
+    assert.equal((await waitDone()).state, 'done');
+  });
+
   it('выгрузка базы восстанавливается: pg_restore --list читает её и видит таблицу files', async () => {
     const dumps = (await readdir(join(disk, 'mybackup', 'dvcloud-backup', 'db'))).filter((n) => n.endsWith('.dump')).sort();
     const { spawnSync } = await import('node:child_process');
