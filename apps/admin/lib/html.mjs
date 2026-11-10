@@ -83,6 +83,17 @@ html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figu
 .fixdate h3 { margin:0 0 4px; font-size:15px; }
 .facemeta { font-size:13px; line-height:1.35; word-break:break-word; }
 .facepick { font-size:13px; display:flex; gap:6px; align-items:center; cursor:pointer; }
+.facemore { text-align:center; color:var(--mut); padding:14px 0; min-height:24px; }
+html.js .pager.nojs { display:none; }
+.selbar { position:fixed; left:0; right:0; bottom:0; z-index:20; padding:10px 16px; background:var(--card); border-top:1px solid var(--line); box-shadow:var(--shadow); }
+.selbar[hidden] { display:none; }
+.selbar .in { max-width:1100px; margin:0 auto; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+.selbar .in b { font-size:16px; }
+.face:has(.selbox:checked) { border-color:var(--acc); box-shadow:0 0 0 2px var(--acc); }
+.face:has(.mainpick:checked) { border-color:var(--ok); box-shadow:0 0 0 3px var(--ok); }
+.face:has(.mainpick:checked) .willjoin { display:none; }
+.mergesum { margin:12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--soft); }
+.mergesum p { margin:4px 0; }
 .dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:12px; }
 .dup { position:relative; width:164px; box-sizing:border-box; padding:6px; border:3px solid var(--bad); border-radius:12px; background:rgba(127,127,127,.08); }
 .dup:has(.dupchk:checked) { border-color:var(--ok); }
@@ -224,6 +235,7 @@ const layout = (title, body, head = '', foot = '') => `<!doctype html>
 <body><main>${body}</main>${foot}</body></html>`;
 
 const SCRIPT = '<script src="/viewer.js"></script>';
+const FACES_SCRIPT = '<script src="/faces.js"></script>';
 const csrfInput = (csrf) => `<input type="hidden" name="csrf" value="${esc(csrf)}">`;
 
 export function loginPage(error) {
@@ -573,12 +585,23 @@ ${body}
 // ── Лица: общие группы людей и питомцев всего хранилища ──
 // Обычные пользователи могут только подписывать лица и говорить «не он»; объединять, распускать и переименовывать названные
 // группы можно только здесь. Карточки крупные, как на вкладке «Дубликаты»; без скриптов, всё обычными формами.
-const FACE_PER = 24;
-export function facesPage({ data: d, q, csrf, flash, loadError }) {
-  const href = (extra = {}) => `/faces?${new URLSearchParams(Object.entries({ kind: q.kind, q: q.q, unnamed: q.unnamed, ...extra }).filter(([, v]) => v)).toString()}`;
+export const FACE_PER = 48;
+const faceCards = (groups, sel) => groups.map((g) => `<li class="face">
+<a class="facepic" href="/faces/${esc(g.id)}"><img src="/faces/crop/${esc(g.cover)}" alt="" width="160" height="160" loading="lazy"></a>
+<div class="facemeta"><b>${g.name ? esc(g.name) : '<span class="muted">без имени</span>'}</b>${g.kind === 'pet' ? ' <span class="muted">питомец</span>' : ''}<br><span class="muted">файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}${g.owners.length > 1 ? ' (общая)' : ''}${g.hiddenBy ? `, скрыта у ${g.hiddenBy}` : ''}</span></div>
+<label class="facepick"><input type="checkbox" class="selbox" value="${esc(g.id)}"${sel.has(String(g.id)) ? ' checked' : ''}> Выбрать</label>
+<a class="btn" href="/faces/${esc(g.id)}">Открыть</a></li>`).join('');
+
+// Фрагмент для подгрузки при прокрутке: только карточки следующей страницы.
+export const facesFragment = ({ data: d, sel }) => faceCards(d.groups, sel);
+
+export function facesPage({ data: d, q, csrf, flash, loadError, sel = new Set() }) {
+  const base = `/faces?${new URLSearchParams(Object.entries({ kind: q.kind, q: q.q, unnamed: q.unnamed }).filter(([, v]) => v)).toString()}`;
+  const href = (extra = {}) => `${base}${base.endsWith('?') ? '' : '&'}${new URLSearchParams(extra).toString()}`;
   const pages = d ? Math.max(1, Math.ceil(d.total / FACE_PER)) : 1;
+  // Без скриптов остаются обычные страницы; со скриптами список подгружается при прокрутке.
   const pager = d && d.total > FACE_PER
-    ? `<div class="pager top"><a class="btn${q.page <= 1 ? ' off' : ''}" href="${href({ page: Math.max(1, q.page - 1) })}"${q.page <= 1 ? ' aria-disabled="true" tabindex="-1"' : ''}>← Назад</a><span class="cur">Страница ${q.page} из ${pages}</span><a class="btn${q.page >= pages ? ' off' : ''}" href="${href({ page: Math.min(pages, q.page + 1) })}"${q.page >= pages ? ' aria-disabled="true" tabindex="-1"' : ''}>Далее →</a></div>`
+    ? `<div class="pager top nojs"><a class="btn${q.page <= 1 ? ' off' : ''}" href="${href({ page: Math.max(1, q.page - 1) })}"${q.page <= 1 ? ' aria-disabled="true" tabindex="-1"' : ''}>← Назад</a><span class="cur">Страница ${q.page} из ${pages}</span><a class="btn${q.page >= pages ? ' off' : ''}" href="${href({ page: Math.min(pages, q.page + 1) })}"${q.page >= pages ? ' aria-disabled="true" tabindex="-1"' : ''}>Далее →</a></div>`
     : '';
   const opt = (v, label) => `<option value="${v}"${q.kind === v ? ' selected' : ''}>${label}</option>`;
   const filter = `<form class="filter" method="get" action="/faces"><label>Кто<select name="kind">${opt('', 'люди и питомцы')}${opt('person', 'люди')}${opt('pet', 'питомцы')}</select></label>
@@ -590,40 +613,67 @@ export function facesPage({ data: d, q, csrf, flash, loadError }) {
   else if (!d.enabled.faces && !d.enabled.pets) body = '<p class="muted">Распознавание лиц и питомцев выключено на вкладке «Медиа». Включите его, и здесь появятся группы.</p>';
   else if (!d.groups.length) body = '<p class="muted">Групп по этому условию нет.</p>';
   else {
-    const cards = d.groups.map((g) => `<li class="face">
-<a class="facepic" href="/faces/${esc(g.id)}"><img src="/faces/crop/${esc(g.cover)}" alt="" width="160" height="160" loading="lazy"></a>
-<div class="facemeta"><b>${g.name ? esc(g.name) : '<span class="muted">без имени</span>'}</b>${g.kind === 'pet' ? ' <span class="muted">питомец</span>' : ''}<br><span class="muted">файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}${g.owners.length > 1 ? ' (общая)' : ''}${g.hiddenBy ? `, скрыта у ${g.hiddenBy}` : ''}</span></div>
-<label class="facepick"><input type="radio" name="into" value="${esc(g.id)}"> Остаётся</label>
-<label class="facepick"><input type="checkbox" name="from" value="${esc(g.id)}"> Влить в оставшуюся</label>
-<a class="btn" href="/faces/${esc(g.id)}">Открыть</a></li>`).join('');
-    body = `<form method="post" action="/faces/merge"><input type="hidden" name="back" value="${esc(href({ page: q.page }))}">${csrfInput(csrf)}${pager}<ul class="faces">${cards}</ul>
-<div class="dupbar"><p class="muted">Отметьте одну группу «Остаётся» и одну или несколько «Влить в оставшуюся». Имя останется у оставшейся (если у неё нет имени, возьмётся имя первой названной из вливаемых). Это нельзя отменить.</p>
-<button class="danger" type="submit">Объединить отмеченные</button></div>${pager}</form>`;
+    const more = q.page < pages;
+    body = `${pager}<ul class="faces" id="facelist" data-csrf="${esc(csrf)}">${faceCards(d.groups, sel)}</ul>
+<div class="facemore" id="facemore" data-url="${esc(base)}" data-page="${q.page}" data-done="${more ? '0' : '1'}">${more ? '' : 'Это все группы'}</div>${pager}
+<div class="selbar" id="selbar"${sel.size === 0 ? ' hidden' : ''}><div class="in"><span>Выбрано групп: <b id="selcount">${sel.size}</b></span>
+<a class="btn primary" href="/faces/merge">Слить выбранные</a><button type="button" id="selclear">Сбросить выбор</button>
+<span class="muted">Выбор не сбрасывается при прокрутке и смене фильтра. Главную группу выберете на следующем шаге.</span></div></div>`;
   }
   return layout('DV Cloud: лица', `
 ${topBar('faces', csrf)}
 ${flashHtml(flash, loadError)}
-<section class="panel"><div class="panel-head"><div><h2>Лица и питомцы ${info(['Группы общие для всего хранилища: человек, названный один раз, называется так у всех. У каждого в списке только те, кто есть на его фото, а сами файлы остаются доступны только владельцам.','Обычный пользователь может подписать безымянную группу, сказать «это он», «не он», убрать фото из группы и скрыть группу у себя. Объединять, распускать и переименовывать названные и общие группы может только администратор, то есть вы здесь.','Если у группы фото нескольких людей, она общая (в карточке видно, у кого).'])}</h2></div></div>
+<section class="panel"><div class="panel-head"><div><h2>Лица и питомцы ${info(['Группы общие для всего хранилища: человек, названный один раз, называется так у всех. У каждого в списке только те, кто есть на его фото, а сами файлы остаются доступны только владельцам.','Обычный пользователь может подписать безымянную группу, сказать «это он», «не он», убрать фото из группы и скрыть группу у себя. Объединять, распускать и переименовывать названные и общие группы может только администратор, то есть вы здесь.','Если у группы фото нескольких людей, она общая (в карточке видно, у кого).','Чтобы объединить группы: отметьте «Выбрать» у всех групп одного человека (список листается вниз, отметки сохраняются), нажмите «Слить выбранные», там выберите главную и при желании проверьте группы, убрав лишние лица.'])}</h2></div></div>
 ${filter}
 ${d ? `<p class="muted">Всего групп: <b>${d.total}</b></p>` : ''}
 ${body}
-</section>`);
+</section>`, '', FACES_SCRIPT);
+}
+
+// Слияние: только выбранные группы. Главная одна, остальные вливаются в неё.
+export function facesMergePage({ groups, csrf, flash, loadError }) {
+  const total = groups.reduce((n, g) => n + g.count, 0);
+  let body;
+  if (groups.length < 2) {
+    body = `<p class="muted">Для слияния нужно выбрать хотя бы две группы. Сейчас выбрано: ${groups.length}.</p><p><a class="btn" href="/faces">← К списку групп</a></p>`;
+  } else {
+    const cards = groups.map((g) => `<li class="face" data-name="${esc(g.name ?? '')}" data-count="${g.count}">
+<a class="facepic" href="/faces/${esc(g.id)}?merge=1"><img src="/faces/crop/${esc(g.cover)}" alt="" width="160" height="160" loading="lazy"></a>
+<div class="facemeta"><b>${g.name ? esc(g.name) : '<span class="muted">без имени</span>'}</b>${g.kind === 'pet' ? ' <span class="muted">питомец</span>' : ''}<br><span class="muted">файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}</span></div>
+<label class="facepick"><input type="radio" name="into" class="mainpick" value="${esc(g.id)}" required> Главная</label>
+<span class="muted willjoin">вольётся в главную</span>
+<a class="btn" href="/faces/${esc(g.id)}?merge=1">Проверить</a>
+<button type="submit" formaction="/faces/unselect" formnovalidate name="id" value="${esc(g.id)}">Убрать из выбора</button></li>`).join('');
+    body = `<form method="post" action="/faces/merge" id="mergeform">${csrfInput(csrf)}${groups.map((g) => `<input type="hidden" name="from" value="${esc(g.id)}">`).join('')}
+<div class="mergesum" id="mergesum"><p><b>Выбрано групп: ${groups.length}, файлов суммарно: ${total}.</b></p>
+<p id="mergeline" class="muted">Отметьте «Главная»: эта группа останется, остальные вольются в неё.</p>
+<p class="muted">Имя останется у главной (если у неё нет имени, возьмётся имя первой названной из вливаемых). Перед слиянием можно открыть «Проверить» у любой группы и убрать из неё чужие лица. Слияние нельзя отменить.</p></div>
+<ul class="faces">${cards}</ul>
+<div class="dupbar"><button class="danger" type="submit">Слить в главную</button> <a class="btn" href="/faces">← К списку групп</a></div></form>`;
+  }
+  return layout('DV Cloud: слияние групп', `
+${topBar('faces', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Слияние групп</h2></div></div>
+${body}
+</section>`, '', FACES_SCRIPT);
 }
 
 // Одна группа: крупные лица, имя, «убрать из группы», распустить.
-export function facePage({ data: d, offset, csrf, flash, loadError }) {
+export function facePage({ data: d, offset, csrf, flash, loadError, merge = false }) {
   const g = d.group;
   const per = 48;
-  const prev = offset - per >= 0 ? `/faces/${esc(g.id)}?offset=${offset - per}` : null;
-  const next = offset + per < d.total ? `/faces/${esc(g.id)}?offset=${offset + per}` : null;
+  const mq = merge ? '&merge=1' : '';
+  const prev = offset - per >= 0 ? `/faces/${esc(g.id)}?offset=${offset - per}${mq}` : null;
+  const next = offset + per < d.total ? `/faces/${esc(g.id)}?offset=${offset + per}${mq}` : null;
   const cards = d.faces.map((f) => `<li class="face">
 <a class="facepic" href="/files/${esc(f.fileId)}"><img src="/faces/crop/${esc(f.id)}" alt="" width="160" height="160" loading="lazy"></a>
 <div class="facemeta"><span class="muted">${esc(f.owner)}${f.source === 'manual' ? ', подписано человеком' : ', автоматически'}</span></div>
-<form method="post" action="/faces/${esc(g.id)}/remove-face">${csrfInput(csrf)}<input type="hidden" name="det" value="${esc(f.id)}"><input type="hidden" name="offset" value="${offset}"><button type="submit">Убрать из группы</button></form></li>`).join('');
+<form method="post" action="/faces/${esc(g.id)}/remove-face">${csrfInput(csrf)}<input type="hidden" name="det" value="${esc(f.id)}"><input type="hidden" name="offset" value="${offset}">${merge ? '<input type="hidden" name="merge" value="1">' : ''}<button type="submit">Убрать из группы</button></form></li>`).join('');
   return layout('DV Cloud: лица', `
 ${topBar('faces', csrf)}
 ${flashHtml(flash, loadError)}
-<section class="panel"><div class="panel-head"><div><h2>${g.name ? esc(g.name) : 'Группа без имени'} ${g.kind === 'pet' ? '(питомец)' : ''}</h2></div><a class="btn" href="/faces">← Ко всем группам</a></div>
+<section class="panel"><div class="panel-head"><div><h2>${g.name ? esc(g.name) : 'Группа без имени'} ${g.kind === 'pet' ? '(питомец)' : ''}</h2></div>${merge ? '<a class="btn primary" href="/faces/merge">← Вернуться к слиянию</a>' : '<a class="btn" href="/faces">← Ко всем группам</a>'}</div>
 <p class="muted">Файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}${g.owners.length > 1 ? ' (общая группа)' : ''}. Лиц в группе: ${d.total}.</p>
 <form method="post" action="/faces/${esc(g.id)}/rename" class="filter">${csrfInput(csrf)}<label>Имя<input type="text" name="name" value="${esc(g.name ?? '')}" maxlength="60" placeholder="Как зовут?"></label>
 <button class="primary" type="submit">Сохранить имя</button><button type="submit" name="clear" value="1">Стереть имя</button></form>
@@ -854,5 +904,73 @@ export const VIEWER_JS = `(function () {
     else if (e.key === 'Escape') a = document.querySelector('a[data-back]');
     if (a) { e.preventDefault(); location.href = a.href; }
   });
+})();
+`;
+
+// Скрипт вкладки «Лица»: выбор групп запоминается на сервере (в сессии), список подгружается при прокрутке,
+// на странице слияния пересчитывается итоговая строка.
+export const FACES_JS = `(function () {
+  document.documentElement.classList.add('js');
+  var list = document.getElementById('facelist');
+  if (list) {
+    var csrf = list.getAttribute('data-csrf');
+    var bar = document.getElementById('selbar');
+    var cnt = document.getElementById('selcount');
+    var post = function (data) {
+      var b = new URLSearchParams(data); b.set('csrf', csrf);
+      return fetch('/faces/select', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: b.toString(), credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); });
+    };
+    var show = function (n) { cnt.textContent = n; bar.hidden = n === 0; };
+    list.addEventListener('change', function (e) {
+      var t = e.target;
+      if (!t.classList || !t.classList.contains('selbox')) return;
+      post({ id: t.value, on: t.checked ? '1' : '0' }).then(function (r) { show(r.n); }).catch(function () { t.checked = !t.checked; });
+    });
+    document.getElementById('selclear').addEventListener('click', function () {
+      post({ clear: '1' }).then(function (r) {
+        show(r.n);
+        Array.prototype.forEach.call(list.querySelectorAll('.selbox'), function (c) { c.checked = false; });
+      });
+    });
+    var more = document.getElementById('facemore');
+    if (more && 'IntersectionObserver' in window) {
+      var page = Number(more.getAttribute('data-page')), done = more.getAttribute('data-done') === '1', busy = false;
+      var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) load(); }, { rootMargin: '700px' });
+      var load = function () {
+        if (busy || done) return;
+        busy = true; more.textContent = 'Загружаем…';
+        var url = more.getAttribute('data-url'); url += (url.slice(-1) === '?' ? '' : '&') + 'page=' + (page + 1) + '&frag=1';
+        fetch(url, { credentials: 'same-origin' })
+          .then(function (r) { if (!r.ok) throw new Error('bad'); done = r.headers.get('x-more') !== '1'; return r.text(); })
+          .then(function (t) {
+            list.insertAdjacentHTML('beforeend', t); page += 1; busy = false;
+            more.textContent = done ? 'Это все группы' : '';
+            io.unobserve(more); if (!done) io.observe(more);
+          })
+          .catch(function () { busy = false; more.textContent = 'Не загрузилось. Прокрутите ещё раз.'; io.unobserve(more); io.observe(more); });
+      };
+      if (!done) io.observe(more);
+    }
+  }
+  var form = document.getElementById('mergeform');
+  if (form) {
+    var line = document.getElementById('mergeline');
+    var update = function () {
+      var cards = Array.prototype.slice.call(form.querySelectorAll('li.face'));
+      var main = null;
+      cards.forEach(function (c) { if (c.querySelector('.mainpick').checked) main = c; });
+      if (!main) return;
+      var others = cards.filter(function (c) { return c !== main; });
+      var files = others.reduce(function (n, c) { return n + Number(c.getAttribute('data-count')); }, 0);
+      var lost = others.map(function (c) { return c.getAttribute('data-name'); }).filter(function (n) { return n && n !== main.getAttribute('data-name'); });
+      var mainName = main.getAttribute('data-name');
+      var text = 'Останется: ' + (mainName || 'группа без имени') + '. Вольются групп: ' + others.length + ' (файлов в них: ' + files + ').';
+      if (mainName && lost.length) text += ' Эти имена пропадут: ' + lost.join(', ') + '.';
+      line.textContent = text;
+    };
+    form.addEventListener('change', update);
+    update();
+  }
 })();
 `;

@@ -491,6 +491,29 @@ describe('лица и питомцы (настоящий Postgres и диск, �
       assert.ok(!g2.some((x) => x.detectionId === far));
       assert.ok(g2.some((x) => x.detectionId === near));
 
+      // «Назад»: «нет» отменяется, и лицо снова в догадках; чужой отменить не может
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.boris, { detectionId: far, rejectedPersonId: person })).status, 404);
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.anna, { detectionId: far, rejectedPersonId: person })).status, 200);
+      assert.equal((await c.query('SELECT 1 FROM detection_rejects WHERE detection_id = $1 AND person_id = $2', [far, person])).rowCount, 0);
+      assert.ok(((await api('GET', '/api/people/guesses', { cookie: e.anna })).json.guesses as any[]).some((x) => x.detectionId === far), 'после «Назад» лицо снова спрашивается');
+      // «Не знаю» и «не человек» тоже откатываются
+      assert.equal((await jr('POST', '/api/people/skip', e.anna, { detectionId: far })).status, 200);
+      assert.ok(!((await api('GET', '/api/people/guesses', { cookie: e.anna })).json.guesses as any[]).some((x) => x.detectionId === far));
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.anna, { detectionId: far })).status, 200);
+      assert.ok(((await api('GET', '/api/people/guesses', { cookie: e.anna })).json.guesses as any[]).some((x) => x.detectionId === far));
+      assert.equal((await jr('PUT', `/api/people/detections/${far}/ignore`, e.anna, { ignored: true })).status, 200);
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.anna, { detectionId: far })).status, 200);
+      assert.equal((await c.query('SELECT ignored FROM detections WHERE id = $1', [far])).rows[0].ignored, false);
+      // новый человек, заведённый ответом, исчезает вместе с ним; уже существующий (с другими лицами) остаётся
+      const made = await jr('POST', '/api/people', e.anna, { detectionId: far, name: 'Случайный Человек' });
+      assert.equal(made.status, 201);
+      assert.equal(made.json.created, true);
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.anna, { detectionId: far, createdPersonId: made.json.id })).status, 200);
+      assert.equal((await c.query('SELECT 1 FROM people WHERE id = $1', [made.json.id])).rowCount, 0, 'заведённый ответом человек убран');
+      assert.equal((await jr('POST', '/api/people/guess-undo', e.anna, { detectionId: far, createdPersonId: person })).status, 200);
+      assert.equal((await c.query('SELECT 1 FROM people WHERE id = $1', [person])).rowCount, 1, 'человека с другими лицами не трогаем');
+      assert.equal((await jr('POST', '/api/people/reject', e.anna, { detectionId: far, personId: person })).status, 200, 'снова «не он»: дальше проверяется «Он»');
+
       // «Он»: ручное назначение; пересчёт заодно проверяет автоназначения и освобождает то, что на подписи не похоже
       assert.equal((await jr('PUT', `/api/people/detections/${near}`, e.anna, { personId: person })).status, 200);
       assert.equal((await c.query('SELECT source FROM detection_people WHERE detection_id = $1', [near])).rows[0].source, 'manual');

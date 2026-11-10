@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, CircleHelp, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, UserPlus, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, CircleHelp, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, Undo2, UserPlus, UserRound, Users, X } from 'lucide-react';
 import { Switch } from './ui';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl, thumbUrl } from '../api';
@@ -95,7 +95,11 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
   const [newName, setNewName] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [asked, setAsked] = useState(0);
-  const load = () => { setItems(null); setStage('ask'); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
+  // Журнал ответов для кнопки «Назад»: что отвечали, было ли «нет», и кого завели этим ответом.
+  const [history, setHistory] = useState<{ item: FaceGuess; rejected: boolean; created: string | null }[]>([]);
+  const [pending, setPending] = useState(0);
+  const [undoing, setUndoing] = useState(false);
+  const load = () => { setItems(null); setStage('ask'); setHistory([]); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
   useEffect(() => { load(); api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name && p.kind === 'person'))).catch(() => undefined); }, []);
   const cur = items && items.length > 0 ? items[0] : null;
   // Готовность лица помним по номеру находки: у закэшированной картинки onLoad может не сработать, поэтому смотрим и на complete.
@@ -122,9 +126,41 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
   function answer(fn: () => Promise<unknown>) {
     if (!cur) return;
     const back = cur;
+    const entry = { item: back, rejected: stage === 'pick', created: null as string | null };
     setProblem(null);
+    setHistory((h) => [...h.slice(-19), entry]);
+    setPending((n) => n + 1);
     next();
-    fn().catch((e) => { setItems((prev) => [back, ...(prev ?? [])]); setProblem(msg(e, 'Не получилось сохранить ответ, вопрос вернулся')); });
+    fn().then((res) => {
+      const made = res as { id?: string; created?: boolean } | undefined;
+      if (made && made.created && made.id) setHistory((h) => h.map((x) => (x.item.detectionId === back.detectionId ? { ...x, created: made.id ?? null } : x)));
+    }).catch((e) => {
+      setHistory((h) => h.filter((x) => x.item.detectionId !== back.detectionId));
+      setItems((prev) => [back, ...(prev ?? [])]);
+      setProblem(msg(e, 'Не получилось сохранить ответ, вопрос вернулся'));
+    }).finally(() => setPending((n) => n - 1));
+  }
+  // «Назад»: возвращает последнее лицо и отменяет ответ на сервере (в том числе заведённого этим ответом человека).
+  function undo() {
+    const h = history[history.length - 1];
+    if (!h || undoing || pending > 0) return;
+    setUndoing(true);
+    setProblem(null);
+    api.undoGuess(h.item.detectionId, h.rejected ? h.item.personId : undefined, h.created ?? undefined).then(() => {
+      setHistory((x) => x.slice(0, -1));
+      setItems((prev) => [h.item, ...(prev ?? []).filter((i) => i.detectionId !== h.item.detectionId)]);
+      setStage('ask'); setQ(''); setOther(false); setNewName('');
+      setAsked((n) => Math.max(0, n - 1));
+      onAnswered();
+      void refreshPeople();
+    }).catch((e) => setProblem(msg(e, 'Не получилось вернуть ответ'))).finally(() => setUndoing(false));
+  }
+  // В выборе «А кто?» можно передумать: вернуться к вопросу «Это …?» и отменить «нет».
+  function backToAsk() {
+    if (!cur) return;
+    const c = cur;
+    setStage('ask'); setQ(''); setOther(false); setNewName('');
+    api.undoGuess(c.detectionId, c.personId).catch((e) => setProblem(msg(e, 'Не получилось отменить «нет»')));
   }
   function no() {
     if (!cur) return;
@@ -148,6 +184,11 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
     <section aria-label="Проверить догадки" className="glass mb-6 rounded-2xl p-4">
       <div className="mb-3 flex items-start gap-3">
         <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Облако не уверено в этих лицах. Ваши ответы учат его узнавать людей точнее, а одно и то же лицо больше не спрашивается.{asked > 0 ? ` Отвечено: ${asked}.` : ''}{items && items.length > 0 ? ` Осталось: ${items.length}.` : ''}</p>
+        {history.length > 0 && (!cur || stage === 'ask') && (
+          <button type="button" onClick={undo} disabled={undoing || pending > 0} title="Вернуть прошлое лицо и отменить ответ" className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-gray-700 hover:bg-black/5 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-white/10">
+            {undoing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Undo2 className="size-4" aria-hidden />}Назад
+          </button>
+        )}
         <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-black/5 dark:text-gray-400 dark:hover:bg-white/10"><X className="size-4" aria-hidden /></button>
       </div>
       {items === null && <p className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-4 animate-spin" aria-hidden />Ищем сомнительные лица…</p>}
@@ -176,9 +217,11 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
               <img src={thumbUrl(cur.fileId)} alt="Снимок целиком" draggable={false} className="size-12 rounded-lg border-2 border-white/70 object-cover opacity-90 shadow-sm dark:border-white/20" title="Снимок, на котором найдено лицо" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="mb-2 text-base font-semibold text-gray-900 dark:text-white">Хорошо, это не {cur.name}. А кто?</p>
+              <p className="mb-2 flex flex-wrap items-center gap-x-3 text-base font-semibold text-gray-900 dark:text-white">Хорошо, это не {cur.name}. А кто?
+                <button type="button" onClick={backToAsk} className="flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-normal text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10"><Undo2 className="size-4" aria-hidden />Нет, это он</button>
+              </p>
               {other ? (
-                <form onSubmit={(e) => { e.preventDefault(); const n = newName.trim(); if (n) { const d = cur.detectionId; answer(async () => { await api.createPerson(d, n); await refreshPeople(); }); } }} className="flex flex-wrap items-center gap-2">
+                <form onSubmit={(e) => { e.preventDefault(); const n = newName.trim(); if (n) { const d = cur.detectionId; answer(async () => { const made = await api.createPerson(d, n); await refreshPeople(); return made; }); } }} className="flex flex-wrap items-center gap-2">
                   <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={80} placeholder="Имя нового человека" aria-label="Имя" autoFocus className="min-w-0 max-w-xs flex-1 rounded-lg border border-paper-300 bg-white/70 px-3 py-1.5 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white" />
                   <button type="submit" disabled={!newName.trim()} className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">Сохранить</button>
                   <button type="button" onClick={() => setOther(false)} className={ghost}>Назад к списку</button>

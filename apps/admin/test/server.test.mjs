@@ -49,6 +49,7 @@ describe('админка', () => {
         if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
         if (req.method === 'GET' && req.url.startsWith('/internal/faces?')) return j(200, { total: 2, enabled: { faces: true, pets: true }, groups: [{ id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 1, cover: '90' }, { id: '6', name: null, kind: 'pet', count: 4, owners: ['anna'], hiddenBy: 0, cover: '91' }] });
         if (req.method === 'GET' && req.url.startsWith('/internal/faces/5?')) return j(200, { group: { id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 0, cover: '90' }, total: 2, faces: [{ id: '90', fileId: '41', owner: 'anna', source: 'manual', score: 0.9 }, { id: '92', fileId: '42', owner: 'boris', source: 'auto', score: 0.8 }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/faces/6?')) return j(200, { group: { id: '6', name: null, kind: 'pet', count: 4, owners: ['anna'], hiddenBy: 0, cover: '91' }, total: 1, faces: [] });
         if (req.method === 'GET' && req.url === '/internal/faces/detections/90/crop') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
         if (req.method === 'PATCH' && req.url === '/internal/faces/5') return j(200, { ok: true });
         if (req.method === 'POST' && req.url === '/internal/faces/merge') return j(200, { merged: JSON.parse(body).from.length });
@@ -637,7 +638,7 @@ describe('админка', () => {
     assert.equal((await req('GET', '/faces')).status, 303, 'без входа не открывается');
     const list = await req('GET', '/faces?kind=person&q=%D0%B2%D0%B0&unnamed=1', { cookie });
     assert.equal(list.status, 200);
-    assert.ok(calls.some((c) => c.startsWith('GET /internal/faces?') && c.includes('kind=person') && c.includes('unnamed=1') && c.includes('limit=24')));
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/faces?') && c.includes('kind=person') && c.includes('unnamed=1') && c.includes('limit=48')));
     assert.ok(list.text.includes('Валя &lt;b&gt;') && !list.text.includes('Валя <b>'), 'имя экранировано');
     assert.ok(list.text.includes('src="/faces/crop/90"') && list.text.includes('(общая)') && list.text.includes('скрыта у 1') && list.text.includes('питомец'));
     assert.ok(list.text.includes('href="/faces" aria-current="page"') || list.text.includes('aria-current="page">Лица'));
@@ -669,6 +670,39 @@ describe('админка', () => {
     await post('/faces/6/dissolve', {});
     assert.ok(calls.some((c) => c.startsWith('DELETE /internal/faces/6')));
     assert.equal((await post('/faces/zzz', {})).status, 404);
+    // выбор групп хранится в сессии
+    assert.ok(list.text.includes('class="selbox" value="5"') && list.text.includes('id="selbar" hidden'), 'выбора ещё нет, плашка скрыта');
+    assert.ok(list.text.includes('Слить выбранные') && list.text.includes('/faces.js'));
+    const js = await req('GET', '/faces.js', { cookie });
+    assert.equal(js.status, 200);
+    assert.ok(js.headers['content-type'].startsWith('text/javascript'));
+    const one1 = await post('/faces/select', { id: '5', on: '1' });
+    assert.equal(one1.status, 200);
+    assert.equal(JSON.parse(one1.text).n, 1);
+    assert.equal(JSON.parse((await post('/faces/select', { id: '6', on: '1' })).text).n, 2);
+    assert.equal(JSON.parse((await post('/faces/select', { id: 'zz', on: '1' })).text).n, 2, 'мусор в выбор не попадает');
+    const again = await req('GET', '/faces', { cookie });
+    assert.ok(again.text.includes('class="selbox" value="5" checked') && !again.text.includes('id="selbar" hidden'), 'выбор виден после перезагрузки');
+    // подгрузка страницы фрагментом: только карточки и заголовок X-More
+    const frag = await req('GET', '/faces?page=2&frag=1', { cookie });
+    assert.equal(frag.status, 200);
+    assert.ok(frag.text.startsWith('<li class="face">') && !frag.text.includes('<html'));
+    assert.equal(frag.headers['x-more'], '0');
+    // страница слияния: главная одна, остальные вливаются; ссылки «Проверить» ведут с признаком слияния
+    const mp = await req('GET', '/faces/merge', { cookie });
+    assert.equal(mp.status, 200);
+    assert.ok(mp.text.includes('name="into" class="mainpick" value="5" required') && mp.text.includes('name="from" value="6"') && mp.text.includes('href="/faces/5?merge=1"'));
+    const onePg = await req('GET', '/faces/5?merge=1', { cookie });
+    assert.ok(onePg.text.includes('Вернуться к слиянию') && onePg.text.includes('name="merge" value="1"'));
+    // убрать из выбора, потом слить: выбор очищается
+    assert.equal((await post('/faces/unselect', { id: '6' })).headers.location, '/faces/merge');
+    assert.equal((await post('/faces/unselect', { id: '5' })).headers.location, '/faces');
+    await post('/faces/select', { id: '5', on: '1' });
+    const done = await post('/faces/merge', { into: '5', from: '6' });
+    assert.equal(done.headers.location, '/faces');
+    assert.equal(JSON.parse((await post('/faces/select', { id: '9', on: '0' })).text).n, 0, 'после слияния выбор пуст');
+    assert.equal((await post('/faces/merge', { into: 'x' })).headers.location, '/faces/merge', 'при ошибке остаёмся на слиянии');
+    assert.equal(JSON.parse((await post('/faces/select', { clear: '1' })).text).n, 0);
     assert.equal((await req('POST', '/faces/merge', { cookie, form: { into: '5', from: '6' } })).status, 403, 'без csrf нельзя');
   });
 

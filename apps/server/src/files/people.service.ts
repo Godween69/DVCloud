@@ -716,7 +716,7 @@ export class PeopleService {
   }
 
   // Завести человека (или питомца) по находке на фото и сразу назвать его. Имя общее: если такое уже есть, это та же группа.
-  async createFromDetection(userId: string, detectionId: string, nameIn: string): Promise<{ id: string }> {
+  async createFromDetection(userId: string, detectionId: string, nameIn: string): Promise<{ id: string; created: boolean }> {
     const d = await this.detection(userId, detectionId);
     const name = nameIn.trim().replace(/\s+/g, ' ');
     if (name.length < 1 || name.length > 60) throw new BadRequestException('Имя от 1 до 60 символов');
@@ -724,7 +724,7 @@ export class PeopleService {
     const same = (await this.db.query<{ id: string }>('SELECT id FROM people WHERE kind = $1 AND lower(name) = lower($2)', [kind, name])).rows[0];
     if (same) {
       await this.assign(userId, d.id, same.id);
-      return { id: same.id };
+      return { id: same.id, created: false };
     }
     const id = await this.db.tx(async (c) => {
       const p = await c.query<{ id: string }>('INSERT INTO people (kind, name) VALUES ($1,$2) RETURNING id', [kind, name]);
@@ -736,7 +736,25 @@ export class PeopleService {
       return p.rows[0].id;
     });
     void this.recluster(kind).catch(() => undefined);
-    return { id };
+    return { id, created: true };
+  }
+
+  // «Назад» в очереди догадок: возвращает находку в исходное состояние «спрашивается». Снимает назначение, «не знаю»,
+  // «не человек» и «не он» (для personId, если передан). Человека, которого завели этим же ответом, убирает,
+  // но только если у него больше нет ни одной находки.
+  async undoGuess(userId: string, detectionId: string, o: { rejectedPersonId?: string; createdPersonId?: string }): Promise<void> {
+    const d = await this.detection(userId, detectionId);
+    if (d.kind !== 'face') throw new BadRequestException('Откатить можно только ответ про лицо');
+    await this.db.tx(async (c) => {
+      await c.query('DELETE FROM detection_people WHERE detection_id = $1', [d.id]);
+      await c.query('DELETE FROM face_skips WHERE detection_id = $1 AND user_id = $2', [d.id, userId]);
+      await c.query('UPDATE detections SET ignored = false WHERE id = $1', [d.id]);
+      if (o.rejectedPersonId && ID_RE.test(o.rejectedPersonId)) await c.query('DELETE FROM detection_rejects WHERE detection_id = $1 AND person_id = $2', [d.id, o.rejectedPersonId]);
+      if (o.createdPersonId && ID_RE.test(o.createdPersonId)) {
+        await c.query('DELETE FROM people p WHERE p.id = $1 AND p.kind = \'person\' AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.person_id = p.id)', [o.createdPersonId]);
+      }
+    });
+    // Пересчёт групп не нужен: находка возвращается в состояние «спрашивается», как до ответа.
   }
 
   // «Проверить догадки»: свободные лица на файлах человека, похожие на названного человека, но не настолько, чтобы

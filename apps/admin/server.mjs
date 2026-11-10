@@ -3,14 +3,14 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, facePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
+import { CSS, FACES_JS, FACE_PER, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, facePage, facesFragment, facesMergePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
 
 const COOKIE = 'dvcloud_admin';
 const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; object-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; object-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
   'referrer-policy': 'no-referrer',
@@ -278,17 +278,34 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     const ok = (text) => { session.flash = { kind: 'ok', text }; };
     const id = /^\/faces\/(\d{1,18})\//.exec(path)?.[1];
     let back = '/faces';
+    // Выбор групп для слияния хранится в сессии: не сбрасывается ни при прокрутке, ни при смене фильтра.
+    const sel = (session.faceSel ??= new Set());
+    if (path === '/faces/select') {
+      if (form.get('clear') === '1') sel.clear();
+      else {
+        const x = form.get('id') ?? '';
+        if (/^\d{1,18}$/.test(x)) {
+          if (form.get('on') === '1') { if (sel.size < 2000) sel.add(x); } else sel.delete(x);
+        }
+      }
+      return send(res, 200, 'application/json', JSON.stringify({ n: sel.size }));
+    }
+    if (path === '/faces/unselect') {
+      sel.delete(form.get('id') ?? '');
+      return redirect(res, sel.size > 0 ? '/faces/merge' : '/faces');
+    }
     try {
       let m;
       if (path === '/faces/merge') {
-        const b = form.get('back') ?? '';
-        if (/^\/faces\?[a-z0-9=&%_.+\-]*$/i.test(b)) back = b;
+        back = '/faces/merge';
         const into = (form.get('into') ?? '').trim();
         const from = form.getAll('from').filter((x) => /^\d{1,18}$/.test(x) && x !== into);
         if (!/^\d{1,18}$/.test(into)) throw new ApiError(400, 'Отметьте группу, которая останется');
         if (from.length === 0) throw new ApiError(400, 'Отметьте хотя бы одну группу, которую нужно влить');
         const r = await api.mergeFaces(into, from);
         ok(`Объединено групп: ${r.merged}`);
+        sel.clear();
+        back = '/faces';
       } else if (id && (m = /^\/faces\/\d+\/(rename|dissolve|remove-face)$/.exec(path))) {
         back = `/faces/${id}`;
         if (m[1] === 'rename') {
@@ -306,7 +323,10 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
           await api.removeFace(id, det);
           ok('Лицо убрано из группы и в неё больше не вернётся');
           const off = Number(form.get('offset'));
-          if (Number.isInteger(off) && off > 0 && off < 1_000_000) back = `/faces/${id}?offset=${off}`;
+          const q2 = [];
+          if (Number.isInteger(off) && off > 0 && off < 1_000_000) q2.push(`offset=${off}`);
+          if (form.get('merge') === '1') q2.push('merge=1');
+          if (q2.length) back = `/faces/${id}?${q2.join('&')}`;
         }
       } else {
         return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
@@ -424,6 +444,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     const path = new URL(req.url, 'http://x').pathname;
     if (req.method === 'GET' && path === '/style.css') return send(res, 200, 'text/css; charset=utf-8', CSS, { 'cache-control': 'max-age=300' });
     if (req.method === 'GET' && path === '/viewer.js') return send(res, 200, 'text/javascript; charset=utf-8', VIEWER_JS, { 'cache-control': 'max-age=300' });
+    if (req.method === 'GET' && path === '/faces.js') return send(res, 200, 'text/javascript; charset=utf-8', FACES_JS, { 'cache-control': 'max-age=300' });
     if (req.method === 'GET' && path === '/health') return send(res, 200, 'application/json', JSON.stringify({ status: 'ok', service: 'dvcloud-admin' }));
 
     if (path === '/login') {
@@ -502,12 +523,28 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       const sp = new URL(req.url, 'http://x').searchParams;
       const offset = Math.max(0, Math.min(1_000_000, Number(sp.get('offset')) || 0));
       try {
-        return html(res, 200, facePage({ data: await api.face(fm[1], offset), offset, csrf: session.csrf, flash, loadError: null }));
+        return html(res, 200, facePage({ data: await api.face(fm[1], offset), offset, csrf: session.csrf, flash, loadError: null, merge: sp.get('merge') === '1' }));
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         session.flash = { kind: 'error', text: e.message };
         return redirect(res, '/faces');
       }
+    }
+
+    if (req.method === 'GET' && path === '/faces/merge') {
+      const flash = session.flash;
+      session.flash = null;
+      const sel = (session.faceSel ??= new Set());
+      const groups = [];
+      for (const id of [...sel]) {
+        try {
+          groups.push((await api.face(id, 0, 1)).group);
+        } catch (e) {
+          if (!(e instanceof ApiError)) throw e;
+          sel.delete(id); // группа уже исчезла (распущена или влита): из выбора убираем
+        }
+      }
+      return html(res, 200, facesMergePage({ groups, csrf: session.csrf, flash, loadError: null }));
     }
 
     if (req.method === 'GET' && path === '/faces') {
@@ -523,12 +560,18 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
       let data = null;
       let loadError = null;
       try {
-        data = await api.faces({ ...(q.kind ? { kind: q.kind } : {}), ...(q.q ? { q: q.q } : {}), ...(q.unnamed ? { unnamed: '1' } : {}), offset: String((q.page - 1) * 24), limit: '24' });
+        data = await api.faces({ ...(q.kind ? { kind: q.kind } : {}), ...(q.q ? { q: q.q } : {}), ...(q.unnamed ? { unnamed: '1' } : {}), offset: String((q.page - 1) * FACE_PER), limit: String(FACE_PER) });
       } catch (e) {
         if (!(e instanceof ApiError)) throw e;
         loadError = e.message;
       }
-      return html(res, 200, facesPage({ data, q, csrf: session.csrf, flash, loadError }));
+      const sel = session.faceSel ?? new Set();
+      if (sp.get('frag') === '1') {
+        // Подгрузка при прокрутке: только карточки; заголовок X-More говорит, есть ли ещё страницы.
+        if (!data) return send(res, 502, 'text/plain; charset=utf-8', loadError ?? 'Не загрузилось');
+        return send(res, 200, 'text/html; charset=utf-8', facesFragment({ data, sel }), { 'x-more': q.page * FACE_PER < data.total ? '1' : '0' });
+      }
+      return html(res, 200, facesPage({ data, q, csrf: session.csrf, flash, loadError, sel }));
     }
 
     if (req.method === 'GET' && path === '/duplicates') {

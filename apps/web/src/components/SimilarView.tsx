@@ -5,9 +5,9 @@ import { formatBytes } from '../lib/format';
 import type { SimilarFile, SimilarGroup, SimilarResult } from '../types';
 
 // Серии: кадры одного момента. Дубликатами занимается администратор (с версии 0.11.3 это в админке, в фоне).
-const HINT = 'Кадры одного момента, снятые подряд. Лучшие (самые резкие) оставлены, лишние отмечены. Отметки можно менять.';
-const ZOOM_HINT = 'Чтобы рассмотреть кадр, нажмите на нём правую кнопку мыши и держите (на телефоне: удерживайте палец). Кадр приблизится, а когда отпустите, вернётся на место. Колесо мыши меняет увеличение.';
-const HINT_KEY = 'dv-series-zoom-hint';
+const HINT = 'Кадры одного момента, снятые подряд. Зелёная рамка: оставить, красная: убрать. Лучшие (самые резкие) отмечены зелёным заранее. Можно оставить несколько кадров, а можно убрать все: тогда вся серия уйдёт в корзину.';
+const ZOOM_HINT = 'Чтобы рассмотреть кадр, зажмите на нём левую кнопку мыши (на телефоне: удерживайте палец). Кадр приблизится, а когда отпустите, вернётся на место. Колесо мыши при зажатой кнопке меняет увеличение. Чтобы сменить «оставить» или «убрать», нажмите на полосу под кадром.';
+const HINT_KEY = 'dv-series-zoom-hint-2';
 
 interface Zoom { file: SimilarFile; from: DOMRect; open: boolean }
 
@@ -51,7 +51,6 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
   const [scale, setScale] = useState(1);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hintShown, setHintShown] = useState(() => { try { return localStorage.getItem(HINT_KEY) !== '1'; } catch { return true; } });
-  const noClick = useRef(0); // после приближения пальцем отпускание не должно отметить кадр
 
   const load = useCallback((k: 'series') => {
     setData(null);
@@ -86,10 +85,10 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
   function closeHint() { setHintShown(false); try { localStorage.setItem(HINT_KEY, '1'); } catch { /* без хранилища подсказка покажется снова */ } }
 
   const total = marked.size;
+  const wholeSeries = (data?.groups ?? []).filter((g) => g.files.length > 0 && g.files.every((f) => marked.has(f.id))).length;
   const bytes = useMemo(() => (data?.groups ?? []).flatMap((g) => g.files).filter((f) => marked.has(f.id)).reduce((s, f) => s + f.size, 0), [data, marked]);
 
   function toggle(id: string) {
-    if (Date.now() < noClick.current) return;
     setMarked((m) => { const n = new Set(m); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   }
 
@@ -97,8 +96,8 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
     if (!data || busy) return;
     setBusy(true);
     const done: string[] = [];
-    // В группе всегда остаётся хотя бы один снимок: если отмечены все, последний не трогаем.
-    const groups = data.groups.map((g) => ({ g, ids: g.files.filter((f) => marked.has(f.id)).map((f) => f.id) })).map(({ g, ids }) => ({ g, ids: ids.length === g.files.length ? ids.slice(1) : ids }));
+    // Можно убрать и всю серию целиком: она уходит в корзину, откуда её можно вернуть.
+    const groups = data.groups.map((g) => ({ ids: g.files.filter((f) => marked.has(f.id)).map((f) => f.id) }));
     try {
       for (const { ids } of groups) for (const id of ids) { await api.trash(id); done.push(id); }
     } catch (e) {
@@ -128,29 +127,38 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
         {data?.groups.map((g: SimilarGroup) => (
           <li key={g.id} className="glass rounded-xl p-3">
             <ul className="flex gap-3 overflow-x-auto pb-1">
-              {g.files.map((f, i) => (
-                <li key={f.id} className="w-36 shrink-0">
-                  <button type="button" onClick={() => toggle(f.id)}
-                    onPointerEnter={() => preload(f.id)}
-                    onContextMenu={(e) => e.preventDefault()}
-                    onPointerDown={(e) => {
-                      const el = e.currentTarget;
-                      if (e.pointerType === 'mouse') { if (e.button === 2) { e.preventDefault(); openZoom(f, el); } return; }
-                      // палец: удержание около полсекунды приближает кадр
-                      holdTimer.current = setTimeout(() => { noClick.current = Date.now() + 600; openZoom(f, el); }, 380);
-                    }}
-                    onPointerUp={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
-                    onPointerCancel={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
-                    aria-pressed={marked.has(f.id)} aria-label={`${f.name}: ${marked.has(f.id) ? 'будет удалён' : 'останется'}`} className={`group relative block overflow-hidden rounded-lg ring-2 ${marked.has(f.id) ? 'ring-red-500' : 'ring-transparent'}`}>
-                    <img src={thumbUrl(f.id)} alt="" loading="lazy" className={`aspect-square w-full object-cover ${marked.has(f.id) ? 'opacity-50' : ''}`} />
-                    <span className={`absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full text-white ${marked.has(f.id) ? 'bg-red-600' : 'bg-emerald-600'}`}>{marked.has(f.id) ? <Trash2 className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}</span>
-                    <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:hidden">ПКМ: приблизить</span>
-                    {i === 0 && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white">лучший</span>}
-                  </button>
+              {g.files.map((f, i) => {
+                const off = marked.has(f.id);
+                return (
+                <li key={f.id} className="w-40 shrink-0">
+                  <div className={`rounded-xl border-[3px] p-1.5 transition-colors ${off ? 'border-red-500' : 'border-emerald-500'} bg-black/5 dark:bg-white/5`}>
+                    <div
+                      role="img" aria-label={`${f.name}: удерживайте, чтобы рассмотреть`}
+                      onPointerEnter={() => preload(f.id)}
+                      onContextMenu={(e) => e.preventDefault()}
+                      onDragStart={(e) => e.preventDefault()}
+                      onPointerDown={(e) => {
+                        const el = e.currentTarget;
+                        if (e.pointerType === 'mouse') { if (e.button === 0) { e.preventDefault(); openZoom(f, el); } return; }
+                        // палец: удержание около полсекунды приближает кадр
+                        holdTimer.current = setTimeout(() => { openZoom(f, el); }, 380);
+                      }}
+                      onPointerUp={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
+                      onPointerCancel={() => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = null; } }}
+                      className="group relative block cursor-zoom-in select-none overflow-hidden rounded-lg [-webkit-touch-callout:none]">
+                      <img src={thumbUrl(f.id)} alt="" loading="lazy" draggable={false} className={`aspect-square w-full object-cover ${off ? 'opacity-60' : ''}`} />
+                      {i === 0 && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white">лучший</span>}
+                    </div>
+                    <button type="button" onClick={() => toggle(f.id)} aria-pressed={off} aria-label={`${f.name}: ${off ? 'будет убран, нажмите, чтобы оставить' : 'останется, нажмите, чтобы убрать'}`}
+                      className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold text-white transition-colors ${off ? 'bg-red-600 hover:bg-red-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}>
+                      {off ? <Trash2 className="size-4" aria-hidden /> : <Check className="size-4" aria-hidden />}{off ? 'Убрать' : 'Оставить'}
+                    </button>
+                  </div>
                   <p className="mt-1 truncate text-xs text-gray-700 dark:text-gray-300">{f.name}</p>
                   <p className="text-xs text-gray-500">{f.width}×{f.height} · {formatBytes(f.size)}</p>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </li>
         ))}
@@ -159,7 +167,7 @@ export function SimilarView({ onTrashed, onError }: { onTrashed: (ids: string[])
       {total > 0 && (
         <div className="fixed inset-x-0 bottom-[3.75rem] z-30 sm:bottom-0 border-t border-paper-300 bg-paper-100/95 p-3 dark:border-gray-800 dark:bg-gray-950/95">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-            <span className="text-sm text-gray-700 dark:text-gray-300">Отмечено: {total} ({formatBytes(bytes)}). Файлы уйдут в корзину, их можно вернуть.</span>
+            <span className="text-sm text-gray-700 dark:text-gray-300">Убрать: {total} ({formatBytes(bytes)}){wholeSeries > 0 ? `, серий целиком: ${wholeSeries}` : ''}. Файлы уйдут в корзину, их можно вернуть.</span>
             <button type="button" disabled={busy} onClick={trashMarked} className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60">
               {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Trash2 className="size-4" aria-hidden />} В корзину
             </button>

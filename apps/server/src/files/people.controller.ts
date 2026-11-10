@@ -70,7 +70,7 @@ export class PeopleController {
 
   // Завести человека по находке и назвать: {detectionId, name}.
   @Post()
-  async create(@Req() req: Req_, @Body() body: unknown): Promise<{ id: string }> {
+  async create(@Req() req: Req_, @Body() body: unknown): Promise<{ id: string; created: boolean }> {
     const o = obj(body);
     if (typeof o.detectionId !== 'string' || typeof o.name !== 'string') throw new BadRequestException('Нужны detectionId и name');
     return this.people.createFromDetection(req.user.id, o.detectionId, o.name);
@@ -112,6 +112,17 @@ export class PeopleController {
     const o = obj(body);
     if (typeof o.detectionId !== 'string') throw new BadRequestException('Нужен detectionId');
     await this.people.skipDetection(req.user.id, o.detectionId);
+    return { ok: true };
+  }
+
+  // «Назад» в очереди догадок: {detectionId, rejectedPersonId?, createdPersonId?}. Находка снова спрашивается.
+  @Post('guess-undo')
+  @HttpCode(200)
+  async guessUndo(@Req() req: Req_, @Body() body: unknown): Promise<{ ok: true }> {
+    const o = obj(body);
+    if (typeof o.detectionId !== 'string') throw new BadRequestException('Нужен detectionId');
+    const opt = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+    await this.people.undoGuess(req.user.id, o.detectionId, { rejectedPersonId: opt(o.rejectedPersonId), createdPersonId: opt(o.createdPersonId) });
     return { ok: true };
   }
 
