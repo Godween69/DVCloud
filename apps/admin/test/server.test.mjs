@@ -49,6 +49,9 @@ describe('админка', () => {
         if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
         if (req.method === 'GET' && req.url.startsWith('/internal/faces?')) return j(200, { total: 2, enabled: { faces: true, pets: true }, groups: [{ id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 1, cover: '90' }, { id: '6', name: null, kind: 'pet', count: 4, owners: ['anna'], hiddenBy: 0, cover: '91' }] });
         if (req.method === 'GET' && req.url.startsWith('/internal/faces/5?')) return j(200, { group: { id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 0, cover: '90' }, total: 2, faces: [{ id: '90', fileId: '41', owner: 'anna', source: 'manual', score: 0.9 }, { id: '92', fileId: '42', owner: 'boris', source: 'auto', score: 0.8 }] });
+        if (req.method === 'GET' && req.url === '/internal/albums/3/dates') return j(200, { album: { id: '3', name: 'Отпуск', owner: 'anna' }, tz: 'Europe/Moscow', total: 2, files: [{ id: '41', name: 'a<b>.jpg', owner: 'anna', local: '2015-06-28T10:00:00', manual: false }, { id: '42', name: 'b.jpg', owner: 'anna', local: '2015-06-28T10:05:30', manual: true }] });
+        if (req.method === 'POST' && req.url === '/internal/albums/3/dates') return j(200, { changed: JSON.parse(body).mode === 'each' ? JSON.parse(body).items.length : 2, firstBefore: null, firstAfter: null, lastAfter: null });
+        if (req.method === 'POST' && req.url === '/internal/albums/3/remove-files') return j(200, { removed: JSON.parse(body).ids.length });
         if (req.method === 'GET' && req.url.startsWith('/internal/faces/6?')) return j(200, { group: { id: '6', name: null, kind: 'pet', count: 4, owners: ['anna'], hiddenBy: 0, cover: '91' }, total: 1, faces: [] });
         if (req.method === 'GET' && req.url === '/internal/faces/detections/90/crop') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
         if (req.method === 'PATCH' && req.url === '/internal/faces/5') return j(200, { ok: true });
@@ -704,6 +707,36 @@ describe('админка', () => {
     assert.equal((await post('/faces/merge', { into: 'x' })).headers.location, '/faces/merge', 'при ошибке остаёмся на слиянии');
     assert.equal(JSON.parse((await post('/faces/select', { clear: '1' })).text).n, 0);
     assert.equal((await req('POST', '/faces/merge', { cookie, form: { into: '5', from: '6' } })).status, 403, 'без csrf нельзя');
+  });
+
+  it('вкладка «Даты»: выбор альбома, сдвиг, одна дата всем, правка по файлам, убрать из альбома', async () => {
+    const cookie = await login();
+    assert.equal((await req('GET', '/dates')).status, 303, 'без входа не открывается');
+    const idle = await req('GET', '/dates', { cookie });
+    assert.ok(idle.text.includes('anna: Отпуск (12)'));
+    const csrf = csrfOf(idle.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    const pg = await req('GET', '/dates?album=3', { cookie });
+    assert.ok(pg.text.includes('a&lt;b&gt;.jpg') && !pg.text.includes('a<b>.jpg'), 'имя экранировано');
+    assert.ok(pg.text.includes('name="t_41" value="2015-06-28T10:00:00"') && pg.text.includes('Europe/Moscow') && pg.text.includes('дата правлена'));
+    assert.ok(pg.text.includes('src="/files/41/thumb"'));
+    // сдвиг: datetime-local без секунд дополняется секундами
+    assert.equal((await post('/dates/3/shift', { first: '2019-10-18T14:30' })).status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/dates') && c.includes('"mode":"shift"') && c.includes('"first":"2019-10-18T14:30:00"')));
+    await post('/dates/3/all', { at: '2019-10-18T14:30:15' });
+    assert.ok(calls.some((c) => c.includes('"mode":"all"') && c.includes('"at":"2019-10-18T14:30:15"')));
+    // по файлам: уходят только изменённые
+    await post('/dates/3/each', { t_41: '2015-06-28T10:00:00', o_41: '2015-06-28T10:00:00', t_42: '2019-10-18T15:00', o_42: '2015-06-28T10:05:30' });
+    const each = calls.filter((c) => c.startsWith('POST /internal/albums/3/dates') && c.includes('"mode":"each"')).pop();
+    assert.ok(each.includes('"id":"42"') && !each.includes('"id":"41"') && each.includes('2019-10-18T15:00:00'), each);
+    const n = calls.length;
+    await post('/dates/3/each', { t_41: '2015-06-28T10:00:00', o_41: '2015-06-28T10:00:00' });
+    await post('/dates/3/remove', {});
+    assert.equal(calls.length, n, 'без изменений и без отмеченных на сервер ничего не уходит');
+    await post('/dates/3/remove', { rm: '41' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/albums/3/remove-files') && c.includes('"ids":["41"]')));
+    assert.equal((await post('/dates/zz/shift', {})).status, 404);
+    assert.equal((await req('POST', '/dates/3/shift', { cookie, form: { first: '2019-10-18T14:30' } })).status, 403, 'без csrf нельзя');
   });
 
   it('неверный пароль даёт 401, после 5 неудач вход блокируется даже с верным', async () => {

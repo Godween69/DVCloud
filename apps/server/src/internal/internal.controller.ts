@@ -299,6 +299,31 @@ export class InternalStorageController {
     return { takenAt };
   }
 
+  // Даты файлов альбома и массовая правка (страница «Даты»). Время местное, по поясу из настроек «Медиа».
+  @Get('albums/:id/dates')
+  albumDates(@Param('id') id: string): ReturnType<AdminStorageService['albumDates']> {
+    return this.admin.albumDates(id);
+  }
+
+  @Post('albums/:id/dates')
+  @HttpCode(200)
+  async setAlbumDates(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<Awaited<ReturnType<AdminStorageService['setAlbumDates']>>> {
+    requireJson(req);
+    const o = asObject(body);
+    const r = await this.admin.setAlbumDates(id, { mode: typeof o.mode === 'string' ? o.mode : '', first: o.first, at: o.at, items: o.items });
+    await this.audit.write('album.dates', id, { mode: o.mode, changed: r.changed });
+    return r;
+  }
+
+  @Post('albums/:id/remove-files')
+  @HttpCode(200)
+  async removeAlbumFiles(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ removed: number }> {
+    requireJson(req);
+    const removed = await this.admin.removeFromAlbum(id, asObject(body).ids);
+    await this.audit.write('album.remove-files', id, { removed });
+    return { removed };
+  }
+
   // Миниатюра, если она уже построена людьми (новых не строим: внутренний порт не запускает фоновых работ). Иначе 404.
   @Get('browse/files/:id/thumb')
   async browseThumb(@Param('id') id: string, @Res() res: Response): Promise<void> {

@@ -251,7 +251,7 @@ ${error ? `<div class="msg error">${esc(error)}</div>` : ''}
 // «Инфо»: ненавязчивая кнопка с пояснением. text: один или несколько абзацев (строки/HTML из этого файла, не от людей).
 export const info = (text, side = '') => `<details class="info${side ? ' ' + side : ''}"><summary aria-label="Инфо" title="Инфо">i</summary><div class="tip">${[].concat(text).map((t) => `<p>${t}</p>`).join('')}</div></details>`;
 
-const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['dups', '/duplicates', 'Дубликаты'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['faces', '/faces', 'Лица'], ['backup', '/backup', 'Копия']];
+const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['dups', '/duplicates', 'Дубликаты'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['faces', '/faces', 'Лица'], ['dates', '/dates', 'Даты'], ['backup', '/backup', 'Копия']];
 const nav = (current) => `<nav class="tabs" aria-label="Разделы">${TABS.map(([k, href, label]) => `<a href="${href}"${current === k ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const topBar = (current, csrf) => `<div class="bar"><div class="brand"><b>DV Cloud</b><span class="muted">админка</span></div>${nav(current)}
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit" class="ghost">Выйти</button></form></div>`;
@@ -580,6 +580,41 @@ ${flashHtml(flash, loadError)}
 <form method="post" action="/storage/duplicates/scan">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}"><button type="submit">Проверить сейчас</button></form></div>
 ${body}
 </section>`, (d?.bulk?.running || d?.scanning) ? '<meta http-equiv="refresh" content="3">' : '', SCRIPT);
+}
+
+// ── Даты: массовое исправление дат съёмки у файлов одного альбома ──
+// Время показывается и вводится по часовому поясу из «Медиа». Без скриптов, обычные формы.
+export function datesPage({ albums, data: d, albumId, csrf, flash, loadError }) {
+  const opts = albums.map((a) => `<option value="${esc(a.id)}"${a.id === albumId ? ' selected' : ''}>${esc(a.owner)}: ${esc(a.name)} (${a.count})</option>`).join('');
+  const pick = `<form class="filter" method="get" action="/dates"><label>Альбом<select name="album"><option value="">— выберите —</option>${opts}</select></label><button class="primary" type="submit">Открыть</button></form>`;
+  let body = '<p class="muted">Найдите нужные фото на сайте, положите их в отдельный альбом и выберите его здесь.</p>';
+  if (d) {
+    const id = esc(d.album.id);
+    const first = d.files[0]?.local.slice(0, 16) ?? '';
+    const last = d.files[d.files.length - 1]?.local ?? '';
+    const rows = d.files.map((f) => `<tr><td><img src="/files/${esc(f.id)}/thumb" alt="" width="64" height="64" loading="lazy"></td>
+<td>${esc(f.name)}<br><span class="muted">${esc(f.owner)}${f.manual ? ', дата правлена' : ''}</span></td>
+<td><input type="datetime-local" step="1" name="t_${esc(f.id)}" value="${esc(f.local)}"><input type="hidden" name="o_${esc(f.id)}" value="${esc(f.local)}"></td>
+<td><label class="chk"><input type="checkbox" name="rm" value="${esc(f.id)}"> убрать из альбома</label></td></tr>`).join('');
+    body = `<p class="muted">Альбом «${esc(d.album.name)}», владелец ${esc(d.album.owner)}. Файлов: <b>${d.total}</b>${d.total > d.files.length ? ` (показаны первые ${d.files.length}; сдвиг и «всем одну дату» действуют на все)` : ''}. Время по поясу ${esc(d.tz)}. Первый кадр: ${esc(d.files[0]?.local.replace('T', ' ') ?? '—')}, последний: ${esc(last.replace('T', ' ') || '—')}.</p>
+<div class="dupbar"><form method="post" action="/dates/${id}/shift" class="filter">${csrfInput(csrf)}<label>Сдвинуть так, чтобы первый кадр стал<input type="datetime-local" step="1" name="first" value="${esc(first)}" required></label>
+<button class="danger" type="submit">Сдвинуть весь альбом</button></form>
+<p class="muted">Все кадры сдвигаются на одно и то же время, порядок и промежутки между ними сохраняются.</p></div>
+<div class="dupbar"><form method="post" action="/dates/${id}/all" class="filter">${csrfInput(csrf)}<label>Поставить всем одну дату<input type="datetime-local" step="1" name="at" value="${esc(first)}" required></label>
+<button class="danger" type="submit">Поставить всем</button></form></div>
+<form method="post" action="/dates/${id}/each">${csrfInput(csrf)}
+<table><thead><tr><th></th><th>Файл</th><th>Дата съёмки</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+<div class="dupbar"><button class="primary" type="submit">Сохранить изменённые даты</button>
+<button class="danger" type="submit" formaction="/dates/${id}/remove">Убрать отмеченные из альбома</button>
+<span class="muted">Из альбома файл только убирается: в библиотеке владельца он остаётся.</span></div></form>`;
+  }
+  return layout('DV Cloud: даты', `
+${topBar('dates', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Даты съёмки в альбоме ${info(['Для случаев, когда на камере были неверные часы и у целой съёмки неправильная дата. Найдите фото на сайте, положите в отдельный альбом, выберите его здесь.','«Сдвинуть» переносит весь альбом так, чтобы первый кадр стал указанным, остальные сдвигаются на столько же. «Поставить всем» задаёт одну дату всем. Ниже даты можно поправить у каждого файла.','Исправленные даты помечаются ручными: пересчёт дат их больше не трогает. Отменить действие кнопкой нельзя, но можно вернуть дату правкой.'])}</h2></div></div>
+${pick}
+${body}
+</section>`);
 }
 
 // ── Лица: общие группы людей и питомцев всего хранилища ──

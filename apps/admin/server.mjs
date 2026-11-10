@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, FACES_JS, FACE_PER, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, facePage, facesFragment, facesMergePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
+import { CSS, FACES_JS, FACE_PER, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, datesPage, facePage, facesFragment, facesMergePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -372,10 +372,43 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     return redirect(res, '/backup');
   }
 
+  // Даты альбома: сдвинуть всем, поставить всем одну, правка по файлам, убрать из альбома.
+  async function datesAction(session, res, path, form) {
+    const m = /^\/dates\/(\d{1,18})\/(shift|all|each|remove)$/.exec(path);
+    if (!m) return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+    const [, id, what] = m;
+    const stamp = (v) => String(v ?? '').trim().replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})$/, '$1:00');
+    try {
+      if (what === 'shift' || what === 'all') {
+        const r = await api.setAlbumDates(id, what === 'shift' ? { mode: 'shift', first: stamp(form.get('first')) } : { mode: 'all', at: stamp(form.get('at')) });
+        session.flash = { kind: 'ok', text: `Даты изменены у файлов: ${r.changed}` };
+      } else if (what === 'each') {
+        const items = [];
+        for (const [k, v] of form) {
+          const t = /^t_(\d{1,18})$/.exec(k);
+          if (t && v !== form.get(`o_${t[1]}`)) items.push({ id: t[1], at: stamp(v) });
+        }
+        if (items.length === 0) throw new ApiError(400, 'Ничего не изменилось');
+        const r = await api.setAlbumDates(id, { mode: 'each', items });
+        session.flash = { kind: 'ok', text: `Даты изменены у файлов: ${r.changed}` };
+      } else {
+        const ids = form.getAll('rm').filter((x) => /^\d{1,18}$/.test(x));
+        if (ids.length === 0) throw new ApiError(400, 'Отметьте файлы, которые нужно убрать из альбома');
+        const r = await api.removeAlbumFiles(id, ids);
+        session.flash = { kind: 'ok', text: `Убрано из альбома: ${r.removed}` };
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, `/dates?album=${id}`);
+  }
+
   async function doAction(session, req, res, path, form) {
     if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
     if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
     if (path.startsWith('/faces/')) return facesAction(session, res, path, form);
+    if (path.startsWith('/dates/')) return datesAction(session, res, path, form);
     if (path.startsWith('/sharing/')) return sharingAction(session, res, path, form);
     if (path.startsWith('/vault/')) return vaultAction(session, res, path, form);
     if (path.startsWith('/backup/')) return backupAction(session, res, path, form);
@@ -529,6 +562,23 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         session.flash = { kind: 'error', text: e.message };
         return redirect(res, '/faces');
       }
+    }
+
+    if (req.method === 'GET' && path === '/dates') {
+      const flash = session.flash;
+      session.flash = null;
+      const albumId = /^\d{1,18}$/.test(new URL(req.url, 'http://x').searchParams.get('album') ?? '') ? new URL(req.url, 'http://x').searchParams.get('album') : '';
+      let albums = [];
+      let data = null;
+      let loadError = null;
+      try {
+        albums = await api.albums();
+        if (albumId) data = await api.albumDates(albumId);
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, datesPage({ albums, data, albumId, csrf: session.csrf, flash, loadError }));
     }
 
     if (req.method === 'GET' && path === '/faces/merge') {

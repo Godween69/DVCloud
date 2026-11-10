@@ -281,6 +281,94 @@ export class AdminStorageService {
     return d.toISOString();
   }
 
+  // ---- Даты альбома: массовое исправление (страница «Даты» в админке) ----
+  // Времена вводятся и показываются по часовому поясу из настроек «Медиа», в виде 2019-10-18T14:30 (секунды необязательны).
+
+  private async localToInstant(local: unknown, tz: string): Promise<Date> {
+    if (typeof local !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(local)) throw new BadRequestException('Дата и время вида 2019-10-18T14:30');
+    let d: Date;
+    try {
+      d = (await this.db.query<{ t: Date }>('SELECT ($1::timestamp AT TIME ZONE $2) AS t', [local, tz])).rows[0].t;
+    } catch {
+      throw new BadRequestException('Такой даты не бывает');
+    }
+    this.checkTaken(d);
+    return d;
+  }
+
+  private checkTaken(d: Date): void {
+    if (!Number.isFinite(d.getTime()) || d.getUTCFullYear() < 1990 || d.getTime() > Date.now() + 86_400_000) throw new BadRequestException('Дата: от 1990 года и не позже завтрашнего дня');
+  }
+
+  private async albumRow(albumId: string): Promise<{ id: string; name: string; owner: string }> {
+    if (!ID_RE.test(albumId)) throw new NotFoundException('Альбом не найден');
+    const r = (await this.db.query<{ id: string; name: string; owner: string }>('SELECT a.id, a.name, u.login AS owner FROM albums a JOIN users u ON u.id = a.owner_id WHERE a.id = $1 AND a.deleted_at IS NULL', [albumId])).rows[0];
+    if (!r) throw new NotFoundException('Альбом не найден');
+    return r;
+  }
+
+  // Файлы альбома по возрастанию даты съёмки: номер, имя, владелец, местное время, правилась ли дата вручную.
+  async albumDates(albumId: string, limit = 1000): Promise<{ album: { id: string; name: string; owner: string }; tz: string; total: number; files: { id: string; name: string; owner: string; local: string; manual: boolean }[] }> {
+    const album = await this.albumRow(albumId);
+    const tz = (await this.settings.get()).timezone;
+    const total = Number((await this.db.query<{ n: string }>('SELECT count(*) AS n FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = $1 AND f.trashed_at IS NULL', [album.id])).rows[0].n);
+    const r = await this.db.query<{ id: string; name: string; owner: string; local: string; manual: boolean }>(
+      `SELECT f.id, f.original_name AS name, u.login AS owner, to_char(f.taken_at AT TIME ZONE $2, 'YYYY-MM-DD"T"HH24:MI:SS') AS local, f.taken_manual AS manual
+       FROM album_items ai JOIN files f ON f.id = ai.file_id JOIN users u ON u.id = f.owner_id
+       WHERE ai.album_id = $1 AND f.trashed_at IS NULL ORDER BY f.taken_at, f.id LIMIT $3`,
+      [album.id, tz, limit],
+    );
+    return { album, tz, total, files: r.rows };
+  }
+
+  // Меняет даты: shift (сдвинуть всё так, чтобы самый ранний кадр стал first, интервалы между кадрами сохраняются),
+  // all (одна дата всем) или each (по списку файлов). Правленные даты помечаются ручными: пересчёт дат их не трогает.
+  async setAlbumDates(albumId: string, op: { mode: string; first?: unknown; at?: unknown; items?: unknown }): Promise<{ changed: number; firstBefore: string | null; firstAfter: string | null; lastAfter: string | null }> {
+    const album = await this.albumRow(albumId);
+    const tz = (await this.settings.get()).timezone;
+    const ids = (await this.db.query<{ id: string; taken_at: Date }>(
+      'SELECT f.id, f.taken_at FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = $1 AND f.trashed_at IS NULL ORDER BY f.taken_at, f.id', [album.id])).rows;
+    if (ids.length === 0) throw new BadRequestException('В альбоме нет файлов');
+    const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
+    if (op.mode === 'shift') {
+      const target = await this.localToInstant(op.first, tz);
+      const deltaMs = target.getTime() - ids[0].taken_at.getTime();
+      this.checkTaken(new Date(ids[ids.length - 1].taken_at.getTime() + deltaMs));
+      await this.db.query(
+        `UPDATE files SET taken_at = taken_at + make_interval(secs => $2::double precision / 1000.0), taken_manual = true WHERE id = ANY($1::bigint[])`,
+        [ids.map((x) => x.id), deltaMs],
+      );
+      return { changed: ids.length, firstBefore: iso(ids[0].taken_at), firstAfter: iso(target), lastAfter: iso(new Date(ids[ids.length - 1].taken_at.getTime() + deltaMs)) };
+    }
+    if (op.mode === 'all') {
+      const target = await this.localToInstant(op.at, tz);
+      await this.db.query('UPDATE files SET taken_at = $2, taken_manual = true WHERE id = ANY($1::bigint[])', [ids.map((x) => x.id), target]);
+      return { changed: ids.length, firstBefore: iso(ids[0].taken_at), firstAfter: iso(target), lastAfter: iso(target) };
+    }
+    if (op.mode === 'each') {
+      if (!Array.isArray(op.items) || op.items.length < 1 || op.items.length > 5000) throw new BadRequestException('Нет файлов для изменения');
+      const inAlbum = new Set(ids.map((x) => x.id));
+      const todo: { id: string; at: Date }[] = [];
+      for (const it of op.items as { id?: unknown; at?: unknown }[]) {
+        if (typeof it?.id !== 'string' || !inAlbum.has(it.id)) throw new BadRequestException('Файл не из этого альбома: обновите страницу');
+        todo.push({ id: it.id, at: await this.localToInstant(it.at, tz) });
+      }
+      await this.db.tx(async (c) => {
+        for (const t of todo) await c.query('UPDATE files SET taken_at = $2, taken_manual = true WHERE id = $1', [t.id, t.at]);
+      });
+      return { changed: todo.length, firstBefore: null, firstAfter: null, lastAfter: null };
+    }
+    throw new BadRequestException('Неизвестное действие');
+  }
+
+  // Убрать файлы из альбома (сами файлы остаются у владельца в библиотеке).
+  async removeFromAlbum(albumId: string, fileIds: unknown): Promise<number> {
+    const album = await this.albumRow(albumId);
+    if (!Array.isArray(fileIds) || fileIds.length < 1 || fileIds.length > 5000 || fileIds.some((x) => typeof x !== 'string' || !ID_RE.test(x))) throw new BadRequestException('Нет файлов для удаления из альбома');
+    const r = await this.db.query('DELETE FROM album_items WHERE album_id = $1 AND file_id = ANY($2::bigint[])', [album.id, fileIds]);
+    return r.rowCount ?? 0;
+  }
+
   // Где лежит содержимое файла (для показа админу): путь в хранилище, тип и номер содержимого.
   async blobOf(fileId: string): Promise<{ path: string; mime: string; blobId: string; name: string } | null> {
     if (!ID_RE.test(fileId)) return null;
