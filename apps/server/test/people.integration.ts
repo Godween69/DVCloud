@@ -132,6 +132,12 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal(await count([valya], [dima]), 4, 'Валя без Димы: общий снимок отпадает');
     assert.equal(await count([dima], [valya]), 2);
     assert.equal(await count([valya, dima], []), 1);
+    const only = async (include: string[]) => (await jr('POST', '/api/people/match', e.anna, { include, exclude: [], only: true })).json.count;
+    assert.equal(await only([valya]), 4, '«только они»: Валя одна, снимок с Димой отпадает');
+    assert.equal(await only([dima]), 2);
+    assert.equal(await only([valya, dima]), 1, 'оба и больше никого');
+    assert.equal((await jr('POST', '/api/albums/builder/count', e.anna, { source: 'all', include: [valya], only: true })).json.count, 4, 'то же в конструкторе');
+    assert.equal((await jr('POST', '/api/albums/builder/count', e.anna, { source: 'all', only: true })).status, 400, '«только они» без выбранных не бывает');
     assert.equal((await jr('POST', '/api/people/match', e.anna, { include: [], exclude: [dima] })).status, 400, 'нужен хотя бы один обязательный');
     assert.equal((await jr('POST', '/api/people/match', e.anna, { include: [valya], exclude: [valya] })).status, 400, 'один человек в обоих списках');
     assert.equal((await jr('POST', '/api/people/match', e.anna, { include: ['abc'] })).status, 400);

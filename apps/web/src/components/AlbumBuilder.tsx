@@ -1,6 +1,7 @@
 import { CalendarRange, Check, Film, Folders, Images, Loader2, Minus, Plus, ScanFace, Smartphone, X } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { WheelDate } from './WheelDate';
+import { Switch } from './ui';
 import { api, ApiError, cropUrl, type BuilderQuery } from '../api';
 import type { Album, PeopleGroup } from '../types';
 import { iso, showDate } from '../lib/dates';
@@ -32,6 +33,7 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
   const [albumIds, setAlbumIds] = useState<string[]>([]);
   const [people, setPeople] = useState<PeopleGroup[] | null>(null);
   const [state, setState] = useState<Record<string, 'in' | 'out'>>({});
+  const [only, setOnly] = useState(false); // «только они»: других лиц на фото нет
   const [name, setName] = useState('');
   const [count, setCount] = useState<number | null>(null);
   const [problem, setProblem] = useState('');
@@ -50,7 +52,8 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
   const query = useMemo<BuilderQuery>(() => ({
     from: from || undefined, to: to || undefined, source, albumIds: source === 'albums' ? albumIds : [],
     include: Object.keys(state).filter((k) => state[k] === 'in'), exclude: Object.keys(state).filter((k) => state[k] === 'out'),
-  }), [from, to, source, albumIds, state]);
+    only: only && Object.values(state).includes('in') ? true : undefined,
+  }), [from, to, source, albumIds, state, only]);
   const incomplete = source === 'albums' && albumIds.length === 0;
   const badRange = !!from && !!to && from > to;
 
@@ -145,12 +148,19 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
               : <div className="flex flex-wrap gap-2">
                 {people.map((p) => { const st = state[p.id]; return (
                   <button key={p.id} type="button" onClick={() => cycle(p.id)} aria-label={`${p.name}: ${st === 'in' ? 'должен быть' : st === 'out' ? 'не должно быть' : 'не учитывать'}`}
-                    className={`${chip} pl-1.5 ${st === 'in' ? on : st === 'out' ? 'border-rose-400 bg-rose-600 text-white shadow-[0_0_16px_-4px_rgba(244,63,94,0.8)]' : idle}`}>
+                    className={`${chip} pl-1.5 ${st === 'in' ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-900 dark:text-emerald-100' : st === 'out' ? 'border-rose-500/40 bg-rose-500/15 text-rose-900 dark:text-rose-100' : idle}`}>
                     <img src={cropUrl(p.cover)} alt="" loading="lazy" draggable={false} className="size-6 rounded-full object-cover" />
                     {st === 'in' && <Plus className="size-4" aria-hidden />}{st === 'out' && <Minus className="size-4" aria-hidden />}{p.name}
                   </button>
                 ); })}
               </div>}
+            {people && people.length > 0 && (
+              <div className="mt-3 flex items-center gap-3 text-sm">
+                <Switch checked={only && Object.values(state).includes('in')} onChange={setOnly} label="Только выбранные: других лиц на фото нет" disabled={!Object.values(state).includes('in')} />
+                <span className="text-gray-800 dark:text-gray-200">Только они: на фото больше никого, кроме «должен быть»</span>
+              </div>
+            )}
+            <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">Люди без отметки не учитываются: они могут быть на фото, а могут не быть.</p>
           </section>
 
           <section aria-label="Название">

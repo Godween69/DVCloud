@@ -1,4 +1,5 @@
 import { ArrowLeft, Check, Combine, Eye, EyeOff, CircleHelp, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, UserPlus, UserRound, Users, X } from 'lucide-react';
+import { Switch } from './ui';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl, thumbUrl } from '../api';
 import { countFiles } from '../lib/format';
@@ -24,22 +25,23 @@ function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: ()
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [only, setOnly] = useState(false); // «только они»: других лиц на фото нет
   const inc = Object.keys(state).filter((k) => state[k] === 'in');
   const exc = Object.keys(state).filter((k) => state[k] === 'out');
   useEffect(() => {
     setCount(null);
     if (inc.length === 0) return;
     let live = true;
-    const t = setTimeout(() => { api.matchPeople(inc, exc).then((r) => { if (live) setCount(r.count); }).catch(() => { if (live) setCount(null); }); }, 300);
+    const t = setTimeout(() => { api.matchPeople(inc, exc, only).then((r) => { if (live) setCount(r.count); }).catch(() => { if (live) setCount(null); }); }, 300);
     return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inc.join(','), exc.join(',')]);
+  }, [inc.join(','), exc.join(','), only]);
   const cycle = (id: string) => { setDone(null); setState((prev) => { const n = { ...prev }; if (!n[id]) n[id] = 'in'; else if (n[id] === 'in') n[id] = 'out'; else delete n[id]; return n; }); };
   async function create() {
     if (busy || inc.length === 0 || !name.trim()) return;
     setBusy(true); setProblem(null); setDone(null);
     try {
-      const r = await api.albumByPeople(name.trim(), inc, exc);
+      const r = await api.albumByPeople(name.trim(), inc, exc, only);
       setDone(`Альбом «${r.name}» создан: ${countFiles(r.added)}. Он во вкладке «Альбомы».`);
       setName('');
     } catch (e) { setProblem(msg(e, 'Не получилось создать альбом')); } finally { setBusy(false); }
@@ -47,14 +49,14 @@ function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: ()
   return (
     <section aria-label="Альбом по людям" className="glass mb-6 rounded-xl p-4">
       <div className="mb-3 flex items-start gap-3">
-        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Нажимайте на людей: один раз «обязательно есть на фото» (зелёная рамка), второй раз «не должно быть» (красная), третий снимает выбор. Альбом соберётся из фото на сегодня.</p>
+        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Нажимайте на людей: один раз «обязательно есть на фото» (зелёная рамка), второй раз «не должно быть» (красная), третий снимает выбор. Без отметки человек не учитывается. Чтобы на фото были только отмеченные, включите «Только они». Альбом соберётся из фото на сегодня.</p>
         <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800"><X className="size-4" aria-hidden /></button>
       </div>
       <ul className="mb-3 flex flex-wrap gap-2">
         {groups.map((g) => (
           <li key={g.id}>
             <button type="button" onClick={() => cycle(g.id)} aria-pressed={!!state[g.id]} title={state[g.id] === 'in' ? 'Обязательно есть' : state[g.id] === 'out' ? 'Не должно быть' : 'Не учитывать'}
-              className={`flex items-center gap-2 rounded-full border-2 py-1 pl-1 pr-3 text-sm dark:text-white ${state[g.id] === 'in' ? 'border-green-500 bg-green-500/10' : state[g.id] === 'out' ? 'border-red-500 bg-red-500/10' : 'border-paper-300 dark:border-gray-700'}`}>
+              className={`flex items-center gap-2 rounded-full border-2 py-1 pl-1 pr-3 text-sm dark:text-white ${state[g.id] === 'in' ? 'border-emerald-500/50 bg-emerald-500/10' : state[g.id] === 'out' ? 'border-rose-500/50 bg-rose-500/10' : 'border-paper-300 dark:border-gray-700'}`}>
               <Cover p={g} size="size-7" />{g.name ?? 'Без имени'}
               {state[g.id] === 'in' && <span className="text-green-700 dark:text-green-400">обязательно</span>}
               {state[g.id] === 'out' && <span className="text-red-700 dark:text-red-400">не должно быть</span>}
@@ -62,6 +64,10 @@ function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: ()
           </li>
         ))}
       </ul>
+      <div className="mb-3 flex items-center gap-3 text-sm">
+        <Switch checked={only && inc.length > 0} onChange={setOnly} label="Только выбранные: других лиц на фото нет" disabled={inc.length === 0} />
+        <span className="text-gray-800 dark:text-gray-200">Только они: на фото больше никого, кроме «обязательно»</span>
+      </div>
       <form onSubmit={(e) => { e.preventDefault(); void create(); }} className="flex flex-wrap items-center gap-2">
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} aria-label="Название альбома" placeholder="Название альбома"
           className="min-w-0 max-w-xs flex-1 rounded-lg border border-paper-300 bg-paper-50 px-3 py-1.5 text-base outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
@@ -93,8 +99,10 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
   const load = () => { setItems(null); setStage('ask'); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
   useEffect(() => { load(); api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name && p.kind === 'person'))).catch(() => undefined); }, []);
   const cur = items && items.length > 0 ? items[0] : null;
-  const [faceReady, setFaceReady] = useState(false);
-  useEffect(() => { setFaceReady(false); }, [cur?.detectionId]);
+  // Готовность лица помним по номеру находки: у закэшированной картинки onLoad может не сработать, поэтому смотрим и на complete.
+  const [readyId, setReadyId] = useState<string | null>(null);
+  const faceReady = !!cur && readyId === cur.detectionId;
+  const setFaceReady = (_: boolean) => { if (cur) setReadyId(cur.detectionId); };
   // Вырезка лица создаётся на сервере при первом запросе (около секунды). Поэтому лица следующих вопросов подгружаем заранее, по одному.
   const queueKey = (items ?? []).slice(0, 5).map((i) => i.detectionId).join(',');
   useEffect(() => {
@@ -149,7 +157,7 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
         <div className="mx-auto flex max-w-xl flex-col items-center gap-4 sm:flex-row sm:items-start">
           <div className="flex shrink-0 items-end gap-2">
             <div className="relative size-40 overflow-hidden rounded-2xl border-4 border-white/70 bg-black/10 shadow-[0_8px_26px_-10px_rgba(15,23,42,0.55)] sm:size-48 dark:border-white/20">
-              <img key={cur.detectionId} src={cropUrl(cur.detectionId)} alt="Лицо" draggable={false} onLoad={() => setFaceReady(true)} className={`size-full object-cover transition-opacity duration-150 ${faceReady ? 'opacity-100' : 'opacity-0'}`} />
+              <img key={cur.detectionId} ref={(el) => { if (el && el.complete && el.naturalWidth > 0) setFaceReady(true); }} src={cropUrl(cur.detectionId)} alt="Лицо" draggable={false} onLoad={() => setFaceReady(true)} onError={() => setFaceReady(true)} className={`size-full object-cover transition-opacity duration-150 ${faceReady ? 'opacity-100' : 'opacity-0'}`} />
               {!faceReady && <Loader2 className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 animate-spin text-white/80" aria-label="Загружаем лицо" />}
             </div>
             <img src={thumbUrl(cur.fileId)} alt="Снимок целиком" draggable={false} className="size-16 rounded-xl border-2 border-white/70 object-cover opacity-90 shadow-sm dark:border-white/20" title="Снимок, на котором найдено лицо" />

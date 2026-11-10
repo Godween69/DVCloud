@@ -295,7 +295,7 @@ export class AlbumsService {
 
   // ---- Конструктор альбома: даты, источник, люди ----
 
-  private buildQuery(o: Record<string, unknown>): { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[] } {
+  private buildQuery(o: Record<string, unknown>): { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[]; only: boolean } {
     const day = (v: unknown, what: string): string | undefined => {
       if (v === undefined || v === null || v === '') return undefined;
       if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) throw new BadRequestException(`${what}: дата вида 2026-06-12`);
@@ -314,7 +314,10 @@ export class AlbumsService {
     if (source === 'albums' && albumIds.length === 0) throw new BadRequestException('Выберите хотя бы один альбом');
     const include = ids(o.include, 'include', 20), exclude = ids(o.exclude, 'exclude', 20);
     if (include.some((x) => exclude.includes(x))) throw new BadRequestException('Один и тот же человек не может быть и «обязательно», и «не должно быть»');
-    return { from, to, source, albumIds, include, exclude };
+    // only: «только они»: на фото нет других лиц, кроме тех, кто в include
+    const only = o.only === true;
+    if (only && include.length === 0) throw new BadRequestException('«Только они»: выберите, кто должен быть на фото');
+    return { from, to, source, albumIds, include, exclude, only };
   }
 
   private async buildWhere(userId: string, q: ReturnType<AlbumsService['buildQuery']>): Promise<{ where: string; params: unknown[] }> {
@@ -340,6 +343,7 @@ export class AlbumsService {
     const has = (p: string) => `EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id WHERE d.blob_id = f.blob_id AND dp.person_id = ${add(p)})`;
     for (const p of q.include) where += ` AND ${has(p)}`;
     for (const p of q.exclude) where += ` AND NOT ${has(p)}`;
+    if (q.only) where += ` AND NOT EXISTS (SELECT 1 FROM detections d WHERE d.blob_id = f.blob_id AND d.kind = 'face' AND NOT d.ignored AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id AND dp.person_id = ANY(${add(q.include)}::bigint[])))`;
     return { where, params };
   }
 

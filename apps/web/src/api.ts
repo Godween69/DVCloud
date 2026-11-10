@@ -94,8 +94,8 @@ export const api = {
   removeManyFromPerson: (id: string, fileIds: string[]) => request<{ removed: number }>('POST', `/api/people/${encodeURIComponent(id)}/not-them`, { fileIds }),
   mergePeople: (into: string, from: string) => request<unknown>('POST', `/api/people/${encodeURIComponent(into)}/merge`, { from }),
   mergePeopleMany: (into: string, from: string[]) => request<{ merged: number }>('POST', '/api/people/merge-many', { into, from }),
-  matchPeople: (include: string[], exclude: string[]) => request<{ count: number }>('POST', '/api/people/match', { include, exclude }),
-  albumByPeople: (name: string, include: string[], exclude: string[]) => request<{ id: string; name: string; added: number }>('POST', '/api/people/album', { name, include, exclude }),
+  matchPeople: (include: string[], exclude: string[], only = false) => request<{ count: number }>('POST', '/api/people/match', { include, exclude, only }),
+  albumByPeople: (name: string, include: string[], exclude: string[], only = false) => request<{ id: string; name: string; added: number }>('POST', '/api/people/album', { name, include, exclude, only }),
   guesses: (limit = 24) => request<{ guesses: FaceGuess[] }>('GET', `/api/people/guesses?limit=${limit}`).then((r) => r.guesses),
   rejectFace: (detectionId: string, personId: string) => request<{ ok: true }>('POST', '/api/people/reject', { detectionId, personId }),
   ignoreFace: (detectionId: string, ignored: boolean) => request<{ petsEnabled: boolean; petsOnFile: boolean }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}/ignore`, { ignored }),
@@ -266,7 +266,7 @@ export function sendFile(file: File, onProgress: (fraction: number) => void): Pr
   return xhrSend('POST', `/api/files?name=${encodeURIComponent(file.name)}`, file, { 'Content-Type': 'application/octet-stream', 'X-File-Modified': String(file.lastModified) }, (loaded) => onProgress(loaded / file.size));
 }
 
-export interface BuilderQuery { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[] }
+export interface BuilderQuery { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[]; only?: boolean }
 
 export interface FileInfo {
   id: string; name: string; mime: string; size: number; sha256: string; takenAt: string; createdAt: string; width: number | null; height: number | null;

@@ -841,7 +841,8 @@ export class PeopleService {
 
   // Файлы по условиям: обязательно есть все из include, и нет ни одного из exclude. Группы только те, что видны человеку.
   // Возвращает общее число и номера (не больше limit, сначала новые).
-  async matchFiles(ownerId: string, includeIn: unknown, excludeIn: unknown, limit: number): Promise<{ count: number; ids: string[] }> {
+  // only: «только они»: кроме include на фото нет других лиц (питомцы не в счёт).
+  async matchFiles(ownerId: string, includeIn: unknown, excludeIn: unknown, limit: number, only = false): Promise<{ count: number; ids: string[] }> {
     const clean = (v: unknown, what: string): string[] => {
       if (v === undefined || v === null) return [];
       if (!Array.isArray(v) || v.length > 50 || !v.every((x) => typeof x === 'string' && ID_RE.test(x))) throw new BadRequestException(`${what}: список номеров групп`);
@@ -858,6 +859,7 @@ export class PeopleService {
     let where = `f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND NOT ${hiddenFromLibrary('f', '$1')}`;
     for (const id of inc) { params.push(id); where += ` AND ${has(`$${params.length}`)}`; }
     for (const id of exc) { params.push(id); where += ` AND NOT ${has(`$${params.length}`)}`; }
+    if (only) { params.push(inc); where += ` AND NOT EXISTS (SELECT 1 FROM detections d WHERE d.blob_id = f.blob_id AND d.kind = 'face' AND NOT d.ignored AND NOT EXISTS (SELECT 1 FROM detection_people dp WHERE dp.detection_id = d.id AND dp.person_id = ANY($${params.length}::bigint[])))`; }
     const total = Number((await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE ${where}`, params)).rows[0].n);
     params.push(limit);
     const r = await this.db.query<{ id: string }>(`SELECT f.id FROM files f WHERE ${where} ORDER BY f.taken_at DESC, f.id DESC LIMIT $${params.length}`, params);

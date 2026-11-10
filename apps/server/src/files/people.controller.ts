@@ -81,14 +81,14 @@ export class PeopleController {
   @HttpCode(200)
   async match(@Req() req: Req_, @Body() body: unknown): Promise<{ count: number }> {
     const o = obj(body);
-    return { count: (await this.people.matchFiles(req.user.id, o.include, o.exclude, 1)).count };
+    return { count: (await this.people.matchFiles(req.user.id, o.include, o.exclude, 1, o.only === true)).count };
   }
 
-  // Создать альбом под этими условиями: {name, include, exclude}. Снимок на сегодня: новые фото сами не добавляются.
+  // Создать альбом под этими условиями: {name, include, exclude, only?}. Снимок на сегодня: новые фото сами не добавляются.
   @Post('album')
   async album(@Req() req: Req_, @Body() body: unknown): Promise<{ id: string; name: string; added: number }> {
     const o = obj(body);
-    const m = await this.people.matchFiles(req.user.id, o.include, o.exclude, 20000);
+    const m = await this.people.matchFiles(req.user.id, o.include, o.exclude, 20000, o.only === true);
     if (m.ids.length === 0) throw new BadRequestException('Под эти условия не подходит ни одного фото');
     const album = await this.albums.create(req.user.id, o.name, 'any');
     let added = 0;
