@@ -1,4 +1,4 @@
-import { boxesHit, boxOf, dragDiff, rangeIds, type Box } from '../lib/selection';
+import { rangeIds } from '../lib/selection';
 import { motion } from 'framer-motion';
 import { CalendarDays, Check, CheckSquare, ChevronDown, Film, ImageOff, Images, LayoutGrid, LayoutDashboard, Loader2, Play, Plus, Upload, X, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -167,99 +167,20 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   const tapSel = (id: string) => { last.current = id; tap(id); };
 
   // ── Массовый выбор ──
-  // Shift+нажатие: весь диапазон от прошлого отмеченного до этого. Протягивание мышью по плиткам и рамка по пустому месту (в режиме выбора и без него).
+  // Shift+нажатие: весь диапазон от прошлого отмеченного до этого. 
   // Ctrl+A выбирает всё загруженное.
   const order = useMemo(() => files.map((f) => f.id), [files]);
   const last = useRef<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ kind: 'tiles' | 'box'; mode: boolean; start: string | null; x: number; y: number; sy: number; moved: boolean; applied: Set<string> } | null>(null);
-  const suppress = useRef(false);
-  const [band, setBand] = useState<Box | null>(null);
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const tileAt = (x: number, y: number): string | null => {
-    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-tile]');
-    return el?.dataset.tile ?? null;
-  };
-  const apply = (want: Set<string>) => {
-    const d = drag.current;
-    if (!d) return;
-    const { add, remove } = dragDiff(d.applied, want);
-    if (add.length) onToggleMany(add, d.mode);
-    if (remove.length) onToggleMany(remove, !d.mode);
-    d.applied = want;
-  };
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType !== 'mouse' || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey) return;
-    const t = e.target as HTMLElement;
-    if (t.closest('button:not([data-tile] > button), a, input, select, textarea, [role=switch]')) return;
-    const tile = t.closest<HTMLElement>('[data-tile]')?.dataset.tile ?? null;
-    if (tile && !selecting) return; // вне режима выбора нажатие на плитку открывает просмотр
-    drag.current = { kind: tile ? 'tiles' : 'box', mode: tile ? !selectedRef.current.has(tile) : true, start: tile, x: e.clientX, y: e.clientY, sy: window.scrollY, moved: false, applied: new Set() };
-  };
-  useEffect(() => {
-    let raf = 0;
-    let pt = { x: 0, y: 0 };
-    const hit = (d: NonNullable<typeof drag.current>): Set<string> => {
-      if (d.kind === 'tiles') {
-        const cur = tileAt(pt.x, pt.y);
-        return new Set(d.start && cur ? rangeIds(order, d.start, cur) : d.start ? [d.start] : []);
-      }
-      const b = boxOf(d.x, d.y - (window.scrollY - d.sy), pt.x, pt.y);
-      const out = new Set<string>();
-      for (const el of document.querySelectorAll<HTMLElement>('[data-tile]')) {
-        const r = el.getBoundingClientRect();
-        if (boxesHit(b, r)) out.add(el.dataset.tile as string);
-      }
-      return out;
-    };
-    const step = () => {
-      raf = 0;
-      const d = drag.current;
-      if (!d || !d.moved) return;
-      // у верхнего и нижнего края окна страница сама прокручивается
-      const h = window.innerHeight;
-      if (pt.y < 70) window.scrollBy(0, -18); else if (pt.y > h - 70) window.scrollBy(0, 18);
-      apply(hit(d));
-      if (d.kind === 'box') setBand(boxOf(d.x, d.y - (window.scrollY - d.sy), pt.x, pt.y));
-      if (pt.y < 70 || pt.y > h - 70) raf = requestAnimationFrame(step);
-    };
-    const move = (e: PointerEvent) => {
-      const d = drag.current;
-      if (!d || e.pointerType !== 'mouse') return;
-      pt = { x: e.clientX, y: e.clientY };
-      if (!d.moved) {
-        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) return;
-        if (d.kind === 'tiles' && tileAt(e.clientX, e.clientY) === d.start) return; // пока курсор на той же плитке, это обычное нажатие
-        d.moved = true;
-        document.body.style.userSelect = 'none';
-        if (!selecting) onSelecting(true);
-      }
-      if (!raf) raf = requestAnimationFrame(step);
-    };
-    const up = () => {
-      const d = drag.current;
-      drag.current = null;
-      if (raf) { cancelAnimationFrame(raf); raf = 0; }
-      document.body.style.userSelect = '';
-      setBand(null);
-      if (d?.moved) { suppress.current = true; setTimeout(() => { suppress.current = false; }, 0); if (d.start) last.current = d.start; }
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); if (raf) cancelAnimationFrame(raf); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order, selecting]);
   const onClickCapture = (e: React.MouseEvent) => {
-    if (suppress.current) { e.preventDefault(); e.stopPropagation(); return; } // клик после протягивания не открывает фото
-    if (!e.shiftKey) return;
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) return;
     const id = (e.target as HTMLElement).closest<HTMLElement>('[data-tile]')?.dataset.tile;
     if (!id) return;
     e.preventDefault(); e.stopPropagation();
     if (!selecting) onSelecting(true);
+    // Ctrl+нажатие добавляет или снимает один файл, Shift+нажатие выбирает диапазон от прошлого отмеченного
     const from = last.current;
-    if (from && from !== id) onToggleMany(rangeIds(order, from, id), true); else onToggle(id);
+    if (e.shiftKey && from && from !== id) onToggleMany(rangeIds(order, from, id), true); else onToggle(id);
     last.current = id;
   };
   useEffect(() => {
@@ -425,8 +346,7 @@ export function Gallery({ files, loaded, loading, hasMore, error, onMore, onOpen
   const step = 'flex size-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:text-gray-900 disabled:opacity-30 dark:hover:text-white';
 
   return (
-    <div ref={root} onPointerDown={onPointerDown} onClickCapture={onClickCapture} className={`mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`}>
-      {band && <div className="pointer-events-none fixed z-30 rounded-md border border-violet-500 bg-violet-500/15" style={{ left: band.left, top: band.top, width: band.right - band.left, height: band.bottom - band.top }} aria-hidden />}
+    <div ref={root} onClickCapture={onClickCapture} className={`mx-auto max-w-[1600px] px-3 pb-24 pt-4 sm:px-6 ${railMonths ? 'pr-9 sm:pr-14' : ''}`}>
       {railEl}
       <div className="sticky top-14 z-10 -mx-3 mb-3 flex items-center justify-end gap-3 bg-paper-100/95 px-3 py-2 sm:-mx-6 sm:px-6 dark:bg-gray-950/95">
         {selecting ? (

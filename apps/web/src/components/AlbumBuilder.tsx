@@ -1,11 +1,9 @@
 import { CalendarRange, Check, Film, Folders, Images, Loader2, Minus, Plus, ScanFace, Smartphone, X } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { DayPicker, type DateRange } from 'react-day-picker';
-import { ru } from 'react-day-picker/locale';
-import 'react-day-picker/style.css';
+import { WheelDate } from './WheelDate';
 import { api, ApiError, cropUrl, type BuilderQuery } from '../api';
 import type { Album, PeopleGroup } from '../types';
-import { iso, parseIso, readDate, showDate } from '../lib/dates';
+import { iso, showDate } from '../lib/dates';
 
 type Source = BuilderQuery['source'];
 const SOURCES: { id: Source; label: string; icon: typeof Images }[] = [
@@ -30,8 +28,6 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
   const [bounds, setBounds] = useState<{ min: string | null; max: string } | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [month, setMonth] = useState<Date>(new Date());
-  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches);
   const [source, setSource] = useState<Source>('all');
   const [albumIds, setAlbumIds] = useState<string[]>([]);
   const [people, setPeople] = useState<PeopleGroup[] | null>(null);
@@ -44,12 +40,6 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
   useEffect(() => {
     api.builderBounds().then(setBounds).catch(() => setBounds({ min: null, max: iso(new Date()) }));
     api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name))).catch(() => setPeople([]));
-  }, []);
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 640px)');
-    const on = () => setWide(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
@@ -71,13 +61,13 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
     let live = true;
     const t = setTimeout(() => {
       api.builderCount(query).then((n) => { if (live) setCount(n); }).catch((e) => { if (live) { setCount(null); setProblem(e instanceof ApiError ? e.message : 'Не получилось посчитать'); } });
-    }, 250);
+    }, 600); // как в живом поиске: считаем, когда вы перестали крутить
     return () => { live = false; clearTimeout(t); };
   }, [query, incomplete, badRange]);
 
   const own = albums.filter((a) => a.mine);
   const cycle = (id: string) => setState((s) => { const n = { ...s }; if (!n[id]) n[id] = 'in'; else if (n[id] === 'in') n[id] = 'out'; else delete n[id]; return n; });
-  const preset = (f: string, t: string) => { setFrom(f); setTo(t); const d = parseIso(t || f); if (d) setMonth(d); };
+  const preset = (f: string, t: string) => { setFrom(f); setTo(t); };
   const today = bounds?.max ?? iso(new Date());
   const year = today.slice(0, 4);
   const ago = (days: number) => { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - days); return iso(d); };
@@ -87,7 +77,9 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
     { label: 'Этот год', from: `${year}-01-01`, to: today },
     { label: 'Прошлый год', from: `${Number(year) - 1}-01-01`, to: `${Number(year) - 1}-12-31` },
   ];
-  const range: DateRange | undefined = from || to ? { from: parseIso(from), to: parseIso(to) } : undefined;
+
+  // Резюме периода собирается из текущих «с» и «по» при каждой отрисовке, поэтому всегда актуально.
+  const summary = !from && !to ? 'Период: за всё время' : `Период: ${from ? `с ${showDate(from)}` : 'с самого начала'} ${to ? `по ${showDate(to)}` : 'по сегодня'}`;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -118,21 +110,16 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
           <section aria-label="Период">
             <p className="mb-2 flex items-center gap-1.5 text-sm font-medium"><CalendarRange className="size-4" aria-hidden />За какой период</p>
             <div className="flex flex-wrap items-center gap-2">
-              <DateField label="с" value={from} placeholder={bounds?.min ? showDate(bounds.min) : 'ДД.ММ.ГГГГ'} onChange={setFrom} className={dateInput} />
-              <DateField label="по" value={to} placeholder={`сегодня, ${showDate(today)}`} onChange={setTo} className={dateInput} />
+              <WheelDate label="с" value={from} min={bounds?.min ?? '2000-01-01'} max={today} start={bounds?.min ?? today} onChange={setFrom} />
+              <WheelDate label="по" value={to} min={bounds?.min ?? '2000-01-01'} max={today} start={today} onChange={setTo} />
               {(from || to) && <button type="button" onClick={() => preset('', '')} className="rounded-lg px-2 py-1 text-sm text-gray-600 hover:bg-black/5 dark:text-gray-400 dark:hover:bg-white/10">Сбросить</button>}
             </div>
             <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Быстрый выбор периода">
               {presets.map((p) => <button key={p.label} type="button" aria-pressed={from === p.from && to === p.to} onClick={() => preset(p.from, p.to)} className={`${chip} ${from === p.from && to === p.to ? on : idle}`}>{p.label}</button>)}
             </div>
-            <div className="glass mt-3 overflow-x-auto rounded-2xl p-2 sm:p-3">
-              <DayPicker mode="range" locale={ru} weekStartsOn={1} captionLayout="dropdown" numberOfMonths={wide ? 2 : 1} showOutsideDays
-                startMonth={bounds?.min ? parseIso(bounds.min) : new Date(2000, 0)} endMonth={parseIso(today) ?? new Date()} disabled={{ after: parseIso(today) ?? new Date() }}
-                selected={range} month={month} onMonthChange={setMonth}
-                onSelect={(r: DateRange | undefined) => { setFrom(r?.from ? iso(r.from) : ''); setTo(r?.to ? iso(r.to) : ''); }} />
-            </div>
             {from && !to && <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">«По» не выбрано: берём до сегодняшнего дня.</p>}
-            {bounds?.min && <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">Ваши снимки: с {showDate(bounds.min)} по сегодня.</p>}
+            <p className="mt-2 text-sm text-gray-800 dark:text-gray-200" aria-live="polite">{summary}</p>
+            {bounds?.min && <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">Ваши снимки: с {showDate(bounds.min)} по {showDate(bounds.max)}.</p>}
           </section>
 
           <section aria-label="Откуда брать">
@@ -185,24 +172,5 @@ export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
         </footer>
       </form>
     </div>
-  );
-}
-
-// Поле даты: можно набрать «1.10.2018» руками или выбрать в календаре ниже; значение принимается, когда дата набрана целиком.
-function DateField({ label, value, placeholder, onChange, className }: { label: string; value: string; placeholder: string; onChange: (iso: string) => void; className: string }) {
-  const [text, setText] = useState(showDate(value));
-  const [bad, setBad] = useState(false);
-  useEffect(() => { setText(showDate(value)); setBad(false); }, [value]);
-  const commit = (t: string, final: boolean) => {
-    if (t.trim() === '') { setBad(false); onChange(''); return; }
-    const v = readDate(t, final);
-    if (v) { setBad(false); if (v !== value) onChange(v); } else setBad(final);
-  };
-  return (
-    <label className="flex items-center gap-2 text-sm">{label}
-      <input inputMode="numeric" value={text} placeholder={placeholder} aria-invalid={bad} maxLength={10}
-        onChange={(e) => { setText(e.target.value); commit(e.target.value, false); }} onBlur={() => commit(text, true)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(text, true); } }}
-        className={`${className} w-40 ${bad ? 'border-rose-400' : ''}`} />
-    </label>
   );
 }

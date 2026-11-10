@@ -14,13 +14,15 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, high = false): Promise<T> {
   let r: Response;
   try {
     r = await fetch(path, {
       method,
       headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Быстрые ответы на действия (Del) обгоняют загрузку крупных картинок в очереди браузера.
+      ...(high ? ({ priority: 'high' } as RequestInit) : {}),
     });
   } catch {
     throw new ApiError(0, 'Сервер недоступен. Проверьте подключение и попробуйте ещё раз.');
@@ -151,7 +153,7 @@ export const api = {
   builderBounds: () => request<{ min: string | null; max: string }>('GET', '/api/albums/builder/bounds'),
   builderCount: (q: BuilderQuery) => request<{ count: number }>('POST', '/api/albums/builder/count', q).then((r) => r.count),
   builderCreate: (q: BuilderQuery & { name: string }) => request<{ album: Album; added: number }>('POST', '/api/albums/builder/create', q),
-  albumsInOther: (albumId: string, fileIds: string[]) => request<{ files: number; albums: { id: string; name: string }[] }>('POST', '/api/albums/in-other', { albumId, fileIds }),
+  albumsInOther: (albumId: string, fileIds: string[]) => request<{ files: number; albums: { id: string; name: string }[] }>('POST', '/api/albums/in-other', { albumId, fileIds }, true),
   removeEverywhere: (fileIds: string[]) => request<{ removed: number }>('POST', '/api/albums/remove-everywhere', { fileIds }).then((r) => r.removed),
   albumOf: (fileId: string) => request<{ album: AlbumRef | null; albums: AlbumRef[] }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.albums),
   people: () => request<{ people: Person[] }>('GET', '/api/albums/people').then((r) => r.people),

@@ -105,7 +105,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, rem
   // Соседние фото подгружаются заранее (и сервер успевает построить их превью), поэтому листание не ждёт.
   useEffect(() => {
     for (const n of [files[index + 1], files[index - 1]]) {
-      if (n && !isVideo(n.mime)) { const im = new Image(); im.decoding = 'async'; im.src = previewUrl(n.id); }
+      if (n && !isVideo(n.mime)) { const im = new Image(); im.decoding = 'async'; (im as HTMLImageElement & { fetchPriority?: string }).fetchPriority = 'low'; im.src = previewUrl(n.id); }
     }
   }, [files, index]);
 

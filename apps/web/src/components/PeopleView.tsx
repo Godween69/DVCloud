@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, CircleHelp, HelpCircle, Image as ImageIcon, Loader2, Lock, Pencil, PawPrint, Plus, Trash2, UserPlus, UserRound, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl, thumbUrl } from '../api';
 import { countFiles } from '../lib/format';
@@ -93,6 +93,23 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
   const load = () => { setItems(null); setStage('ask'); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
   useEffect(() => { load(); api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name && p.kind === 'person'))).catch(() => undefined); }, []);
   const cur = items && items.length > 0 ? items[0] : null;
+  const [faceReady, setFaceReady] = useState(false);
+  useEffect(() => { setFaceReady(false); }, [cur?.detectionId]);
+  // Вырезка лица создаётся на сервере при первом запросе (около секунды). Поэтому лица следующих вопросов подгружаем заранее, по одному.
+  const queueKey = (items ?? []).slice(0, 5).map((i) => i.detectionId).join(',');
+  useEffect(() => {
+    let live = true;
+    const ids = queueKey ? queueKey.split(',') : [];
+    const step = (i: number) => {
+      if (!live || i >= ids.length) return;
+      const im = new Image();
+      im.onload = im.onerror = () => step(i + 1);
+      im.src = cropUrl(ids[i]);
+    };
+    step(0);
+    return () => { live = false; };
+  }, [queueKey]);
+  const refreshPeople = () => api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name && p.kind === 'person'))).catch(() => undefined);
   const next = () => { setItems((prev) => (prev ?? []).slice(1)); setStage('ask'); setQ(''); setOther(false); setNewName(''); setAsked((n) => n + 1); onAnswered(); };
   async function run(fn: () => Promise<unknown>) {
     if (busy) return;
@@ -119,7 +136,7 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cur?.detectionId, stage, busy]);
   const filtered = people.filter((p) => cur && p.id !== cur.personId && (q.trim() === '' || (p.name ?? '').toLowerCase().includes(q.trim().toLowerCase())));
-  const ghost = 'rounded-xl px-3 py-2 text-sm text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10';
+  const ghost = 'flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10';
   return (
     <section aria-label="Проверить догадки" className="glass mb-6 rounded-2xl p-4">
       <div className="mb-3 flex items-start gap-3">
@@ -131,17 +148,20 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
       {cur && (
         <div className="mx-auto flex max-w-xl flex-col items-center gap-4 sm:flex-row sm:items-start">
           <div className="flex shrink-0 items-end gap-2">
-            <img key={cur.detectionId} src={cropUrl(cur.detectionId)} alt="Лицо" draggable={false} className="size-40 rounded-2xl object-cover shadow-[0_8px_30px_-8px_rgba(15,23,42,0.5)] ring-1 ring-black/10 sm:size-48" />
-            <img src={thumbUrl(cur.fileId)} alt="Снимок целиком" draggable={false} className="size-16 rounded-xl object-cover opacity-90 ring-1 ring-black/10" title="Снимок, на котором найдено лицо" />
+            <div className="relative size-40 overflow-hidden rounded-2xl border-4 border-white/70 bg-black/10 shadow-[0_8px_26px_-10px_rgba(15,23,42,0.55)] sm:size-48 dark:border-white/20">
+              <img key={cur.detectionId} src={cropUrl(cur.detectionId)} alt="Лицо" draggable={false} onLoad={() => setFaceReady(true)} className={`size-full object-cover transition-opacity duration-150 ${faceReady ? 'opacity-100' : 'opacity-0'}`} />
+              {!faceReady && <Loader2 className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 animate-spin text-white/80" aria-label="Загружаем лицо" />}
+            </div>
+            <img src={thumbUrl(cur.fileId)} alt="Снимок целиком" draggable={false} className="size-16 rounded-xl border-2 border-white/70 object-cover opacity-90 shadow-sm dark:border-white/20" title="Снимок, на котором найдено лицо" />
           </div>
           <div className="w-full min-w-0 flex-1">
             {stage === 'ask' ? (
               <>
                 <p className="mb-3 text-center text-lg font-semibold text-gray-900 dark:text-white sm:text-left">Это {cur.name}?</p>
                 <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
-                  <button type="button" disabled={busy} onClick={() => void run(() => api.assignFace(cur.detectionId, cur.personId))} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_-6px_rgba(16,185,129,0.8)] hover:bg-emerald-500 disabled:opacity-50"><Check className="size-4" aria-hidden />Да</button>
-                  <button type="button" disabled={busy} onClick={() => void no()} className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_-6px_rgba(244,63,94,0.8)] hover:bg-rose-500 disabled:opacity-50"><X className="size-4" aria-hidden />Нет</button>
-                  <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}>Не знаю</button>
+                  <button type="button" disabled={busy} onClick={() => void run(() => api.assignFace(cur.detectionId, cur.personId))} className="flex items-center gap-1.5 rounded-xl bg-emerald-500/15 px-5 py-2.5 text-sm font-semibold text-emerald-800 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/25 disabled:opacity-50 dark:text-emerald-200"><Check className="size-4" aria-hidden />Да</button>
+                  <button type="button" disabled={busy} onClick={() => void no()} className="flex items-center gap-1.5 rounded-xl bg-rose-500/15 px-5 py-2.5 text-sm font-semibold text-rose-800 ring-1 ring-rose-500/30 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-200"><X className="size-4" aria-hidden />Нет</button>
+                  <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}><CircleHelp className="size-4" aria-hidden />Не знаю</button>
                 </div>
                 <p className="mt-3 text-center text-xs text-gray-500 sm:text-left">Клавиши: Enter или → — да, ← — нет.</p>
               </>
@@ -157,15 +177,15 @@ function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () 
                   {filtered.length === 0 && <li className="text-sm text-gray-500">Никого не нашли. Выберите «Другой» и впишите имя.</li>}
                 </ul>
                 {other ? (
-                  <form onSubmit={(e) => { e.preventDefault(); const n = newName.trim(); if (n) void run(() => api.createPerson(cur.detectionId, n)); }} className="flex flex-wrap items-center gap-2">
+                  <form onSubmit={(e) => { e.preventDefault(); const n = newName.trim(); if (n) void run(async () => { await api.createPerson(cur.detectionId, n); await refreshPeople(); }); }} className="flex flex-wrap items-center gap-2">
                     <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={80} placeholder="Имя нового человека" aria-label="Имя" autoFocus className="min-w-0 flex-1 rounded-lg border border-paper-300 bg-white/70 px-3 py-1.5 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white" />
                     <button type="submit" disabled={busy || !newName.trim()} className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50">Сохранить</button>
                   </form>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={() => setOther(true)} className={`${ghost} border border-paper-300 dark:border-white/15`}>Другой…</button>
-                    <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}>Не знаю</button>
-                    <button type="button" disabled={busy} onClick={() => void run(() => api.ignoreFace(cur.detectionId, true))} className={ghost} title="Например, кошка или собака, принятая за лицо">Не человек</button>
+                    <button type="button" onClick={() => setOther(true)} className={`${ghost} border border-paper-300 dark:border-white/15`}><UserPlus className="size-4" aria-hidden />Другой…</button>
+                    <button type="button" disabled={busy} onClick={() => void run(() => api.skipFace(cur.detectionId))} className={ghost}><CircleHelp className="size-4" aria-hidden />Не знаю</button>
+                    <button type="button" disabled={busy} onClick={() => void run(() => api.ignoreFace(cur.detectionId, true))} className={ghost} title="Например, кошка или собака, принятая за лицо"><PawPrint className="size-4" aria-hidden />Не человек</button>
                   </div>
                 )}
               </>
@@ -231,7 +251,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
       </div>
       {!off && (
         <div className="mb-5 flex flex-col gap-2">
-          <div role="toolbar" aria-label="Работа с лицами" className="glass flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
+          <div role="toolbar" aria-label="Работа с лицами" className="raised flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
             <span className="px-2.5 text-xs font-medium text-gray-500">Лица</span>
             {list.enabled.faces && shown.some((g) => g.kind === 'person' && g.name) && (
               <button type="button" onClick={() => setGuessing((v) => !v)} aria-pressed={guessing} className={tbtn}><HelpCircle className="size-4" aria-hidden />Проверить догадки</button>
@@ -241,7 +261,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
             )}
           </div>
           {shown.length > 0 && (
-            <div role="toolbar" aria-label="Альбомы" className="glass flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
+            <div role="toolbar" aria-label="Альбомы" className="raised flex flex-wrap items-center gap-1 rounded-2xl p-1.5">
               <span className="px-2.5 text-xs font-medium text-gray-500">Альбомы</span>
               <button type="button" onClick={() => setByPeople((v) => !v)} aria-pressed={byPeople} className={tbtn}><Plus className="size-4" aria-hidden />Альбом по людям</button>
             </div>

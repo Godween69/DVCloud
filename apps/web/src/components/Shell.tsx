@@ -244,6 +244,18 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     return () => { window.removeEventListener('dragenter', enter); window.removeEventListener('dragleave', leave); window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); };
   }, [queue]);
 
+  // Заранее узнаём, лежит ли открытое фото в других альбомах: к нажатию Del ответ уже есть и окно открывается сразу.
+  const inOtherCache = useRef(new Map<string, { files: number; albums: { id: string; name: string }[] }>());
+  useEffect(() => {
+    if (!viewer || !inAlbum || !album || foreign) return;
+    const key = `${album.id}:${viewer.id}`;
+    if (inOtherCache.current.has(key)) return;
+    const t = window.setTimeout(() => {
+      api.albumsInOther(album.id, [viewer.id]).then((o) => { if (inOtherCache.current.size > 200) inOtherCache.current.clear(); inOtherCache.current.set(key, o); }).catch(() => {});
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [viewer, inAlbum, album, foreign]);
+
   const openIndex = viewer ? active.files.findIndex((f) => f.id === viewer.id) : -1;
   useEffect(() => { if (viewer && openIndex === -1) setViewer(null); }, [viewer, openIndex]);
 
@@ -301,6 +313,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   }
 
   function albumChanged(file: FileItem, r: PickResult) {
+    inOtherCache.current.clear();
     const a = r.album;
     if (a) quick.note([file.id], a.id, r.removed);
     say(a && r.rejected ? `Не подошло по типу альбома «${a.name}»` : !a ? 'Ничего не изменилось' : r.removed ? `Убрано из альбома «${a.name}»` : `В альбоме «${a.name}»`);
@@ -325,7 +338,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   async function askRemove(ids: string[]) {
     if (!album || ids.length === 0) return;
     try {
-      const o = await api.albumsInOther(album.id, ids);
+      // Ответ для открытого фото уже подготовлен заранее (см. ниже), поэтому Del срабатывает мгновенно.
+      const hit = ids.length === 1 ? inOtherCache.current.get(`${album.id}:${ids[0]}`) : undefined;
+      const o = hit ?? await api.albumsInOther(album.id, ids);
       if (o.files === 0) await removeFromAlbumIds(ids, false, true);
       else setDelAsk({ ids, other: o });
     } catch {
@@ -337,6 +352,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
     if (!album) return;
     const here = album;
     setDelAsk(null);
+    inOtherCache.current.clear();
     try {
       if (everywhere) await api.removeEverywhere(ids); else await api.albumRemoveFiles(here.id, ids);
       quick.note(ids, null);
