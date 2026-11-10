@@ -1,4 +1,4 @@
-import type { Album, AlbumKind, AlbumRef, AlbumShow, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
+import type { Album, AlbumKind, AlbumRef, AlbumShow, AlbumSuggestion, FaceGuess, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -94,6 +94,12 @@ export const api = {
   mergePeopleMany: (into: string, from: string[]) => request<{ merged: number }>('POST', '/api/people/merge-many', { into, from }),
   matchPeople: (include: string[], exclude: string[]) => request<{ count: number }>('POST', '/api/people/match', { include, exclude }),
   albumByPeople: (name: string, include: string[], exclude: string[]) => request<{ id: string; name: string; added: number }>('POST', '/api/people/album', { name, include, exclude }),
+  guesses: (limit = 24) => request<{ guesses: FaceGuess[] }>('GET', `/api/people/guesses?limit=${limit}`).then((r) => r.guesses),
+  rejectFace: (detectionId: string, personId: string) => request<{ ok: true }>('POST', '/api/people/reject', { detectionId, personId }),
+  ignoreFace: (detectionId: string, ignored: boolean) => request<{ petsEnabled: boolean; petsOnFile: boolean }>('PUT', `/api/people/detections/${encodeURIComponent(detectionId)}/ignore`, { ignored }),
+  albumSuggestions: () => request<{ suggestions: AlbumSuggestion[] }>('GET', '/api/albums/suggestions').then((r) => r.suggestions),
+  acceptSuggestion: (id: string, name: string) => request<{ album: Album; added: number }>('POST', '/api/albums/suggestions/accept', { id, name }),
+  dismissSuggestion: (id: string) => request<{ ok: true }>('POST', '/api/albums/suggestions/dismiss', { id }),
   deletePerson: (id: string) => request<unknown>('DELETE', `/api/people/${encodeURIComponent(id)}`),
   removeFromPerson: (id: string, fileId: string) => request<{ removed: number }>('DELETE', `/api/people/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   searchStatus: () => request<SearchStatus>('GET', '/api/search/status'),
@@ -139,6 +145,11 @@ export const api = {
   // added: сколько положено, rejected: сколько не подошло по типу альбома (в альбоме «Видео» нет фото и наоборот)
   albumAdd: (id: string, ids: string[]) => request<{ added: number; rejected: number }>('POST', `/api/albums/${id}/add`, { ids }),
   albumRemoveFiles: (id: string, ids: string[]) => request<{ removed: number }>('POST', `/api/albums/${id}/remove`, { ids }).then((r) => r.removed),
+  builderBounds: () => request<{ min: string | null; max: string }>('GET', '/api/albums/builder/bounds'),
+  builderCount: (q: BuilderQuery) => request<{ count: number }>('POST', '/api/albums/builder/count', q).then((r) => r.count),
+  builderCreate: (q: BuilderQuery & { name: string }) => request<{ album: Album; added: number }>('POST', '/api/albums/builder/create', q),
+  albumsInOther: (albumId: string, fileIds: string[]) => request<{ files: number; albums: { id: string; name: string }[] }>('POST', '/api/albums/in-other', { albumId, fileIds }),
+  removeEverywhere: (fileIds: string[]) => request<{ removed: number }>('POST', '/api/albums/remove-everywhere', { fileIds }).then((r) => r.removed),
   albumOf: (fileId: string) => request<{ album: AlbumRef | null; albums: AlbumRef[] }>('GET', `/api/albums/of-file/${fileId}`).then((r) => r.albums),
   people: () => request<{ people: Person[] }>('GET', '/api/albums/people').then((r) => r.people),
   shares: (id: string) => request<{ people: Person[] }>('GET', `/api/albums/${id}/shares`).then((r) => r.people),
@@ -249,3 +260,5 @@ export function sendFile(file: File, onProgress: (fraction: number) => void): Pr
   if (file.size > CHUNKED_FROM) return sendChunked(file, onProgress);
   return xhrSend('POST', `/api/files?name=${encodeURIComponent(file.name)}`, file, { 'Content-Type': 'application/octet-stream', 'X-File-Modified': String(file.lastModified) }, (loaded) => onProgress(loaded / file.size));
 }
+
+export interface BuilderQuery { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[] }

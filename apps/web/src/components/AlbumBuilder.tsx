@@ -1,0 +1,166 @@
+import { CalendarRange, Check, Film, Folders, Images, Loader2, Minus, Plus, ScanFace, Smartphone, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { api, ApiError, cropUrl, type BuilderQuery } from '../api';
+import type { Album, PeopleGroup } from '../types';
+
+type Source = BuilderQuery['source'];
+const SOURCES: { id: Source; label: string; icon: typeof Images }[] = [
+  { id: 'all', label: 'Всё', icon: Images },
+  { id: 'photos', label: 'Фото', icon: Images },
+  { id: 'videos', label: 'Видео', icon: Film },
+  { id: 'screenshots', label: 'Скриншоты', icon: Smartphone },
+  { id: 'albums', label: 'Из альбомов', icon: Folders },
+];
+
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const files = (n: number) => { const m = n % 100, r = n % 10; return `${n} ${m > 10 && m < 15 ? 'файлов' : r === 1 ? 'файл' : r >= 2 && r <= 4 ? 'файла' : 'файлов'}`; };
+
+interface Props {
+  albums: Album[];
+  onClose: () => void;
+  onCreated: (a: Album) => void;
+  onError: (m: string) => void;
+}
+
+// Конструктор альбома: период, откуда брать, кто должен (и кого не должно) быть на фото. Сверху живой счётчик подходящих файлов.
+export function AlbumBuilder({ albums, onClose, onCreated, onError }: Props) {
+  const [bounds, setBounds] = useState<{ min: string | null; max: string } | null>(null);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [source, setSource] = useState<Source>('all');
+  const [albumIds, setAlbumIds] = useState<string[]>([]);
+  const [people, setPeople] = useState<PeopleGroup[] | null>(null);
+  const [state, setState] = useState<Record<string, 'in' | 'out'>>({});
+  const [name, setName] = useState('');
+  const [count, setCount] = useState<number | null>(null);
+  const [problem, setProblem] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.builderBounds().then(setBounds).catch(() => setBounds({ min: null, max: iso(new Date()) }));
+    api.peopleGroups().then((l) => setPeople(l.people.filter((p) => p.name))).catch(() => setPeople([]));
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
+  const query = useMemo<BuilderQuery>(() => ({
+    from: from || undefined, to: to || undefined, source, albumIds: source === 'albums' ? albumIds : [],
+    include: Object.keys(state).filter((k) => state[k] === 'in'), exclude: Object.keys(state).filter((k) => state[k] === 'out'),
+  }), [from, to, source, albumIds, state]);
+  const incomplete = source === 'albums' && albumIds.length === 0;
+  const badRange = !!from && !!to && from > to;
+
+  // Живой счётчик с небольшой задержкой, чтобы не бить по серверу на каждый символ.
+  useEffect(() => {
+    if (incomplete || badRange) { setCount(null); setProblem(badRange ? 'Дата «с» позже даты «по»' : ''); return; }
+    setProblem('');
+    let live = true;
+    const t = setTimeout(() => {
+      api.builderCount(query).then((n) => { if (live) setCount(n); }).catch((e) => { if (live) { setCount(null); setProblem(e instanceof ApiError ? e.message : 'Не получилось посчитать'); } });
+    }, 250);
+    return () => { live = false; clearTimeout(t); };
+  }, [query, incomplete, badRange]);
+
+  const own = albums.filter((a) => a.mine);
+  const cycle = (id: string) => setState((s) => { const n = { ...s }; if (!n[id]) n[id] = 'in'; else if (n[id] === 'in') n[id] = 'out'; else delete n[id]; return n; });
+  const preset = (f: string, t: string) => { setFrom(f); setTo(t); };
+  const today = bounds?.max ?? iso(new Date());
+  const year = today.slice(0, 4);
+  const ago = (days: number) => { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - days); return iso(d); };
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (busy || !name.trim() || !count) return;
+    setBusy(true);
+    try {
+      const r = await api.builderCreate({ ...query, name: name.trim() });
+      onCreated(r.album);
+      onClose();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Не получилось создать альбом');
+    } finally { setBusy(false); }
+  }
+
+  const chip = 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors';
+  const idle = 'border-paper-300/80 bg-white/40 text-gray-800 hover:bg-white/70 dark:border-white/15 dark:bg-white/5 dark:text-gray-200 dark:hover:bg-white/10';
+  const on = 'border-violet-400 bg-violet-600 text-white shadow-[0_0_16px_-4px_rgba(139,92,246,0.8)]';
+  const dateInput = 'rounded-lg border border-paper-300 bg-white/70 px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-gray-700 dark:bg-gray-900/60 dark:text-white';
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={submit} role="dialog" aria-modal="true" aria-label="Новый альбом по условиям" className="glass-strong flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl text-gray-900 sm:rounded-3xl dark:text-white">
+        <header className="flex items-center justify-between px-5 pb-2 pt-4">
+          <h3 className="text-lg font-semibold">Новый альбом по условиям</h3>
+          <button type="button" onClick={onClose} aria-label="Закрыть" className="grid size-9 place-items-center rounded-full hover:bg-black/5 dark:hover:bg-white/10"><X className="size-5" aria-hidden /></button>
+        </header>
+        <div className="space-y-5 overflow-y-auto px-5 pb-4">
+          <section aria-label="Период">
+            <p className="mb-2 flex items-center gap-1.5 text-sm font-medium"><CalendarRange className="size-4" aria-hidden />За какой период</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-sm">с<input type="date" value={from} min={bounds?.min ?? undefined} max={to || today} onChange={(e) => setFrom(e.target.value)} className={dateInput} /></label>
+              <label className="flex items-center gap-2 text-sm">по<input type="date" value={to} min={from || bounds?.min || undefined} max={today} onChange={(e) => setTo(e.target.value)} className={dateInput} /></label>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className={`${chip} ${idle}`} onClick={() => preset('', '')}>Всё время</button>
+              <button type="button" className={`${chip} ${idle}`} onClick={() => preset(ago(30), today)}>30 дней</button>
+              <button type="button" className={`${chip} ${idle}`} onClick={() => preset(`${year}-01-01`, today)}>Этот год</button>
+              <button type="button" className={`${chip} ${idle}`} onClick={() => preset(`${Number(year) - 1}-01-01`, `${Number(year) - 1}-12-31`)}>Прошлый год</button>
+            </div>
+            {bounds?.min && <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">Ваши снимки: с {bounds.min} по сегодня.</p>}
+          </section>
+
+          <section aria-label="Откуда брать">
+            <p className="mb-2 text-sm font-medium">Откуда брать</p>
+            <div className="flex flex-wrap gap-2">
+              {SOURCES.map((s) => <button key={s.id} type="button" aria-pressed={source === s.id} onClick={() => setSource(s.id)} className={`${chip} ${source === s.id ? on : idle}`}><s.icon className="size-4" aria-hidden />{s.label}</button>)}
+            </div>
+            {source === 'albums' && (
+              <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Альбомы">
+                {own.length === 0 && <p className="text-sm text-gray-600 dark:text-gray-400">Своих альбомов пока нет.</p>}
+                {own.map((a) => { const sel = albumIds.includes(a.id); return (
+                  <button key={a.id} type="button" aria-pressed={sel} onClick={() => setAlbumIds((l) => (sel ? l.filter((x) => x !== a.id) : [...l, a.id]))} className={`${chip} ${sel ? on : idle}`}>{sel && <Check className="size-4" aria-hidden />}{a.name}</button>
+                ); })}
+              </div>
+            )}
+          </section>
+
+          <section aria-label="Лица">
+            <p className="mb-1 flex items-center gap-1.5 text-sm font-medium"><ScanFace className="size-4" aria-hidden />Кто на фото</p>
+            <p className="mb-2 text-xs text-gray-600 dark:text-gray-400">Нажмите на человека: один раз — «должен быть», второй — «не должно быть», третий — не учитывать.</p>
+            {people === null ? <Loader2 className="size-4 animate-spin" aria-label="Загружаем" /> : people.length === 0
+              ? <p className="text-sm text-gray-600 dark:text-gray-400">Названных людей пока нет. Назовите их во вкладке «Люди».</p>
+              : <div className="flex flex-wrap gap-2">
+                {people.map((p) => { const st = state[p.id]; return (
+                  <button key={p.id} type="button" onClick={() => cycle(p.id)} aria-label={`${p.name}: ${st === 'in' ? 'должен быть' : st === 'out' ? 'не должно быть' : 'не учитывать'}`}
+                    className={`${chip} pl-1.5 ${st === 'in' ? on : st === 'out' ? 'border-rose-400 bg-rose-600 text-white shadow-[0_0_16px_-4px_rgba(244,63,94,0.8)]' : idle}`}>
+                    <img src={cropUrl(p.cover)} alt="" loading="lazy" draggable={false} className="size-6 rounded-full object-cover" />
+                    {st === 'in' && <Plus className="size-4" aria-hidden />}{st === 'out' && <Minus className="size-4" aria-hidden />}{p.name}
+                  </button>
+                ); })}
+              </div>}
+          </section>
+
+          <section aria-label="Название">
+            <label className="mb-2 block text-sm font-medium" htmlFor="ab-name">Название альбома</label>
+            <input id="ab-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Например, Лето 2026" className={`${dateInput} w-full`} />
+          </section>
+        </div>
+        <footer className="flex items-center justify-between gap-3 border-t border-black/5 px-5 py-3 dark:border-white/10">
+          <p className="min-w-0 text-sm" aria-live="polite">
+            {problem ? <span className="text-rose-600 dark:text-rose-400">{problem}</span>
+              : incomplete ? <span className="text-gray-600 dark:text-gray-400">Выберите хотя бы один альбом</span>
+              : count === null ? <Loader2 className="size-4 animate-spin" aria-label="Считаем" />
+              : <>Подходит: <b className="text-base">{files(count)}</b></>}
+          </p>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10">Отмена</button>
+            <button type="submit" disabled={busy || !name.trim() || !count} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40">{busy && <Loader2 className="size-4 animate-spin" aria-hidden />}Создать альбом</button>
+          </div>
+        </footer>
+      </form>
+    </div>
+  );
+}

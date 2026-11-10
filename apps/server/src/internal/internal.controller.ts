@@ -9,7 +9,8 @@ import { AdminDuplicatesService, DupReport } from '../files/admin-duplicates.ser
 import { InternalTokenGuard } from './internal-token.guard';
 import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from '../files/admin-media.service';
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
-import { FaceJob, PeopleService } from '../files/people.service';
+import { AdminFace, AdminGroup, FaceJob, PeopleService } from '../files/people.service';
+import { StorageService } from '../files/storage.service';
 import { BackupJob, BackupService, BackupStatus, parseBackupPatch } from '../files/backup.service';
 
 @Controller('internal/health')
@@ -510,5 +511,85 @@ export class InternalBackupController {
     const job = await this.backup.start();
     await this.audit.write('backup.start', 'backup', {});
     return { job };
+  }
+}
+
+// Вкладка «Лица» в админке: общие группы людей и питомцев всего хранилища. Здесь администратор может всё:
+// называть, переименовывать, объединять, распускать, убирать отдельные лица.
+@Controller('internal/faces')
+@UseGuards(InternalTokenGuard)
+export class InternalFacesController {
+  constructor(
+    private readonly people: PeopleService,
+    private readonly audit: AuditService,
+    private readonly storage: StorageService,
+  ) {}
+
+  @Get()
+  async list(@Query('kind') kind?: string, @Query('q') q?: string, @Query('unnamed') unnamed?: string, @Query('offset') offset?: string, @Query('limit') limit?: string): Promise<{ total: number; groups: AdminGroup[]; enabled: { faces: boolean; pets: boolean } }> {
+    const k = kind === 'person' || kind === 'pet' ? kind : undefined;
+    const r = await this.people.adminGroups({
+      kind: k, q: (q ?? '').trim().slice(0, 60) || undefined, unnamed: unnamed === '1',
+      offset: Math.max(0, Math.min(1_000_000, Number(offset) || 0)), limit: Math.max(1, Math.min(100, Number(limit) || 24)),
+    });
+    return { ...r, enabled: await this.people.status() };
+  }
+
+  // Вырезка лица для больших рамок (любая находка).
+  @Get('detections/:id/crop')
+  async crop(@Res() res: Response, @Param('id') id: string): Promise<void> {
+    const rel = await this.people.cropPath('0', id, true);
+    res.setHeader('Content-Type', 'image/webp');
+    res.sendFile(rel, {
+      root: this.storage.root,
+      dotfiles: 'deny',
+      headers: { 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=31536000, immutable' },
+    }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'Вырезки нет' });
+    });
+  }
+
+  @Get(':id')
+  async one(@Param('id') id: string, @Query('offset') offset?: string, @Query('limit') limit?: string): Promise<{ group: AdminGroup; total: number; faces: AdminFace[] }> {
+    return this.people.adminFaces(id, Math.max(1, Math.min(120, Number(limit) || 48)), Math.max(0, Number(offset) || 0));
+  }
+
+  @Patch(':id')
+  async rename(@Req() req: Request, @Param('id') id: string): Promise<{ ok: true }> {
+    requireJson(req);
+    const o = asObject(req.body);
+    if (o.name !== null && typeof o.name !== 'string') throw new BadRequestException('name: строка или null');
+    await this.people.rename('0', id, { name: o.name as string | null }, true);
+    await this.audit.write('faces.rename', id, { name: o.name });
+    return { ok: true };
+  }
+
+  @Post('merge')
+  @HttpCode(200)
+  async merge(@Req() req: Request): Promise<{ merged: number }> {
+    requireJson(req);
+    const o = asObject(req.body);
+    if (typeof o.into !== 'string' || !Array.isArray(o.from) || !o.from.every((x) => typeof x === 'string')) throw new BadRequestException('Нужны into и from');
+    const merged = await this.people.mergeMany('0', o.into, o.from as string[], true);
+    await this.audit.write('faces.merge', o.into, { from: o.from });
+    return { merged };
+  }
+
+  @Delete(':id')
+  async remove(@Param('id') id: string): Promise<{ ok: true }> {
+    await this.people.remove('0', id, true);
+    await this.audit.write('faces.dissolve', id, {});
+    return { ok: true };
+  }
+
+  @Post(':id/remove-face')
+  @HttpCode(200)
+  async removeFace(@Req() req: Request, @Param('id') id: string): Promise<{ ok: true }> {
+    requireJson(req);
+    const o = asObject(req.body);
+    if (typeof o.detectionId !== 'string') throw new BadRequestException('Нужен detectionId');
+    await this.people.adminRemoveFace(id, o.detectionId);
+    await this.audit.write('faces.remove-face', id, { detectionId: o.detectionId });
+    return { ok: true };
   }
 }

@@ -75,6 +75,11 @@ html:not(.js) .zoomhold:active + .zoombox, .zoomhold.hold + .zoombox { display:g
 html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figure { transform:scale(1); }
 @starting-style { html:not(.js) .zoomhold:active + .zoombox, .zoomhold.hold + .zoombox { opacity:0; } html:not(.js) .zoomhold:active + .zoombox figure, .zoomhold.hold + .zoombox figure { transform:scale(.35); } }
 .dupgroup { border:1px solid var(--line, #2a3144); border-radius:10px; padding:10px 12px; margin:10px 0; }
+.faces { list-style:none; margin:0 0 10px; padding:0; display:flex; flex-wrap:wrap; gap:14px; }
+.face { width:176px; display:flex; flex-direction:column; gap:6px; padding:8px; border:1px solid var(--line); border-radius:12px; background:var(--soft); }
+.facepic img { display:block; width:160px; height:160px; object-fit:cover; border-radius:10px; }
+.facemeta { font-size:13px; line-height:1.35; word-break:break-word; }
+.facepick { font-size:13px; display:flex; gap:6px; align-items:center; cursor:pointer; }
 .dups { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-wrap:wrap; gap:12px; }
 .dup { position:relative; width:164px; box-sizing:border-box; padding:6px; border:3px solid var(--bad); border-radius:12px; background:rgba(127,127,127,.08); }
 .dup:has(.dupchk:checked) { border-color:var(--ok); }
@@ -231,7 +236,7 @@ ${error ? `<div class="msg error">${esc(error)}</div>` : ''}
 // «Инфо»: ненавязчивая кнопка с пояснением. text: один или несколько абзацев (строки/HTML из этого файла, не от людей).
 export const info = (text, side = '') => `<details class="info${side ? ' ' + side : ''}"><summary aria-label="Инфо" title="Инфо">i</summary><div class="tip">${[].concat(text).map((t) => `<p>${t}</p>`).join('')}</div></details>`;
 
-const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['dups', '/duplicates', 'Дубликаты'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['backup', '/backup', 'Копия']];
+const TABS = [['users', '/', 'Люди'], ['files', '/files', 'Файлы'], ['dups', '/duplicates', 'Дубликаты'], ['sharing', '/sharing', 'Альбомы людям'], ['vault', '/vault', 'Сейф'], ['storage', '/storage', 'Хранилище'], ['media', '/media', 'Медиа'], ['faces', '/faces', 'Лица'], ['backup', '/backup', 'Копия']];
 const nav = (current) => `<nav class="tabs" aria-label="Разделы">${TABS.map(([k, href, label]) => `<a href="${href}"${current === k ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const topBar = (current, csrf) => `<div class="bar"><div class="brand"><b>DV Cloud</b><span class="muted">админка</span></div>${nav(current)}
 <form method="post" action="/logout">${csrfInput(csrf)}<button type="submit" class="ghost">Выйти</button></form></div>`;
@@ -557,6 +562,71 @@ ${flashHtml(flash, loadError)}
 <form method="post" action="/storage/duplicates/scan">${csrfInput(csrf)}<input type="hidden" name="page" value="${page}"><input type="hidden" name="per" value="${per}"><button type="submit">Проверить сейчас</button></form></div>
 ${body}
 </section>`, (d?.bulk?.running || d?.scanning) ? '<meta http-equiv="refresh" content="3">' : '', SCRIPT);
+}
+
+// ── Лица: общие группы людей и питомцев всего хранилища ──
+// Обычные пользователи могут только подписывать лица и говорить «не он»; объединять, распускать и переименовывать названные
+// группы можно только здесь. Карточки крупные, как на вкладке «Дубликаты»; без скриптов, всё обычными формами.
+const FACE_PER = 24;
+export function facesPage({ data: d, q, csrf, flash, loadError }) {
+  const href = (extra = {}) => `/faces?${new URLSearchParams(Object.entries({ kind: q.kind, q: q.q, unnamed: q.unnamed, ...extra }).filter(([, v]) => v)).toString()}`;
+  const pages = d ? Math.max(1, Math.ceil(d.total / FACE_PER)) : 1;
+  const pager = d && d.total > FACE_PER
+    ? `<div class="pager top"><a class="btn${q.page <= 1 ? ' off' : ''}" href="${href({ page: Math.max(1, q.page - 1) })}"${q.page <= 1 ? ' aria-disabled="true" tabindex="-1"' : ''}>← Назад</a><span class="cur">Страница ${q.page} из ${pages}</span><a class="btn${q.page >= pages ? ' off' : ''}" href="${href({ page: Math.min(pages, q.page + 1) })}"${q.page >= pages ? ' aria-disabled="true" tabindex="-1"' : ''}>Далее →</a></div>`
+    : '';
+  const opt = (v, label) => `<option value="${v}"${q.kind === v ? ' selected' : ''}>${label}</option>`;
+  const filter = `<form class="filter" method="get" action="/faces"><label>Кто<select name="kind">${opt('', 'люди и питомцы')}${opt('person', 'люди')}${opt('pet', 'питомцы')}</select></label>
+<label>Имя<input type="text" name="q" value="${esc(q.q)}" maxlength="60" placeholder="часть имени"></label>
+<label class="chk"><input type="checkbox" name="unnamed" value="1"${q.unnamed ? ' checked' : ''}> только без имени</label>
+<button class="primary" type="submit">Показать</button> <a class="btn" href="/faces">Сбросить</a></form>`;
+  let body;
+  if (!d) body = '<p class="muted">Данные не получены.</p>';
+  else if (!d.enabled.faces && !d.enabled.pets) body = '<p class="muted">Распознавание лиц и питомцев выключено на вкладке «Медиа». Включите его, и здесь появятся группы.</p>';
+  else if (!d.groups.length) body = '<p class="muted">Групп по этому условию нет.</p>';
+  else {
+    const cards = d.groups.map((g) => `<li class="face">
+<a class="facepic" href="/faces/${esc(g.id)}"><img src="/faces/crop/${esc(g.cover)}" alt="" width="160" height="160" loading="lazy"></a>
+<div class="facemeta"><b>${g.name ? esc(g.name) : '<span class="muted">без имени</span>'}</b>${g.kind === 'pet' ? ' <span class="muted">питомец</span>' : ''}<br><span class="muted">файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}${g.owners.length > 1 ? ' (общая)' : ''}${g.hiddenBy ? `, скрыта у ${g.hiddenBy}` : ''}</span></div>
+<label class="facepick"><input type="radio" name="into" value="${esc(g.id)}"> Остаётся</label>
+<label class="facepick"><input type="checkbox" name="from" value="${esc(g.id)}"> Влить в оставшуюся</label>
+<a class="btn" href="/faces/${esc(g.id)}">Открыть</a></li>`).join('');
+    body = `<form method="post" action="/faces/merge"><input type="hidden" name="back" value="${esc(href({ page: q.page }))}">${csrfInput(csrf)}${pager}<ul class="faces">${cards}</ul>
+<div class="dupbar"><p class="muted">Отметьте одну группу «Остаётся» и одну или несколько «Влить в оставшуюся». Имя останется у оставшейся (если у неё нет имени, возьмётся имя первой названной из вливаемых). Это нельзя отменить.</p>
+<button class="danger" type="submit">Объединить отмеченные</button></div>${pager}</form>`;
+  }
+  return layout('DV Cloud: лица', `
+${topBar('faces', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>Лица и питомцы ${info(['Группы общие для всего хранилища: человек, названный один раз, называется так у всех. У каждого в списке только те, кто есть на его фото, а сами файлы остаются доступны только владельцам.','Обычный пользователь может подписать безымянную группу, сказать «это он», «не он», убрать фото из группы и скрыть группу у себя. Объединять, распускать и переименовывать названные и общие группы может только администратор, то есть вы здесь.','Если у группы фото нескольких людей, она общая (в карточке видно, у кого).'])}</h2></div></div>
+${filter}
+${d ? `<p class="muted">Всего групп: <b>${d.total}</b></p>` : ''}
+${body}
+</section>`);
+}
+
+// Одна группа: крупные лица, имя, «убрать из группы», распустить.
+export function facePage({ data: d, offset, csrf, flash, loadError }) {
+  const g = d.group;
+  const per = 48;
+  const prev = offset - per >= 0 ? `/faces/${esc(g.id)}?offset=${offset - per}` : null;
+  const next = offset + per < d.total ? `/faces/${esc(g.id)}?offset=${offset + per}` : null;
+  const cards = d.faces.map((f) => `<li class="face">
+<a class="facepic" href="/files/${esc(f.fileId)}"><img src="/faces/crop/${esc(f.id)}" alt="" width="160" height="160" loading="lazy"></a>
+<div class="facemeta"><span class="muted">${esc(f.owner)}${f.source === 'manual' ? ', подписано человеком' : ', автоматически'}</span></div>
+<form method="post" action="/faces/${esc(g.id)}/remove-face">${csrfInput(csrf)}<input type="hidden" name="det" value="${esc(f.id)}"><input type="hidden" name="offset" value="${offset}"><button type="submit">Убрать из группы</button></form></li>`).join('');
+  return layout('DV Cloud: лица', `
+${topBar('faces', csrf)}
+${flashHtml(flash, loadError)}
+<section class="panel"><div class="panel-head"><div><h2>${g.name ? esc(g.name) : 'Группа без имени'} ${g.kind === 'pet' ? '(питомец)' : ''}</h2></div><a class="btn" href="/faces">← Ко всем группам</a></div>
+<p class="muted">Файлов: ${g.count}${g.owners.length ? `, у: ${g.owners.map(esc).join(', ')}` : ''}${g.owners.length > 1 ? ' (общая группа)' : ''}. Лиц в группе: ${d.total}.</p>
+<form method="post" action="/faces/${esc(g.id)}/rename" class="filter">${csrfInput(csrf)}<label>Имя<input type="text" name="name" value="${esc(g.name ?? '')}" maxlength="60" placeholder="Как зовут?"></label>
+<button class="primary" type="submit">Сохранить имя</button><button type="submit" name="clear" value="1">Стереть имя</button></form>
+<ul class="faces">${cards || '<li class="muted">В группе нет лиц.</li>'}</ul>
+<div class="pager">${prev ? `<a class="btn" href="${prev}">← Назад</a>` : ''}${next ? `<a class="btn" href="${next}">Далее →</a>` : ''}</div>
+<details class="dupconfirm"><summary class="danger">Распустить группу</summary>
+<p>Группа и имя исчезнут, сами фото останутся. Лица могут собраться в новую безымянную группу позже.</p>
+<form method="post" action="/faces/${esc(g.id)}/dissolve">${csrfInput(csrf)}<button class="danger" type="submit">Да, распустить</button></form></details>
+</section>`);
 }
 
 // ── Просмотр одного файла ──

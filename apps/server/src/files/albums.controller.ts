@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { SessionGuard } from '../auth/session.guard';
 import { asObject, requireJson } from '../http';
 import { UserRow } from '../users/users.service';
-import { AlbumsService, parseIds, PublicAlbum, PublicPerson, zipFileName } from './albums.service';
+import { AlbumsService, AlbumSuggestion, parseIds, PublicAlbum, PublicPerson, zipFileName } from './albums.service';
 import { FilesService, PublicFile, toPublicFile } from './files.service';
 import { contentDisposition } from './names';
 import { zipSize, zipStream } from './zip';
@@ -57,6 +57,76 @@ export class AlbumsController {
     res.setHeader('Cache-Control', 'no-store');
     const albums = await this.albums.albumsOfFile(req.user.id, fileId);
     return { album: albums[0] ?? null, albums };
+  }
+
+  // Конструктор альбома: границы дат для календаря, подсчёт «подходит N» и создание.
+  // Тело: {from?, to?, source: all|photos|videos|screenshots|albums, albumIds?, include?, exclude?, name?}
+  @Get('builder/bounds')
+  async builderBounds(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ min: string | null; max: string }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.albums.builderBounds(req.user.id);
+  }
+
+  @Post('builder/count')
+  @HttpCode(200)
+  async builderCount(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ count: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return this.albums.builderCount(req.user.id, asObject(req.body));
+  }
+
+  @Post('builder/create')
+  @HttpCode(200)
+  async builderCreate(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ album: PublicAlbum; added: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return this.albums.builderCreate(req.user.id, asObject(req.body));
+  }
+
+  // Окно удаления из альбома: сколько из выбранных файлов есть и в других альбомах. {albumId, fileIds}
+  @Post('in-other')
+  @HttpCode(200)
+  async inOther(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ files: number; albums: { id: string; name: string }[] }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (typeof o.albumId !== 'string') throw new BadRequestException('Нужен albumId');
+    return this.albums.inOtherAlbums(req.user.id, o.albumId, parseIds(o.fileIds));
+  }
+
+  // Убрать файлы из ВСЕХ своих альбомов (корзину не трогает). {fileIds}
+  @Post('remove-everywhere')
+  @HttpCode(200)
+  async removeEverywhere(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ removed: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return { removed: await this.albums.removeFromAllAlbums(req.user.id, parseIds(asObject(req.body).fileIds)) };
+  }
+
+  // Предложенные альбомы: события по времени съёмки из файлов, которых нет ни в одном альбоме.
+  @Get('suggestions')
+  async suggestions(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ suggestions: Omit<AlbumSuggestion, 'fileIds'>[] }> {
+    res.setHeader('Cache-Control', 'no-store');
+    return { suggestions: (await this.albums.suggestions(req.user.id)).map(({ fileIds, ...rest }) => { void fileIds; return rest; }) };
+  }
+
+  // {id, name?}: создать альбом из события.
+  @Post('suggestions/accept')
+  @HttpCode(200)
+  async acceptSuggestion(@Req() req: Req_, @Res({ passthrough: true }) res: Response): Promise<{ album: PublicAlbum; added: number }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    return this.albums.acceptSuggestion(req.user.id, o.id, o.name);
+  }
+
+  // {id}: «Не нужно».
+  @Post('suggestions/dismiss')
+  @HttpCode(200)
+  async dismissSuggestion(@Req() req: Req_): Promise<{ ok: true }> {
+    requireJson(req);
+    await this.albums.dismissSuggestion(req.user.id, asObject(req.body).id);
+    return { ok: true };
   }
 
   // Люди, с которыми можно делиться.

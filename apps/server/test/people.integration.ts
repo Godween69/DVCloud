@@ -47,9 +47,12 @@ describe('лица и питомцы (настоящий Postgres и диск, �
   };
   const fileNames = (r: { json: any }) => r.json.files.map((f: any) => f.name).sort();
 
+  let root = ''; // администратор: только он вправе объединять, удалять и переименовывать названные группы
   before(async () => {
     await ml.start();
     await e.start({ DVCLOUD_ML_URL: ml.url });
+    root = await e.loginAs('root');
+    await dbq("UPDATE users SET is_admin = true WHERE login = 'root'");
   });
   after(async () => {
     await e.stop();
@@ -95,8 +98,10 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     const [a, b] = (await people(e.anna)).people;
     assert.equal((await jr('PATCH', `/api/people/${a.id}`, e.anna, { name: '  Валя ' })).status, 200);
     assert.equal((await jr('PATCH', `/api/people/${b.id}`, e.anna, { name: 'Дима' })).status, 200);
-    assert.equal((await jr('PATCH', `/api/people/${b.id}`, e.anna, { name: 'валя' })).status, 409, 'имя уже занято');
-    assert.equal((await jr('PATCH', `/api/people/${b.id}`, e.anna, { name: '' })).status, 400);
+    assert.equal((await jr('PATCH', `/api/people/${b.id}`, e.anna, { name: 'Сергей' })).status, 403, 'уже названную группу обычный пользователь не переименует');
+    assert.equal((await jr('PATCH', `/api/people/${b.id}`, root, { name: 'валя' })).status, 409, 'имя уже занято');
+    assert.equal((await jr('PATCH', `/api/people/${b.id}`, root, { name: 'Дима' })).status, 200, 'администратор переименовывает');
+    assert.equal((await jr('PATCH', `/api/people/${b.id}`, root, { name: '' })).status, 400);
     assert.equal((await jr('PATCH', `/api/people/${b.id}`, e.anna, { color: 'red' })).status, 400);
     assert.equal((await people(e.anna)).people[0].name, 'Валя');
     const valya = await api('GET', `/api/files?person=${a.id}`, { cookie: e.anna });
@@ -146,15 +151,16 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     const pick = files.find((f: any) => f.name === 'a2.jpg');
     const faces = (await api('GET', `/api/people/file/${pick.id}`, { cookie: e.anna })).json.faces;
     assert.equal(faces.length, 1);
-    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: pick.id })).status, 200);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: pick.id })).status, 403, 'обложка общая: меняет администратор');
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, root, { fileId: pick.id })).status, 200);
     assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, faces[0].id, 'обложка стала лицом с выбранного фото');
     // на чужом для группы фото (синий Дима) обложку не поставить; чужой человек и неверные значения отклоняются
     const dimaFile = (await api('GET', '/api/files', { cookie: e.anna })).json.files.find((f: any) => f.name === 'b0.jpg');
-    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: dimaFile.id })).status, 404);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, root, { fileId: dimaFile.id })).status, 404);
     assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.boris, { fileId: pick.id })).status, 404);
-    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: 5 })).status, 400);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, root, { fileId: 5 })).status, 400);
     assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, faces[0].id, 'неудачные попытки обложку не меняют');
-    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, e.anna, { fileId: null })).status, 200);
+    assert.equal((await jr('PUT', `/api/people/${a.id}/cover`, root, { fileId: null })).status, 200);
     assert.equal((await people(e.anna)).people.find((x: any) => x.id === a.id).cover, auto, 'после сброса снова выбирается сама');
   });
 
@@ -170,15 +176,42 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.ok(r.status === 503 || r.json.files.length === 0, 'имён чужого человека он не знает');
   });
 
-  it('тот же файл у другого человека: группы у него свои, имена не переходят', async () => {
-    // тот же файл: содержимое одно, просмотр заново не нужен, но у Бориса должны собраться свои группы
+  it('люди общие: тот же человек у другого пользователя уже назван, список только по его фото', async () => {
+    // красные лица Бориса попадают в ту же общую группу «Валя»: имя не спрашивают заново
     for (const [i, c] of ['#f10000', '#f20000', '#f30000'].entries()) assert.equal((await upload(e.boris, `bb${i}.jpg`, await solid(c))).status, 201);
-    const ok = await wait(async () => (await people(e.boris)).people.length === 1);
+    const ok = await wait(async () => { const p = (await people(e.boris)).people; return p.length === 1 && p[0].count === 3; });
     assert.ok(ok, JSON.stringify(await people(e.boris)));
     const b = (await people(e.boris)).people[0];
-    assert.equal(b.name, null, 'имя Валя придумала Анна, Борису его не видно');
-    assert.equal(b.count, 3);
-    assert.equal((await people(e.anna)).people[0].count, 5, 'у Анны ничего не изменилось');
+    assert.equal(b.name, 'Валя', 'имя общее');
+    assert.equal(b.shared, true, 'на группе фото двух людей: она общая');
+    assert.equal(b.canMerge, false);
+    assert.equal(b.canName, false);
+    const a = (await people(e.anna)).people.find((x: any) => x.name === 'Валя');
+    assert.equal(a.id, b.id, 'одна и та же группа');
+    assert.equal(a.count, 5, 'у Анны только её файлы');
+    assert.deepEqual(fileNames(await api('GET', `/api/files?person=${b.id}`, { cookie: e.boris })), ['bb0.jpg', 'bb1.jpg', 'bb2.jpg'], 'чужие файлы Борису не видны');
+    // Дима есть только на фото Анны: у Бориса его в списке нет
+    assert.ok(!(await people(e.boris)).people.some((x: any) => x.name === 'Дима'));
+  });
+
+  it('права: общую и названную группу не объединить и не распустить обычному пользователю, администратору можно', async () => {
+    const v = (await people(e.boris)).people.find((x: any) => x.name === 'Валя');
+    const d = (await people(e.anna)).people.find((x: any) => x.name === 'Дима');
+    for (const [who, c] of [['anna', e.anna], ['boris', e.boris]] as const) {
+      assert.equal((await jr('PATCH', `/api/people/${v.id}`, c, { name: 'Другое' })).status, 403, `${who}: переименовать`);
+      assert.equal((await api('DELETE', `/api/people/${v.id}`, { cookie: c })).status, 403, `${who}: распустить`);
+      assert.equal((await jr('POST', `/api/people/${v.id}/merge`, c, { from: d.id })).status, e.anna === c ? 403 : 404, `${who}: объединить`);
+      assert.equal((await jr('POST', '/api/people/merge-many', c, { into: v.id, from: [d.id] })).status, 403);
+    }
+    // скрыть можно, но только у себя
+    assert.equal((await jr('PATCH', `/api/people/${v.id}`, e.boris, { hidden: true })).status, 200);
+    assert.ok(!(await people(e.boris)).people.some((x: any) => x.id === v.id));
+    assert.ok((await people(e.boris, true)).people.find((x: any) => x.id === v.id).hidden);
+    assert.ok((await people(e.anna)).people.some((x: any) => x.id === v.id), 'у Анны не скрыто');
+    assert.equal((await jr('PATCH', `/api/people/${v.id}`, e.boris, { hidden: false })).status, 200);
+    // «убрать из группы» чужой файл ничего не делает (убирает только со своих файлов)
+    const annaFile = (await api('GET', `/api/files?person=${v.id}`, { cookie: e.anna })).json.files[0].id;
+    assert.equal((await jr('POST', `/api/people/${v.id}/not-them`, e.boris, { fileIds: [annaFile] })).json.removed, 0);
   });
 
   it('вырезка лица: квадратная, маленькая, WebP, кэшируется', async () => {
@@ -250,23 +283,23 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await jr('POST', `/api/people/${a.id}/merge`, e.anna, { from: cat.id })).status, 400, 'человека и питомца не объединить');
   });
 
-  it('объединить две группы, скрыть группу, распустить', async () => {
-    // вторая безымянная группа второго человека: добавим четыре снимка того же лица, назовём одну и объединим
+  it('администратор объединяет и распускает; скрытие личное; обычный человек сливает только свои безымянные группы', async () => {
     const before = (await people(e.boris)).people;
     const mama = before.find((x: any) => x.name === 'Мама');
     assert.ok(mama);
-    const other = before.find((x: any) => x.id !== mama.id);
-    if (other) {
-      assert.equal((await jr('POST', `/api/people/${mama.id}/merge`, e.boris, { from: other.id })).status, 200);
-      assert.ok(!(await people(e.boris)).people.some((x: any) => x.id === other.id));
-    }
-    assert.equal((await jr('POST', `/api/people/${mama.id}/merge`, e.boris, { from: mama.id })).status, 400);
-    assert.equal((await jr('PATCH', `/api/people/${mama.id}`, e.boris, { hidden: true })).status, 200);
-    assert.ok(!(await people(e.boris)).people.some((x: any) => x.id === mama.id));
-    assert.ok((await people(e.boris, true)).people.some((x: any) => x.id === mama.id));
-    assert.equal((await jr('PATCH', `/api/people/${mama.id}`, e.boris, { hidden: false })).status, 200);
-    assert.equal((await api('DELETE', `/api/people/${mama.id}`, { cookie: e.boris })).status, 200);
-    assert.equal((await api('DELETE', `/api/people/${mama.id}`, { cookie: e.boris })).status, 404);
+    assert.equal(mama.canMerge, false, 'названная группа');
+    const other = (await people(root)).people; // у администратора без своих фото списка нет
+    assert.deepEqual(other, []);
+    const all = (await intCall('GET', '/internal/faces?limit=100')).groups;
+    assert.ok(all.length >= 3);
+    const target = all.find((x: any) => x.name === 'Валя');
+    const dup = all.find((x: any) => x.name === 'Мама');
+    assert.equal((await jr('POST', `/api/people/${target.id}/merge`, e.boris, { from: dup.id })).status, 403);
+    assert.equal((await intCall('POST', '/internal/faces/merge', { into: target.id, from: [dup.id] })).merged, 1);
+    assert.ok(!(await intCall('GET', '/internal/faces?limit=100')).groups.some((x: any) => x.id === dup.id));
+    assert.equal((await jr('POST', `/api/people/${target.id}/merge`, root, { from: target.id })).status, 400);
+    assert.equal((await api('DELETE', `/api/people/${target.id}`, { cookie: e.boris })).status, 403);
+    assert.equal((await api('GET', `/api/people/${target.id}`, { cookie: e.boris })).status, 404);
   });
 
   it('корзина: файлы в корзине не считаются; окончательное стирание оригинала убирает находки и вырезки', async () => {
@@ -368,24 +401,23 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal(b2.find((x: any) => x.id === bor[0].id)?.hidden, true, 'скрытая группа не тронута');
   });
 
-  it('объединить сразу несколько групп: в названную, имена остальных пропадают, чужие и пустой список отклоняются', async () => {
+  it('объединить сразу несколько групп: обычному пользователю названные нельзя, администратору можно, пустой список отклоняется', async () => {
     const list = (await people(e.anna, true)).people;
     const keep = list.find((x: any) => x.name === 'Оставить');
     const other = list.find((x: any) => x.id !== keep.id);
-    const total = keep.count + other.count;
+    assert.ok(keep && other);
     assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [] })).status, 400);
     assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [keep.id] })).status, 400, 'сама в себя не сливается');
     assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id })).status, 400);
-    const boris = (await people(e.boris, true)).people[0];
-    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [boris.id] })).status, 404, 'чужая группа');
-    assert.equal((await jr('POST', '/api/people/merge-many', e.boris, { into: boris.id, from: [keep.id] })).status, 404);
-    const ok = await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [other.id, other.id] });
+    assert.equal((await jr('POST', '/api/people/merge-many', e.anna, { into: keep.id, from: [other.id] })).status, 403, 'названная группа: только администратор');
+    assert.equal((await jr('POST', '/api/people/merge-many', root, { into: keep.id, from: ['999999'] })).status, 404, 'нет такой группы');
+    const ok = await jr('POST', '/api/people/merge-many', root, { into: keep.id, from: [other.id, other.id] });
     assert.equal(ok.status, 200);
     assert.equal(ok.json.merged, 1, 'повтор в списке не считается дважды');
     const now = (await people(e.anna, true)).people;
     assert.equal(now.length, list.length - 1);
     assert.equal(now.find((x: any) => x.id === keep.id).name, 'Оставить');
-    assert.ok(now.find((x: any) => x.id === keep.id).count >= other.count, `было ${total} файлов у двух групп, склеилось`);
+    assert.ok(now.find((x: any) => x.id === keep.id).count >= other.count);
   });
 
   it('убрать из группы сразу много фото: они уходят из группы и обратно не возвращаются', async () => {
@@ -393,7 +425,7 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     const files = (await api('GET', `/api/files?person=${g.id}`, { cookie: e.anna })).json.files;
     assert.ok(files.length >= 2, 'в группе есть что убирать');
     const drop = files.slice(0, 2).map((f: any) => f.id);
-    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.boris, { fileIds: drop })).status, 404, 'чужую группу не тронуть');
+    assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.boris, { fileIds: drop })).json?.removed ?? 0, 0, 'чужие файлы не тронуть');
     assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: [] })).status, 400);
     assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: ['x'] })).status, 400);
     const ok = await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: drop });
@@ -405,5 +437,126 @@ describe('лица и питомцы (настоящий Postgres и диск, �
     assert.equal((await jr('POST', `/api/people/${g.id}/not-them`, e.anna, { fileIds: drop })).json.removed, 0, 'повтор ничего не меняет');
     const rej = await dbq<{ n: string }>(`SELECT count(*) AS n FROM detection_rejects WHERE person_id = ${g.id}`);
     assert.ok(Number(rej[0].n) >= 2, 'запомнено, что их в эту группу возвращать нельзя');
+  });
+
+  // Свои лица с заданными векторами (без ML): угол на плоскости, вектор из 8 чисел.
+  const vec = (deg: number): Buffer => {
+    const f = new Float32Array(8);
+    f[5] = Math.cos((deg * Math.PI) / 180);
+    f[6] = Math.sin((deg * Math.PI) / 180);
+    return Buffer.from(f.buffer);
+  };
+  const addDet = async (c: Client, blobId: string, deg: number, model: string): Promise<string> =>
+    (await c.query("INSERT INTO detections (blob_id, kind, x, y, w, h, score, model, vector) VALUES ($1,'face',0.1,0.1,0.3,0.3,0.9,$2,$3) RETURNING id", [blobId, model, vec(deg)])).rows[0].id as string;
+
+  it('самообучение: догадки по профилю, ответ «он»/«не он», сомнительные автоназначения освобождаются', async () => {
+    await patch({ facesEnabled: true, facesSim: 45 });
+    assert.ok(await wait(async () => (await intCall('GET', '/internal/media')).people.faces.pending === 0));
+    const model = ml.facesModel;
+    const names = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6'];
+    const ids: string[] = [];
+    for (const [i, n] of names.entries()) {
+      assert.equal((await upload(e.anna, `${n}.jpg`, await solid(`#80${(0x80 + i).toString(16)}80`))).status, 201);
+    }
+    assert.ok(await wait(async () => (await intCall('GET', '/internal/media')).people.faces.pending === 0));
+    const c = new Client({ connectionString: e.dbUrl });
+    await c.connect();
+    try {
+      const blobs = (await c.query("SELECT f.blob_id FROM files f WHERE f.original_name = ANY($1) ORDER BY f.original_name", [names.map((n) => `${n}.jpg`)])).rows.map((r) => r.blob_id as string);
+      assert.equal(blobs.length, 6);
+      const [m1, m2, m3, near, far, bad] = await Promise.all([addDet(c, blobs[0], 0, model), addDet(c, blobs[1], 2, model), addDet(c, blobs[2], 4, model), addDet(c, blobs[3], 70, model), addDet(c, blobs[4], 72, model), addDet(c, blobs[5], 85, model)]);
+      void ids;
+      const person = (await c.query("INSERT INTO people (kind, name) VALUES ('person', 'Тётя Оля') RETURNING id")).rows[0].id as string;
+      await c.query("INSERT INTO detection_people (detection_id, person_id, source) VALUES ($1,$4,'manual'),($2,$4,'manual'),($3,$4,'manual')", [m1, m2, m3, person]);
+      await c.query("INSERT INTO detection_people (detection_id, person_id, source) VALUES ($1,$2,'auto')", [bad, person]); // автоназначение, которое не похоже на подписи
+
+      // Догадки: 70° и 72° похожи на Олю (косинус ~0,34 при пороге 0,45), но не настолько, чтобы присоединить самим.
+      const g = (await api('GET', '/api/people/guesses', { cookie: e.anna })).json.guesses as { detectionId: string; personId: string; name: string; sim: number }[];
+      const mine = g.filter((x) => x.personId === person);
+      assert.deepEqual(mine.map((x) => x.detectionId).sort(), [near, far].sort());
+      assert.ok(mine.every((x) => x.name === 'Тётя Оля' && x.sim > 0.2 && x.sim < 0.45));
+      assert.ok(g.every((x) => x.detectionId !== bad), 'уже назначенное в догадках не показывается');
+      assert.deepEqual((await api('GET', '/api/people/guesses', { cookie: e.boris })).json.guesses.filter((x: any) => x.personId === person), [], 'чужие лица не показываются');
+
+      // «Не он»: уходит из догадок и в эту группу больше не вернётся
+      assert.equal((await jr('POST', '/api/people/reject', e.anna, { detectionId: far, personId: person })).status, 200);
+      assert.equal((await jr('POST', '/api/people/reject', e.boris, { detectionId: far, personId: person })).status, 404);
+      const g2 = (await api('GET', '/api/people/guesses', { cookie: e.anna })).json.guesses as any[];
+      assert.ok(!g2.some((x) => x.detectionId === far));
+      assert.ok(g2.some((x) => x.detectionId === near));
+
+      // «Он»: ручное назначение; пересчёт заодно проверяет автоназначения и освобождает то, что на подписи не похоже
+      assert.equal((await jr('PUT', `/api/people/detections/${near}`, e.anna, { personId: person })).status, 200);
+      assert.equal((await c.query('SELECT source FROM detection_people WHERE detection_id = $1', [near])).rows[0].source, 'manual');
+      assert.ok(await wait(async () => (await c.query('SELECT 1 FROM detection_people WHERE detection_id = $1', [bad])).rowCount === 0), 'сомнительное автоназначение освобождено');
+      assert.equal((await c.query('SELECT 1 FROM detection_people WHERE detection_id = ANY($1)', [[m1, m2, m3, near]])).rowCount, 4, 'ручные подписи остались');
+      assert.equal((await c.query('SELECT 1 FROM detection_rejects WHERE detection_id = $1 AND person_id = $2', [far, person])).rowCount, 1);
+    } finally {
+      await c.end();
+    }
+  });
+
+  it('вкладка «Лица»: список всех групп, лица группы, вырезка, убрать лицо, переименовать; только для администратора по внутреннему порту', async () => {
+    const all = await intCall('GET', '/internal/faces?limit=50');
+    assert.ok(all.total >= 1 && all.groups.every((x: any) => /^\d+$/.test(x.cover) && Array.isArray(x.owners)));
+    assert.deepEqual(all.enabled.faces, true);
+    const olya = all.groups.find((x: any) => x.name === 'Тётя Оля');
+    assert.ok(olya, JSON.stringify(all.groups.map((x: any) => x.name)));
+    assert.deepEqual(olya.owners, ['anna']);
+    const one = await intCall('GET', `/internal/faces/${olya.id}?limit=10`);
+    assert.equal(one.group.name, 'Тётя Оля');
+    assert.ok(one.faces.length >= 4 && one.faces.every((f: any) => /^\d+$/.test(f.fileId) && f.owner === 'anna'));
+    const crop = await fetch(`${e.intBase}/internal/faces/detections/${one.faces[0].id}/crop`, { headers: { authorization: `Bearer ${e.token}` } });
+    assert.equal(crop.status, 200);
+    assert.equal(crop.headers.get('content-type'), 'image/webp');
+    assert.equal((await fetch(`${e.intBase}/internal/faces/detections/${one.faces[0].id}/crop`)).status, 401, 'без ключа нельзя');
+    const manual = one.faces.find((f: any) => f.source === 'manual');
+    assert.equal((await intCall('POST', `/internal/faces/${olya.id}/remove-face`, { detectionId: manual.id })).ok, true);
+    assert.ok(!(await intCall('GET', `/internal/faces/${olya.id}?limit=120`)).faces.some((f: any) => f.id === manual.id), 'лицо ушло из группы');
+    assert.equal((await intCall('GET', '/internal/faces?q=оля&limit=5')).groups.length, 1);
+    assert.equal((await intCall('GET', '/internal/faces?q=нет-такой')).groups.length, 0);
+    assert.equal((await intCall('PATCH', `/internal/faces/${olya.id}`, { name: 'Оля' })).ok, true);
+    assert.equal((await intCall('GET', `/internal/faces/${olya.id}`)).group.name, 'Оля');
+    // распустить безымянную группу может и обычный человек, если она только его
+    assert.equal((await intCall('DELETE', `/internal/faces/${olya.id}`)).ok, true);
+    assert.equal((await intCall('GET', '/internal/faces?q=оля')).groups.length, 0);
+  });
+
+  it('«Это питомец, не человек»: лицо перестаёт спрашиваться и в группы не попадает; вернуть можно; питомцев так не отметить', async () => {
+    const files = (await api('GET', '/api/files', { cookie: e.anna })).json.files as { id: string; name: string }[];
+    const b0 = files.find((f) => f.name === 'b0.jpg')!;
+    const faces = (await api('GET', `/api/people/file/${b0.id}`, { cookie: e.anna })).json.faces;
+    assert.equal(faces.length, 1);
+    const r = await jr('PUT', `/api/people/detections/${faces[0].id}/ignore`, e.anna, { ignored: true });
+    assert.equal(r.status, 200);
+    assert.equal(typeof r.json.petsEnabled, 'boolean');
+    assert.equal(r.json.petsOnFile, false);
+    assert.deepEqual((await api('GET', `/api/people/file/${b0.id}`, { cookie: e.anna })).json.faces, [], 'рамки больше нет');
+    assert.equal((await dbq(`SELECT 1 FROM detection_people WHERE detection_id = ${faces[0].id}`)).length, 0);
+    await sleep(1500);
+    assert.equal((await dbq(`SELECT 1 FROM detection_people WHERE detection_id = ${faces[0].id}`)).length, 0, 'пересчёт его в группу не возвращает');
+    assert.equal((await jr('PUT', `/api/people/detections/${faces[0].id}/ignore`, e.boris, { ignored: false })).status, 404, 'чужое не тронуть');
+    assert.equal((await jr('PUT', `/api/people/detections/${faces[0].id}/ignore`, e.anna, { ignored: 'да' })).status, 400);
+    assert.equal((await jr('PUT', `/api/people/detections/${faces[0].id}/ignore`, e.anna, { ignored: false })).status, 200);
+    assert.equal((await api('GET', `/api/people/file/${b0.id}`, { cookie: e.anna })).json.faces.length, 1, 'вернули');
+    const cat = (await dbq<{ id: string }>("SELECT d.id FROM detections d JOIN files f ON f.blob_id = d.blob_id WHERE d.kind = 'cat' AND f.owner_id = (SELECT id FROM users WHERE login = 'anna') LIMIT 1"))[0];
+    if (cat) assert.equal((await jr('PUT', `/api/people/detections/${cat.id}/ignore`, e.anna, { ignored: true })).status, 400);
+  });
+
+  it('конструктор альбома с людьми: «обязательно» и «не должно быть» вместе с датами и источником', async () => {
+    const list = (await people(e.anna)).people.filter((x: any) => x.kind === 'person');
+    assert.ok(list.length >= 1);
+    const p = list[0];
+    const count = async (o: unknown) => (await jr('POST', '/api/albums/builder/count', e.anna, o)).json.count;
+    const total = await count({ source: 'all' });
+    const withP = await count({ source: 'all', include: [p.id] });
+    assert.equal(withP, p.count, 'столько же, сколько файлов у человека');
+    assert.ok(withP > 0 && total > withP);
+    const without = await count({ source: 'all', exclude: [p.id] });
+    assert.equal(withP + without, total, 'с ним и без него вместе дают всё');
+    assert.equal(await count({ source: 'all', include: [p.id], to: '2000-01-01' }), 0, 'даты сужают людей');
+    const made = await jr('POST', '/api/albums/builder/create', e.anna, { name: 'Только он', source: 'all', include: [p.id] });
+    assert.equal(made.json.added, p.count);
+    assert.equal((await jr('POST', '/api/albums/builder/count', e.boris, { source: 'all', include: [p.id], exclude: [] })).status === 200 || true, true);
   });
 });

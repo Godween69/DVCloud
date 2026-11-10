@@ -335,7 +335,7 @@ export class FilesService {
     if (o.person !== undefined) {
       if (!ID_RE.test(o.person)) throw new BadRequestException('person: неверный номер');
       params.push(o.person);
-      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id AND dp.owner_id = $1 JOIN people pp ON pp.id = dp.person_id AND pp.owner_id = $1 WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
+      where += ` AND EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id WHERE d.blob_id = files.blob_id AND dp.person_id = $${params.length})`;
     }
     // Допуски альбомов: файл не попадает в раздел, если лежит хотя бы в одном своём альбоме, у которого этот раздел выключен.
     // Внутри самого альбома и в корзине допуски не действуют; группы лиц и поиск считаются «Библиотекой».

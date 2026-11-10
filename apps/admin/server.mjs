@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
+import { CSS, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, facePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -273,6 +273,51 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
     body.pipe(res);
   }
 
+  // Лица: объединить, переименовать, распустить, убрать лицо. Ошибки сервера (например «Такое имя уже есть») показываются как есть.
+  async function facesAction(session, res, path, form) {
+    const ok = (text) => { session.flash = { kind: 'ok', text }; };
+    const id = /^\/faces\/(\d{1,18})\//.exec(path)?.[1];
+    let back = '/faces';
+    try {
+      let m;
+      if (path === '/faces/merge') {
+        const b = form.get('back') ?? '';
+        if (/^\/faces\?[a-z0-9=&%_.+\-]*$/i.test(b)) back = b;
+        const into = (form.get('into') ?? '').trim();
+        const from = form.getAll('from').filter((x) => /^\d{1,18}$/.test(x) && x !== into);
+        if (!/^\d{1,18}$/.test(into)) throw new ApiError(400, 'Отметьте группу, которая останется');
+        if (from.length === 0) throw new ApiError(400, 'Отметьте хотя бы одну группу, которую нужно влить');
+        const r = await api.mergeFaces(into, from);
+        ok(`Объединено групп: ${r.merged}`);
+      } else if (id && (m = /^\/faces\/\d+\/(rename|dissolve|remove-face)$/.exec(path))) {
+        back = `/faces/${id}`;
+        if (m[1] === 'rename') {
+          const name = form.get('clear') === '1' ? null : (form.get('name') ?? '').trim();
+          if (name === '') throw new ApiError(400, 'Впишите имя или нажмите «Стереть имя»');
+          await api.renameFace(id, name);
+          ok(name === null ? 'Имя стёрто' : `Имя сохранено: ${name}`);
+        } else if (m[1] === 'dissolve') {
+          await api.dissolveFace(id);
+          ok('Группа распущена, фото остались');
+          back = '/faces';
+        } else {
+          const det = form.get('det') ?? '';
+          if (!/^\d{1,18}$/.test(det)) throw new ApiError(400, 'Не получилось разобрать лицо: обновите страницу');
+          await api.removeFace(id, det);
+          ok('Лицо убрано из группы и в неё больше не вернётся');
+          const off = Number(form.get('offset'));
+          if (Number.isInteger(off) && off > 0 && off < 1_000_000) back = `/faces/${id}?offset=${off}`;
+        }
+      } else {
+        return send(res, 404, 'text/plain; charset=utf-8', 'Нет такой страницы');
+      }
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      session.flash = { kind: 'error', text: e.message };
+    }
+    return redirect(res, back);
+  }
+
   // Резервная копия. Значения проверяет сервер DVCloud, его текст ошибки показывается как есть.
   async function backupAction(session, res, path, form) {
     try {
@@ -310,6 +355,7 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
   async function doAction(session, req, res, path, form) {
     if (path.startsWith('/storage/')) return storageAction(session, res, path, form);
     if (path.startsWith('/media/')) return mediaAction(session, res, path, form);
+    if (path.startsWith('/faces/')) return facesAction(session, res, path, form);
     if (path.startsWith('/sharing/')) return sharingAction(session, res, path, form);
     if (path.startsWith('/vault/')) return vaultAction(session, res, path, form);
     if (path.startsWith('/backup/')) return backupAction(session, res, path, form);
@@ -418,6 +464,54 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         return redirect(res, '/files');
       }
       return html(res, 200, filePage({ info, filter, csrf: session.csrf, flash, loadError: null }));
+    }
+
+    // Вырезка лица для карточек (с внутреннего порта, как миниатюры файлов)
+    if (req.method === 'GET' && (fm = /^\/faces\/crop\/(\d{1,18})$/.exec(path))) {
+      let r;
+      try {
+        r = await api.raw(`/internal/faces/detections/${fm[1]}/crop`);
+      } catch {
+        return send(res, 502, 'text/plain; charset=utf-8', 'Сервер DVCloud недоступен');
+      }
+      if (!r.ok) return send(res, r.status === 404 ? 404 : 502, 'text/plain; charset=utf-8', 'Нет вырезки');
+      res.writeHead(200, { 'content-type': 'image/webp', ...SECURITY_HEADERS, 'cache-control': 'private, max-age=3600' });
+      return res.end(Buffer.from(await r.arrayBuffer()));
+    }
+
+    if (req.method === 'GET' && (fm = /^\/faces\/(\d{1,18})$/.exec(path))) {
+      const flash = session.flash;
+      session.flash = null;
+      const sp = new URL(req.url, 'http://x').searchParams;
+      const offset = Math.max(0, Math.min(1_000_000, Number(sp.get('offset')) || 0));
+      try {
+        return html(res, 200, facePage({ data: await api.face(fm[1], offset), offset, csrf: session.csrf, flash, loadError: null }));
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        session.flash = { kind: 'error', text: e.message };
+        return redirect(res, '/faces');
+      }
+    }
+
+    if (req.method === 'GET' && path === '/faces') {
+      const flash = session.flash;
+      session.flash = null;
+      const sp = new URL(req.url, 'http://x').searchParams;
+      const q = {
+        kind: sp.get('kind') === 'person' || sp.get('kind') === 'pet' ? sp.get('kind') : '',
+        q: (sp.get('q') ?? '').trim().slice(0, 60),
+        unnamed: sp.get('unnamed') === '1' ? '1' : '',
+        page: Math.max(1, Math.min(100000, Number(sp.get('page')) || 1)),
+      };
+      let data = null;
+      let loadError = null;
+      try {
+        data = await api.faces({ ...(q.kind ? { kind: q.kind } : {}), ...(q.q ? { q: q.q } : {}), ...(q.unnamed ? { unnamed: '1' } : {}), offset: String((q.page - 1) * 24), limit: '24' });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        loadError = e.message;
+      }
+      return html(res, 200, facesPage({ data, q, csrf: session.csrf, flash, loadError }));
     }
 
     if (req.method === 'GET' && path === '/duplicates') {

@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { SessionGuard } from '../auth/session.guard';
 import { UserRow } from '../users/users.service';
 import { AlbumsService } from './albums.service';
-import { FileFace, PeopleService, PersonInfo } from './people.service';
+import { FileFace, Guess, PeopleService, PersonInfo } from './people.service';
 import { StorageService } from './storage.service';
 
 type Req_ = Request & { user: UserRow };
@@ -13,7 +13,8 @@ const obj = (b: unknown): Record<string, unknown> => {
   return b as Record<string, unknown>;
 };
 
-// Люди и питомцы человека: список групп, имена, объединение, лица на фото. Всё только про СВОИ файлы и СВОИ группы.
+// Люди и питомцы: общие для всего хранилища группы. В списке только те, кто есть на файлах самого человека, файлы только свои.
+// Объединять, удалять и переименовывать названные и общие группы может только администратор.
 @Controller('people')
 @UseGuards(SessionGuard)
 export class PeopleController {
@@ -26,7 +27,7 @@ export class PeopleController {
   @Get()
   async list(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('hidden') hidden?: string): Promise<{ enabled: { faces: boolean; pets: boolean }; people: PersonInfo[] }> {
     res.setHeader('Cache-Control', 'no-store');
-    return { enabled: await this.people.status(), people: await this.people.list(req.user.id, hidden === '1') };
+    return { enabled: await this.people.status(), people: await this.people.list(req.user.id, hidden === '1', req.user.is_admin) };
   }
 
   // Рамки лиц и питомцев на одном файле (для просмотрщика).
@@ -39,7 +40,7 @@ export class PeopleController {
   // Обложка: вырезка лица или питомца. Находка не меняется, поэтому браузер хранит вырезку год.
   @Get('detections/:id/crop')
   async crop(@Req() req: Req_, @Res() res: Response, @Param('id') id: string): Promise<void> {
-    const rel = await this.people.cropPath(req.user.id, id);
+    const rel = await this.people.cropPath(req.user.id, id, req.user.is_admin);
     res.setHeader('Content-Type', 'image/webp');
     res.sendFile(rel, {
       root: this.storage.root,
@@ -57,6 +58,14 @@ export class PeopleController {
     if (o.personId !== null && typeof o.personId !== 'string') throw new BadRequestException('personId: номер группы или null');
     await this.people.assign(req.user.id, id, o.personId);
     return { ok: true };
+  }
+
+  // «Это питомец, а не человек»: {ignored: true}. Находка перестаёт спрашиваться; питомца на фото называют как обычно.
+  @Put('detections/:id/ignore')
+  async ignore(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ petsEnabled: boolean; petsOnFile: boolean }> {
+    const o = obj(body);
+    if (typeof o.ignored !== 'boolean') throw new BadRequestException('ignored: да или нет');
+    return this.people.setIgnored(req.user.id, id, o.ignored);
   }
 
   // Завести человека по находке и назвать: {detectionId, name}.
@@ -87,6 +96,25 @@ export class PeopleController {
     return { id: album.id, name: album.name, added };
   }
 
+  // Очередь «Проверить догадки»: свободные лица, похожие на названного человека, но не настолько, чтобы присоединить самим.
+  // Ответ «он» — PUT detections/:id {personId}, «не он» — POST reject.
+  @Get('guesses')
+  async guesses(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Query('limit') limit?: string): Promise<{ guesses: Guess[] }> {
+    res.setHeader('Cache-Control', 'no-store');
+    const n = Math.min(100, Math.max(1, Number(limit) || 24));
+    return { guesses: await this.people.guesses(req.user.id, n) };
+  }
+
+  // «Не он» для одной находки: {detectionId, personId}.
+  @Post('reject')
+  @HttpCode(200)
+  async reject(@Req() req: Req_, @Body() body: unknown): Promise<{ ok: true }> {
+    const o = obj(body);
+    if (typeof o.detectionId !== 'string' || typeof o.personId !== 'string') throw new BadRequestException('Нужны detectionId и personId');
+    await this.people.rejectDetection(req.user.id, o.detectionId, o.personId);
+    return { ok: true };
+  }
+
   @Patch(':id')
   async patch(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
     const o = obj(body);
@@ -100,7 +128,7 @@ export class PeopleController {
         patch.hidden = v;
       } else throw new BadRequestException(`Неизвестное поле: ${k}`);
     }
-    await this.people.rename(req.user.id, id, patch);
+    await this.people.rename(req.user.id, id, patch, req.user.is_admin);
     return { ok: true };
   }
 
@@ -109,7 +137,7 @@ export class PeopleController {
   async cover(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
     const o = obj(body);
     if (o.fileId !== null && typeof o.fileId !== 'string') throw new BadRequestException('fileId: номер файла или null');
-    await this.people.setCover(req.user.id, id, o.fileId);
+    await this.people.setCover(req.user.id, id, o.fileId, req.user.is_admin);
     return { ok: true };
   }
 
@@ -119,7 +147,7 @@ export class PeopleController {
   async merge(@Req() req: Req_, @Param('id') id: string, @Body() body: unknown): Promise<{ ok: true }> {
     const o = obj(body);
     if (typeof o.from !== 'string') throw new BadRequestException('from: номер группы');
-    await this.people.merge(req.user.id, id, o.from);
+    await this.people.merge(req.user.id, id, o.from, req.user.is_admin);
     return { ok: true };
   }
 
@@ -129,12 +157,12 @@ export class PeopleController {
   async mergeMany(@Req() req: Req_, @Body() body: unknown): Promise<{ merged: number }> {
     const o = obj(body);
     if (typeof o.into !== 'string' || !Array.isArray(o.from) || !o.from.every((x) => typeof x === 'string')) throw new BadRequestException('Нужны into (номер группы) и from (список номеров)');
-    return { merged: await this.people.mergeMany(req.user.id, o.into, o.from as string[]) };
+    return { merged: await this.people.mergeMany(req.user.id, o.into, o.from as string[], req.user.is_admin) };
   }
 
   @Delete(':id')
   async remove(@Req() req: Req_, @Param('id') id: string): Promise<{ ok: true }> {
-    await this.people.remove(req.user.id, id);
+    await this.people.remove(req.user.id, id, req.user.is_admin);
     return { ok: true };
   }
 

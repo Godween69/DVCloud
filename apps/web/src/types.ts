@@ -140,10 +140,15 @@ export interface PeopleGroup {
   id: string;
   name: string | null; // null: группа ещё не названа
   kind: 'person' | 'pet';
-  hidden: boolean;
+  hidden: boolean; // скрыто у этого человека (личный выбор)
+  shared: boolean; // на группе фото нескольких людей: она общая
+  canName: boolean; // можно дать имя (безымянной — любому, смена имени — только администратору)
+  canMerge: boolean; // можно объединять и распускать (названные и общие — только администратору)
   count: number; // файлов
   cover: string; // номер находки для обложки
 }
+export interface FaceGuess { detectionId: string; fileId: string; personId: string; name: string; sim: number }
+export interface AlbumSuggestion { id: string; start: string; end: string; count: number; name: string; coverFileId: string }
 export interface PeopleList {
   enabled: { faces: boolean; pets: boolean };
   people: PeopleGroup[];

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Smartphone, Image as ImageIcon, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, FileQuestion, FolderMinus, FolderOpen, FolderPlus, Maximize2, Minimize2, ScanFace, Smartphone, Image as ImageIcon, Trash2, X, Zap } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from 'react';
 import { api, fileUrl, previewUrl, thumbUrl, videoViewUrl } from '../api';
 import { formatBytes, formatDateTime } from '../lib/format';
@@ -15,6 +15,7 @@ interface Props {
   index: number;
   onIndex: (i: number) => void;
   onClose: () => void;
+  fromAlbum?: boolean; // открыт альбом: Del убирает из альбома, а не в корзину
   onTrash?: (f: FileItem) => void; // нет у файлов чужого общего альбома
   onKind?: (f: FileItem, kind: 'screenshot' | 'photo') => void; // ручная смена «фото» / «скриншот» (только картинки)
   readOnly?: boolean;
@@ -22,7 +23,7 @@ interface Props {
   onError: (message: string) => void;
   quick: { id: string; name: string; has: (id: string) => boolean } | null; // «быстрый альбом»
   onQuick: (f: FileItem) => Promise<'added' | 'moved' | null>; // 'moved': Shell уже сам перешёл к соседнему
-  people?: { groups: PeopleGroup[]; onChanged: () => void } | null; // есть, когда лица и питомцы включены
+  people?: { groups: PeopleGroup[]; onChanged: () => void; onLeft?: (fileId: string) => void; onNote?: (m: string) => void } | null; // есть, когда лица и питомцы включены
 }
 
 const FADE = { duration: 0.15 }; // уход старой кнопки 0,15 с + появление новой 0,15 с = плавная замена за 0,3 с
@@ -62,7 +63,7 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
+export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
@@ -264,7 +265,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
           </button>
         )}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label="В корзину" title="В корзину (клавиша Del; файл можно восстановить)"><Trash2 className="size-5" aria-hidden /></button>}
+        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label={fromAlbum ? 'Убрать из альбома' : 'В корзину'} title={fromAlbum ? 'Убрать из альбома (клавиша Del)' : 'В корзину (клавиша Del; файл можно восстановить)'}>{fromAlbum ? <FolderMinus className="size-5" aria-hidden /> : <Trash2 className="size-5" aria-hidden />}</button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">
@@ -293,7 +294,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, onKind, readOn
             )}
           </motion.div>
         </AnimatePresence>
-        {people && faces === 'on' && !video && !broken && <FaceLayer fileId={file.id} img={img} stage={stage} view={view} tick={imgTick} groups={people.groups} onChanged={people.onChanged} onError={onError} />}
+        {people && faces === 'on' && !video && !broken && <FaceLayer fileId={file.id} img={img} stage={stage} view={view} tick={imgTick} groups={people.groups} onChanged={people.onChanged} onLeft={people.onLeft} onNote={people.onNote} onError={onError} />}
         {video && noPreview && !broken && (
           <div role="status" className="absolute inset-x-2 top-2 z-10 mx-auto flex max-w-xl flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-xl bg-black/70 px-3 py-2 text-center text-sm text-white/90 backdrop-blur">
             {copyReady ? (

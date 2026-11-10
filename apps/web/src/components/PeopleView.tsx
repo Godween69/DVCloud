@@ -1,9 +1,9 @@
-import { ArrowLeft, Check, Combine, Eye, EyeOff, Image as ImageIcon, Loader2, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Combine, Eye, EyeOff, HelpCircle, Image as ImageIcon, Loader2, Pencil, PawPrint, Plus, Trash2, UserRound, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError, cropUrl } from '../api';
 import { countFiles } from '../lib/format';
 import { mergePlan, sortGroups } from '../lib/people';
-import type { PeopleGroup, PeopleList } from '../types';
+import type { FaceGuess, PeopleGroup, PeopleList } from '../types';
 
 const msg = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
 
@@ -75,6 +75,50 @@ function AlbumByPeople({ groups, onClose }: { groups: PeopleGroup[]; onClose: ()
   );
 }
 
+// «Проверить догадки»: лица, похожие на названного человека, но не настолько, чтобы облако присоединило их само.
+// Ответ «Да» или «Нет» применяется на месте, страница не перезагружается; ответы учат облако узнавать человека точнее.
+function Guesses({ onClose, onAnswered }: { onClose: () => void; onAnswered: () => void }) {
+  const [items, setItems] = useState<FaceGuess[] | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [asked, setAsked] = useState(0);
+  const load = () => { setItems(null); api.guesses(24).then(setItems).catch((e) => { setItems([]); setProblem(msg(e, 'Не получилось загрузить')); }); };
+  useEffect(() => { load(); }, []);
+  async function answer(g: FaceGuess, yes: boolean) {
+    setProblem(null);
+    try {
+      if (yes) await api.assignFace(g.detectionId, g.personId); else await api.rejectFace(g.detectionId, g.personId);
+      setItems((prev) => (prev ?? []).filter((x) => x.detectionId !== g.detectionId));
+      setAsked((n) => n + 1);
+      onAnswered();
+    } catch (e) { setProblem(msg(e, 'Не получилось')); }
+  }
+  return (
+    <section aria-label="Проверить догадки" className="glass mb-6 rounded-xl p-4">
+      <div className="mb-3 flex items-start gap-3">
+        <p className="min-w-0 flex-1 text-sm text-gray-700 dark:text-gray-300">Облако не уверено в этих лицах. Скажите, кто это: так оно узнаёт человека точнее. {asked > 0 ? `Отвечено: ${asked}.` : ''}</p>
+        <button type="button" onClick={onClose} aria-label="Закрыть" className="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800"><X className="size-4" aria-hidden /></button>
+      </div>
+      {items === null && <p className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-4 animate-spin" aria-hidden />Ищем сомнительные лица…</p>}
+      {items && items.length === 0 && <p className="text-sm text-gray-600 dark:text-gray-400">{asked > 0 ? 'Больше вопросов нет. ' : 'Сомнительных лиц нет. '}<button type="button" onClick={load} className="text-violet-700 underline dark:text-violet-300">Проверить ещё раз</button></p>}
+      {items && items.length > 0 && (
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+          {items.map((g) => (
+            <li key={g.detectionId} className="flex flex-col items-center gap-2 rounded-xl border border-paper-300 p-2 text-center dark:border-gray-700">
+              <img src={cropUrl(g.detectionId)} alt="" loading="lazy" draggable={false} className="aspect-square w-full max-w-36 rounded-lg object-cover" />
+              <span className="text-sm text-gray-900 dark:text-white">Это {g.name}?</span>
+              <span className="flex gap-2">
+                <button type="button" onClick={() => void answer(g, true)} className="rounded-lg bg-violet-600 px-3 py-1 text-sm font-medium text-white hover:bg-violet-500">Да</button>
+                <button type="button" onClick={() => void answer(g, false)} className="rounded-lg px-3 py-1 text-sm text-gray-700 hover:bg-paper-200 dark:text-gray-300 dark:hover:bg-gray-800">Нет</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {problem && <p className="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">{problem}</p>}
+    </section>
+  );
+}
+
 // Вкладка «Люди»: круглые обложки групп. Названные первыми; безымянные просят имя. Скрытые прячутся и показываются кнопкой.
 export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }: {
   list: PeopleList | null;
@@ -89,6 +133,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [byPeople, setByPeople] = useState(false);
+  const [guessing, setGuessing] = useState(false);
   const stop = () => { setSelecting(false); setPicked(new Set()); setProblem(null); };
   const toggle = (id: string) => setPicked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   if (!list) return <p className="mt-20 flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400" role="status"><Loader2 className="size-5 animate-spin" aria-hidden />Загружаем…</p>;
@@ -96,6 +141,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
   const groups = sortGroups(list.people);
   const hiddenCount = groups.filter((g) => g.hidden).length;
   const shown = groups.filter((g) => showHidden || !g.hidden);
+  const mergeable = shown.filter((g) => g.canMerge);
   const chosen = shown.filter((g) => picked.has(g.id));
   const plan = mergePlan(chosen);
   async function mergeChosen() {
@@ -117,7 +163,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
     <div className={`mx-auto max-w-[1200px] px-3 py-6 sm:px-6 ${selecting ? "pb-28" : ""}`}>
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Люди и питомцы</h1>
-        {!off && shown.length > 1 && (
+        {!off && mergeable.length > 1 && (
           <button type="button" onClick={() => (selecting ? stop() : setSelecting(true))} aria-pressed={selecting} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-pressed:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-pressed:bg-gray-800">
             <Combine className="size-4" aria-hidden />{selecting ? 'Отменить выбор' : 'Выбрать и объединить'}
           </button>
@@ -125,6 +171,11 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
         {!off && shown.length > 0 && (
           <button type="button" onClick={() => setByPeople((v) => !v)} aria-expanded={byPeople} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-expanded:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-expanded:bg-gray-800">
             <Plus className="size-4" aria-hidden />Альбом по людям
+          </button>
+        )}
+        {!off && list.enabled.faces && shown.some((g) => g.kind === 'person' && g.name) && (
+          <button type="button" onClick={() => setGuessing((v) => !v)} aria-expanded={guessing} className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-paper-200 hover:text-gray-900 aria-expanded:bg-paper-200 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white dark:aria-expanded:bg-gray-800">
+            <HelpCircle className="size-4" aria-hidden />Проверить догадки
           </button>
         )}
         {(hiddenCount > 0 || showHidden) && (
@@ -135,6 +186,7 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
         )}
       </div>
 
+      {guessing && !off && <Guesses onClose={() => setGuessing(false)} onAnswered={onReload} />}
       {byPeople && !off && <AlbumByPeople groups={groups.filter((g) => !g.hidden)} onClose={() => setByPeople(false)} />}
       {off && <p className="max-w-xl text-gray-600 dark:text-gray-400">Распознавание лиц и питомцев выключено администратором.</p>}
       {!off && shown.length === 0 && (
@@ -148,10 +200,10 @@ export function PeopleView({ list, showHidden, onShowHidden, onOpen, onReload }:
       <ul className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7">
         {shown.map((p) => (
           <li key={p.id}>
-            <button type="button" onClick={() => (selecting ? toggle(p.id) : onOpen(p))} aria-pressed={selecting ? picked.has(p.id) : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden ? 'opacity-50' : ''}`}>
+            <button type="button" onClick={() => (selecting ? (p.canMerge ? toggle(p.id) : undefined) : onOpen(p))} aria-pressed={selecting && p.canMerge ? picked.has(p.id) : undefined} aria-disabled={selecting && !p.canMerge ? true : undefined} title={selecting && !p.canMerge ? 'Названные и общие группы объединяет администратор' : undefined} className={`group flex w-full flex-col items-center gap-2 rounded-xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${p.hidden || (selecting && !p.canMerge) ? 'opacity-50' : ''}`}>
               <span className="relative block w-full max-w-32">
                 <Cover p={p} size={`aspect-square w-full transition-transform group-hover:scale-105 ${picked.has(p.id) ? 'ring-[3px] ring-violet-400/80' : ''}`} />
-                {selecting && <span className={`absolute right-1 top-1 flex size-6 items-center justify-center rounded-full border-2 border-white ${picked.has(p.id) ? 'bg-violet-600 text-white' : 'bg-black/30'}`}>{picked.has(p.id) && <Check className="size-4" aria-hidden />}</span>}
+                {selecting && p.canMerge && <span className={`absolute right-1 top-1 flex size-6 items-center justify-center rounded-full border-2 border-white ${picked.has(p.id) ? 'bg-violet-600 text-white' : 'bg-black/30'}`}>{picked.has(p.id) && <Check className="size-4" aria-hidden />}</span>}
               </span>
               <span className="w-full min-w-0">
                 <span className={`block truncate text-sm font-medium ${p.name ? 'text-gray-900 dark:text-white' : 'text-violet-700 dark:text-violet-300'}`}>
@@ -203,7 +255,7 @@ export function PersonHeader({ person, others, count, coverPick, onCoverPick, on
   const [busy, setBusy] = useState(false);
   const [merging, setMerging] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  useEffect(() => { setName(person.name ?? ''); setEditing(!person.name); setMerging(false); setConfirm(false); }, [person.id, person.name]);
+  useEffect(() => { setName(person.name ?? ''); setEditing(!person.name && person.canName); setMerging(false); setConfirm(false); }, [person.id, person.name, person.canName]);
 
   async function run(fn: () => Promise<void>) {
     if (busy) return;
@@ -243,16 +295,16 @@ export function PersonHeader({ person, others, count, coverPick, onCoverPick, on
             <h1 className="flex items-center gap-2 truncate text-xl font-semibold text-gray-900 dark:text-white">
               {person.kind === 'pet' ? <PawPrint className="size-5 shrink-0 text-gray-500" aria-hidden /> : <UserRound className="size-5 shrink-0 text-gray-500" aria-hidden />}
               <span className="truncate">{person.name}</span>
-              <button type="button" onClick={() => setEditing(true)} aria-label="Изменить имя" title="Изменить имя" className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-paper-200 hover:text-gray-900 dark:hover:bg-gray-800 dark:hover:text-white"><Pencil className="size-4" aria-hidden /></button>
+              {person.canName && <button type="button" onClick={() => setEditing(true)} aria-label="Изменить имя" title="Изменить имя" className="flex size-7 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-paper-200 hover:text-gray-900 dark:hover:bg-gray-800 dark:hover:text-white"><Pencil className="size-4" aria-hidden /></button>}
             </h1>
           )}
-          <p className="text-sm text-gray-600 dark:text-gray-400">{countFiles(count ?? person.count)}{person.hidden ? ' · скрыта из списка' : ''}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">{countFiles(count ?? person.count)}{person.shared ? ' · общая группа' : ''}{person.hidden ? ' · скрыта у вас' : ''}</p>
         </div>
         <div className="flex flex-wrap gap-1">
           <button type="button" onClick={() => onCoverPick(!coverPick)} aria-pressed={coverPick} className={small}><ImageIcon className="size-4" aria-hidden />Обложка</button>
           <button type="button" onClick={hide} disabled={busy} className={small}>{person.hidden ? <Eye className="size-4" aria-hidden /> : <EyeOff className="size-4" aria-hidden />}{person.hidden ? 'Вернуть в список' : 'Скрыть'}</button>
-          {others.length > 0 && <button type="button" onClick={() => { setMerging((v) => !v); setConfirm(false); }} aria-expanded={merging} className={small}><Combine className="size-4" aria-hidden />Это тот же человек</button>}
-          <button type="button" onClick={() => { setConfirm((v) => !v); setMerging(false); }} aria-expanded={confirm} className={small}><Trash2 className="size-4" aria-hidden />Распустить</button>
+          {person.canMerge && others.length > 0 && <button type="button" onClick={() => { setMerging((v) => !v); setConfirm(false); }} aria-expanded={merging} className={small}><Combine className="size-4" aria-hidden />Это тот же человек</button>}
+          {person.canMerge && <button type="button" onClick={() => { setConfirm((v) => !v); setMerging(false); }} aria-expanded={confirm} className={small}><Trash2 className="size-4" aria-hidden />Распустить</button>}
         </div>
       </div>
 

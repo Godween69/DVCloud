@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { stat } from 'node:fs/promises';
 import { DbService } from '../db/db.service';
-import { FileRow, ID_RE } from './files.service';
+import { FileRow, hiddenFromLibrary, ID_RE } from './files.service';
 import { cleanFileName, withSuffix } from './names';
 import { StorageService } from './storage.service';
 import { openFile, ZipEntry } from './zip';
@@ -20,6 +20,32 @@ export interface PublicAlbum {
   // Тип альбома: 'any' универсальный, иначе принимает только фото, только видео или только скриншоты. Выбирается при создании.
   kind: AlbumKind;
   favorite: boolean; // звёздочка владельца: избранные альбомы идут первыми
+}
+
+export interface AlbumSuggestion {
+  id: string; // начало события в миллисекундах: им предложение и принимается, и отклоняется
+  start: string;
+  end: string;
+  count: number;
+  name: string; // название по умолчанию: даты события
+  coverFileId: string;
+  fileIds: string[];
+}
+
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+// «12 июня 2026», «12–15 июня 2026», «28 июня – 2 июля 2026» (дни по времени сервера DVCLOUD_TZ, по умолчанию Москва).
+export function eventName(fromMs: number, toMs: number): string {
+  const tz = process.env.DVCLOUD_TZ || 'Europe/Moscow';
+  const part = (ms: number) => {
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, day: 'numeric', month: 'numeric', year: 'numeric' }).formatToParts(new Date(ms));
+    const g = (t: string) => Number(p.find((x) => x.type === t)!.value);
+    return { d: g('day'), m: g('month'), y: g('year') };
+  };
+  const a = part(fromMs), b = part(toMs);
+  if (a.y === b.y && a.m === b.m && a.d === b.d) return `${a.d} ${MONTHS[a.m - 1]} ${a.y}`;
+  if (a.y === b.y && a.m === b.m) return `${a.d}–${b.d} ${MONTHS[a.m - 1]} ${a.y}`;
+  if (a.y === b.y) return `${a.d} ${MONTHS[a.m - 1]} – ${b.d} ${MONTHS[b.m - 1]} ${a.y}`;
+  return `${a.d} ${MONTHS[a.m - 1]} ${a.y} – ${b.d} ${MONTHS[b.m - 1]} ${b.y}`;
 }
 
 export type AlbumKind = 'any' | 'photos' | 'videos' | 'screenshots';
@@ -265,6 +291,161 @@ export class AlbumsService {
       [albumId, ownerId],
     );
     return { title: album.name, rows: r.rows };
+  }
+
+  // ---- Конструктор альбома: даты, источник, люди ----
+
+  private buildQuery(o: Record<string, unknown>): { from?: string; to?: string; source: 'all' | 'photos' | 'videos' | 'screenshots' | 'albums'; albumIds: string[]; include: string[]; exclude: string[] } {
+    const day = (v: unknown, what: string): string | undefined => {
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) throw new BadRequestException(`${what}: дата вида 2026-06-12`);
+      return v;
+    };
+    const ids = (v: unknown, what: string, max: number): string[] => {
+      if (v === undefined || v === null) return [];
+      if (!Array.isArray(v) || v.length > max || !v.every((x) => typeof x === 'string' && ID_RE.test(x))) throw new BadRequestException(`${what}: список номеров (не больше ${max})`);
+      return [...new Set(v as string[])];
+    };
+    const from = day(o.from, 'from'), to = day(o.to, 'to');
+    if (from && to && from > to) throw new BadRequestException('Дата «с» позже даты «по»');
+    const source = o.source ?? 'all';
+    if (source !== 'all' && source !== 'photos' && source !== 'videos' && source !== 'screenshots' && source !== 'albums') throw new BadRequestException('source: all, photos, videos, screenshots или albums');
+    const albumIds = ids(o.albumIds, 'albumIds', 100);
+    if (source === 'albums' && albumIds.length === 0) throw new BadRequestException('Выберите хотя бы один альбом');
+    const include = ids(o.include, 'include', 20), exclude = ids(o.exclude, 'exclude', 20);
+    if (include.some((x) => exclude.includes(x))) throw new BadRequestException('Один и тот же человек не может быть и «обязательно», и «не должно быть»');
+    return { from, to, source, albumIds, include, exclude };
+  }
+
+  private async buildWhere(userId: string, q: ReturnType<AlbumsService['buildQuery']>): Promise<{ where: string; params: unknown[] }> {
+    const tz = process.env.DVCLOUD_TZ || 'Europe/Moscow';
+    const params: unknown[] = [userId];
+    const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+    let where = 'f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL';
+    if (q.from) where += ` AND (f.taken_at AT TIME ZONE ${add(tz)})::date >= ${add(q.from)}::date`;
+    if (q.to) where += ` AND (f.taken_at AT TIME ZONE ${add(tz)})::date <= ${add(q.to)}::date`;
+    if (q.source === 'albums') {
+      where += ` AND EXISTS (SELECT 1 FROM album_items ai JOIN albums a ON a.id = ai.album_id WHERE ai.file_id = f.id AND a.owner_id = $1 AND a.deleted_at IS NULL AND ai.album_id = ANY(${add(q.albumIds)}::bigint[]))`;
+    } else {
+      where += ` AND (${KIND_SQL[q.source === 'all' ? 'any' : q.source]})`;
+    }
+    const people = [...q.include, ...q.exclude];
+    if (people.length) {
+      const vis = await this.db.query<{ n: string }>(
+        `SELECT count(*) AS n FROM people p WHERE p.id = ANY($2::bigint[]) AND EXISTS (SELECT 1 FROM detection_people dp JOIN detections d ON d.id = dp.detection_id JOIN files vf ON vf.blob_id = d.blob_id AND vf.owner_id = $1 AND vf.trashed_at IS NULL WHERE dp.person_id = p.id)`,
+        [userId, people],
+      );
+      if (Number(vis.rows[0].n) !== people.length) throw new NotFoundException('Такого человека нет');
+    }
+    const has = (p: string) => `EXISTS (SELECT 1 FROM detections d JOIN detection_people dp ON dp.detection_id = d.id WHERE d.blob_id = f.blob_id AND dp.person_id = ${add(p)})`;
+    for (const p of q.include) where += ` AND ${has(p)}`;
+    for (const p of q.exclude) where += ` AND NOT ${has(p)}`;
+    return { where, params };
+  }
+
+  // Границы для календаря: самое раннее фото человека и сегодняшний день (по времени сервера DVCLOUD_TZ).
+  async builderBounds(userId: string): Promise<{ min: string | null; max: string }> {
+    const tz = process.env.DVCLOUD_TZ || 'Europe/Moscow';
+    const r = await this.db.query<{ mn: string | null; mx: string }>(
+      `SELECT to_char((min(f.taken_at) AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS mn, to_char((now() AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS mx FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL`,
+      [userId, tz],
+    );
+    return { min: r.rows[0].mn, max: r.rows[0].mx };
+  }
+
+  async builderCount(userId: string, body: Record<string, unknown>): Promise<{ count: number }> {
+    const { where, params } = await this.buildWhere(userId, this.buildQuery(body));
+    return { count: Number((await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE ${where}`, params)).rows[0].n) };
+  }
+
+  // Создать альбом (универсальный) из подходящих файлов: снимок на сегодня, новые фото сами не добавляются.
+  async builderCreate(userId: string, body: Record<string, unknown>): Promise<{ album: PublicAlbum; added: number }> {
+    const { where, params } = await this.buildWhere(userId, this.buildQuery(body));
+    const ids = (await this.db.query<{ id: string }>(`SELECT f.id FROM files f WHERE ${where} ORDER BY f.taken_at DESC, f.id DESC LIMIT 50000`, params)).rows.map((r) => r.id);
+    if (ids.length === 0) throw new BadRequestException('Под эти условия не подходит ни одного файла');
+    const album = await this.create(userId, body.name, 'any');
+    let added = 0;
+    for (let i = 0; i < ids.length; i += 1000) added += (await this.addFiles(userId, album.id, ids.slice(i, i + 1000))).added;
+    return { album: await this.get(userId, album.id), added };
+  }
+
+  // Для окна «Удалить из альбома»: сколько из этих файлов лежит ещё и в других альбомах человека и в каких.
+  async inOtherAlbums(userId: string, albumId: string, ids: string[]): Promise<{ files: number; albums: { id: string; name: string }[] }> {
+    await this.get(userId, albumId);
+    const clean = ids.filter((x) => ID_RE.test(x));
+    if (!clean.length) return { files: 0, albums: [] };
+    const r = await this.db.query<{ file_id: string; id: string; name: string }>(
+      `SELECT ai.file_id, a.id, a.name FROM album_items ai JOIN albums a ON a.id = ai.album_id
+       WHERE ai.file_id = ANY($2::bigint[]) AND a.owner_id = $1 AND a.deleted_at IS NULL AND a.id <> $3 ORDER BY lower(a.name), a.id`,
+      [userId, clean, albumId],
+    );
+    const albums = new Map(r.rows.map((x) => [x.id, x.name]));
+    return { files: new Set(r.rows.map((x) => x.file_id)).size, albums: [...albums].slice(0, 20).map(([id, name]) => ({ id, name })) };
+  }
+
+  // «Из всех альбомов»: файлы остаются в библиотеке (корзина не затрагивается), пропадают из всех своих альбомов.
+  async removeFromAllAlbums(userId: string, ids: string[]): Promise<number> {
+    const clean = ids.filter((x) => ID_RE.test(x));
+    if (!clean.length) return 0;
+    const r = await this.db.query(
+      `DELETE FROM album_items ai USING albums a, files f WHERE ai.album_id = a.id AND a.owner_id = $1 AND f.id = ai.file_id AND f.owner_id = $1 AND ai.file_id = ANY($2::bigint[])`,
+      [userId, clean],
+    );
+    return r.rowCount ?? 0;
+  }
+
+  // ---- Предложенные альбомы (события по времени съёмки) ----
+
+  // Свои файлы вне корзины и вне альбомов, подряд по времени. Событие: серия снимков с паузами не больше 6 часов; дни,
+  // где снято не меньше 15 снимков, соседние через ночь (пауза до суток) склеиваются в поездку (до 14 дней).
+  async suggestions(userId: string): Promise<AlbumSuggestion[]> {
+    const MIN = Math.max(3, Number(process.env.DVCLOUD_EVENT_MIN) || 15);
+    const GAP = 6 * 3600_000, NIGHT = 24 * 3600_000, MAX_SPAN = 14 * 24 * 3600_000;
+    const rows = (
+      await this.db.query<{ id: string; t: Date; mime: string }>(
+        `SELECT f.id, f.taken_at AS t, f.mime FROM files f
+         WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.blob_id IS NOT NULL AND NOT (${hiddenFromLibrary('f', '$1')})
+           AND NOT EXISTS (SELECT 1 FROM album_items ai JOIN albums a ON a.id = ai.album_id AND a.owner_id = $1 AND a.deleted_at IS NULL WHERE ai.file_id = f.id)
+         ORDER BY f.taken_at, f.id`,
+        [userId],
+      )
+    ).rows;
+    type Run = { from: number; to: number; ids: string[]; mimes: string[] };
+    const runs: Run[] = [];
+    for (const r of rows) {
+      const t = new Date(r.t).getTime();
+      const last = runs[runs.length - 1];
+      if (last && t - last.to <= GAP) { last.to = t; last.ids.push(r.id); last.mimes.push(r.mime); } else runs.push({ from: t, to: t, ids: [r.id], mimes: [r.mime] });
+    }
+    const busy = runs.filter((x) => x.ids.length >= MIN);
+    const events: Run[] = [];
+    for (const x of busy) {
+      const last = events[events.length - 1];
+      if (last && x.from - last.to <= NIGHT && x.to - last.from <= MAX_SPAN) { last.to = x.to; last.ids.push(...x.ids); last.mimes.push(...x.mimes); } else events.push({ ...x, ids: [...x.ids], mimes: [...x.mimes] });
+    }
+    const dismissed = (await this.db.query<{ started_at: Date }>('SELECT started_at FROM album_suggestion_dismissed WHERE user_id = $1', [userId])).rows.map((r) => new Date(r.started_at).getTime());
+    const open = events.filter((e) => !dismissed.some((d) => d >= e.from - 12 * 3600_000 && d <= e.to));
+    return open.reverse().slice(0, 20).map((e) => {
+      const photos = e.ids.filter((_, i) => /^image\//.test(e.mimes[i]));
+      const pool = photos.length ? photos : e.ids;
+      return { id: String(e.from), start: new Date(e.from).toISOString(), end: new Date(e.to).toISOString(), count: e.ids.length, name: eventName(e.from, e.to), coverFileId: pool[Math.floor(pool.length / 2)], fileIds: e.ids };
+    });
+  }
+
+  // Создать альбом из предложенного события (название можно поменять). Предложение пропадает, потому что файлы теперь в альбоме.
+  async acceptSuggestion(userId: string, id: unknown, rawName: unknown): Promise<{ album: PublicAlbum; added: number }> {
+    const s = (await this.suggestions(userId)).find((x) => x.id === id);
+    if (!s) throw new NotFoundException('Такого предложения уже нет: обновите список');
+    const album = await this.create(userId, rawName === undefined || rawName === null || rawName === '' ? s.name : rawName, 'any');
+    let added = 0;
+    for (let i = 0; i < s.fileIds.length; i += 1000) added += (await this.addFiles(userId, album.id, s.fileIds.slice(i, i + 1000))).added;
+    return { album: await this.get(userId, album.id), added };
+  }
+
+  // «Не нужно»: предложение больше не показывается (запоминается по началу события).
+  async dismissSuggestion(userId: string, id: unknown): Promise<void> {
+    if (typeof id !== 'string' || !/^\d{10,15}$/.test(id)) throw new BadRequestException('Нужен номер предложения');
+    await this.db.query('INSERT INTO album_suggestion_dismissed (user_id, started_at) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, new Date(Number(id))]);
   }
 
   // ---- Общий доступ ----

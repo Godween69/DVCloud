@@ -32,6 +32,7 @@ import { UploadPanel } from './UploadPanel';
 import { Aurora, HelpSheet } from './ui';
 import { helpKeyFor } from '../lib/help';
 import { Viewer } from './Viewer';
+import { RemoveFromAlbumDialog } from './RemoveFromAlbumDialog';
 
 export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [theme, toggleTheme] = useTheme();
@@ -48,9 +49,10 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   const [album, setAlbum] = useState<Album | null>(null); // открытый альбом (внутри вкладки «Альбомы»)
   const [albums, setAlbums] = useState<Album[] | null>(null);
-  const [albumFilter, setAlbumFilter] = useState<AlbumKind | 'all' | 'shared'>('all');
+  const [albumFilter, setAlbumFilter] = useState<AlbumKind | 'all' | 'shared' | 'archive'>('all');
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [delAsk, setDelAsk] = useState<string[] | null>(null); // Del в альбоме: что убираем (окно «из этого / из всех альбомов»)
   const [picker, setPicker] = useState<string[] | null>(null); // что переносим в альбом из режима выбора
   const [sharing, setSharing] = useState(false); // окно «Поделиться альбомом»
   const [targetPicker, setTargetPicker] = useState(false); // окно выбора быстрого альбома
@@ -111,7 +113,14 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
 
   useEffect(() => { library.loadMore(true); refreshUsage(); api.searchStatus().then(setSearchStatus).catch(() => {}); reloadPeople(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   useEffect(() => { if (view === 'search') { api.searchStatus().then(setSearchStatus).catch(() => {}); reloadPeople(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
-  useEffect(() => { if (person) personFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [person?.id]);
+  // Права на группу (имя, объединение) могли измениться после действия: обновляем открытого человека из свежего списка.
+  useEffect(() => {
+    if (!person) return;
+    const p = peopleList?.people.find((x) => x.id === person.id);
+    if (p && (p.canName !== person.canName || p.canMerge !== person.canMerge || p.shared !== person.shared || p.name !== person.name)) setPerson(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peopleList]);
+  useEffect(() => { leftPerson.current.clear(); if (person) personFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [person?.id]);
   useEffect(() => {
     // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
     if (view === 'photos') void photos.jump(null);
@@ -125,6 +134,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   useEffect(() => { if (album) albumFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [album?.id]);
 
   const endSelect = useCallback(() => { setSelecting(false); setSelected(new Set()); }, []);
+  // Фото, убранные из группы человека прямо в просмотре: просмотр и лента не трогаются, а когда просмотр закрыт, фото тихо уходят из ленты.
+  const leftPerson = useRef(new Set<string>());
+  const closeViewer = useCallback(() => {
+    setViewer(null);
+    const ids = [...leftPerson.current];
+    leftPerson.current.clear();
+    if (ids.length) ids.forEach((id) => personFeed.remove(id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   function changeView(v: View) {
     setView(v);
     setAlbum(null);
@@ -265,6 +283,33 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       say(e instanceof Error ? e.message : 'Не получилось убрать в корзину');
     }
   }
+
+  // Del в альбоме: окно «только из этого альбома / из всех». Корзина не затрагивается.
+  async function removeFromAlbumIds(ids: string[], everywhere: boolean) {
+    if (!album) return;
+    setDelAsk(null);
+    try {
+      const n = everywhere ? await api.removeEverywhere(ids) : await api.albumRemoveFiles(album.id, ids);
+      quick.note(ids, null);
+      ids.forEach((id) => { if (viewer && viewer.id === id) leaveFeed(id); else albumFeed.remove(id); });
+      say(everywhere ? 'Убрано из всех альбомов, файлы остались в библиотеке' : `Убрано из альбома «${album.name}»`);
+      void n;
+      if (ids.length > 1) endSelect();
+    } catch (e) {
+      say(e instanceof Error ? e.message : 'Не получилось');
+    }
+  }
+
+  useEffect(() => {
+    if (!inAlbum || foreign || !selecting || selected.size === 0 || delAsk || viewer || picker) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (e.key === 'Delete' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); setDelAsk([...selected]); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [inAlbum, foreign, selecting, selected, delAsk, viewer, picker]);
 
   async function removeSelectedFromAlbum() {
     if (!album) return;
@@ -409,7 +454,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         {view === 'people' && !person && <PeopleView list={peopleList} showHidden={showHiddenPeople} onShowHidden={setShowHiddenPeople} onOpen={(p) => { setPerson(p); endSelect(); }} onReload={() => reloadPeople()} />}
         {view === 'people' && person && (
           <>
-            <PersonHeader coverPick={coverPick} onCoverPick={setCoverPick} onResetCover={resetCover} person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
+            <PersonHeader coverPick={coverPick} onCoverPick={setCoverPick} onResetCover={resetCover} person={person} others={(peopleList?.people ?? []).filter((p) => p.kind === person.kind && p.id !== person.id && !p.hidden && p.canMerge)} count={personFeed.loaded && !personFeed.hasMore ? personFeed.files.length : null}
               onBack={() => { setPerson(null); setCoverPick(false); endSelect(); reloadPeople(); }} onChanged={(p) => { setPerson(p); reloadPeople(); }} onGone={(t) => { setPerson(null); reloadPeople(); say(t); }} onError={say} />
             {gallery(personFeed, <p className="mx-auto max-w-md px-4 py-20 text-center text-gray-600 dark:text-gray-400">Файлов с этим человеком пока нет.</p>, true)}
           </>
@@ -435,14 +480,15 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
       </AnimatePresence>
       {sharing && album && album.mine && <ShareDialog album={album} onClose={() => setSharing(false)} onError={say} onChanged={(n) => setAlbum((a) => (a ? { ...a, sharedWith: n } : a))} />}
+      {delAsk && album && <RemoveFromAlbumDialog albumId={album.id} albumName={album.name} ids={delAsk} onThis={() => { void removeFromAlbumIds(delAsk, false); }} onAll={() => { void removeFromAlbumIds(delAsk, true); }} onCancel={() => setDelAsk(null)} />}
       {picker && <AlbumPicker ids={picker} fitKind={pickKind(picker)} current={[]} onClose={() => setPicker(null)} onError={say} onDone={selectionPicked} />}
       {targetPicker && <AlbumPicker target ids={[]} current={quick.saved ? [quick.saved] : []} onClose={() => setTargetPicker(false)} onError={say}
         onDone={(r) => { const a = r.album; setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={() => setViewer(null)} onTrash={foreign ? undefined : (f) => toTrash(f.id)} onKind={foreign ? undefined : (f, k) => { void changeKind([f.id], k); }} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={closeViewer} onTrash={foreign ? undefined : inAlbum ? (f) => setDelAsk([f.id]) : (f) => toTrash(f.id)} fromAlbum={inAlbum} onKind={foreign ? undefined : (f, k) => { void changeKind([f.id], k); }} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
             quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile}
-            people={peopleOn ? { groups: (peopleList?.people ?? []).filter((p) => !p.hidden), onChanged: () => { reloadPeople(); if (inPerson) personFeed.loadMore(true); } } : null} />
+            people={peopleOn ? { groups: (peopleList?.people ?? []).filter((p) => !p.hidden), onChanged: reloadPeople, onLeft: (fid) => { leftPerson.current.add(fid); }, onNote: say } : null} />
         )}
       </AnimatePresence>
       <UploadPanel jobs={jobs} onClear={() => queue.clearFinished()} onCancel={() => queue.cancelWaiting()} onRetry={() => queue.retryFailed()} />

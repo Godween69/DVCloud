@@ -126,17 +126,55 @@ body {
 .btn-accent:hover:not(:disabled) { filter: brightness(1.08); box-shadow: 0 0 22px 0 color-mix(in srgb, var(--aur-a) 70%, transparent); }
 .btn-accent:active:not(:disabled) { transform: scale(0.97); }
 
-/* Вкладки-папки для разделов альбомов */
-.ftabs { display:flex; align-items:flex-end; gap:4px; border-bottom:1px solid var(--glass-line); overflow-x:auto; scrollbar-width:none; }
+/* Вкладки разделов альбомов: стеклянная дорожка, активная вкладка выступает светящимся стеклом (без полос и чёрных блоков) */
+.ftabs {
+  display:flex; align-items:center; gap:4px; padding:4px; overflow-x:auto; scrollbar-width:none;
+  border:1px solid var(--glass-line); border-radius:18px; background:var(--glass);
+  box-shadow: inset 0 1px 0 var(--glass-shine);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+}
 .ftabs::-webkit-scrollbar { display:none; }
-.ftab { position:relative; flex:none; display:flex; align-items:center; gap:8px; margin-bottom:-1px; padding:9px 16px 8px; border:1px solid transparent; border-bottom:0; border-radius:14px 14px 0 0; background:transparent; color:#6b7280; font:inherit; font-size:14px; font-weight:500; line-height:1.2; cursor:pointer; transition:background .15s, color .15s; }
-.ftab:hover { background:var(--glass); color:#111827; }
-.ftab[aria-selected='true'] { padding-bottom:10px; background:var(--glass-strong); border-color:var(--glass-line); color:#111827; box-shadow:inset 0 2px 0 var(--aur-a); }
-.ftab .n { min-width:20px; padding:1px 6px; border-radius:999px; background:rgba(127,127,127,.18); font-size:12px; text-align:center; }
-.ftab[aria-selected='true'] .n { background:var(--aur-a); color:#fff; }
+.ftab {
+  position:relative; flex:none; display:flex; align-items:center; gap:8px; padding:8px 14px; border:1px solid transparent; border-radius:14px;
+  background:transparent; color:#4b5563; font:inherit; font-size:14px; font-weight:500; line-height:1.2; cursor:pointer;
+  transition:background .18s, color .18s, box-shadow .18s, border-color .18s;
+}
+.ftab:hover { background:rgba(255,255,255,.35); color:#111827; }
+.ftab:focus-visible { outline:2px solid var(--aur-a); outline-offset:1px; }
+.ftab[aria-selected='true'] {
+  background:linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.55)); border-color:rgba(255,255,255,.8); color:#111827;
+  box-shadow: 0 1px 0 rgba(255,255,255,.9) inset, 0 6px 18px -8px color-mix(in srgb, var(--aur-a) 65%, transparent), 0 1px 3px rgba(15,23,42,.12);
+}
+.ftab .n { min-width:20px; padding:1px 7px; border-radius:999px; background:rgba(100,116,139,.16); font-size:12px; text-align:center; font-variant-numeric:tabular-nums; }
+.ftab[aria-selected='true'] .n { background:color-mix(in srgb, var(--aur-a) 22%, transparent); color:inherit; }
 .ftab.shared { margin-left:auto; }
-.ftab.shared[aria-selected='true'] { box-shadow:inset 0 2px 0 var(--aur-b); }
-.ftab.shared[aria-selected='true'] .n { background:var(--aur-b); }
+.ftab.shared[aria-selected='true'] { box-shadow: 0 1px 0 rgba(255,255,255,.9) inset, 0 6px 18px -8px color-mix(in srgb, var(--aur-b) 65%, transparent), 0 1px 3px rgba(15,23,42,.12); }
+.ftab.shared[aria-selected='true'] .n { background:color-mix(in srgb, var(--aur-b) 22%, transparent); }
 
+:root:not(.light) .ftabs { background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.12); }
 :root:not(.light) .ftab { color:#9ca3af; }
-:root:not(.light) .ftab:hover, :root:not(.light) .ftab[aria-selected='true'] { color:#fff; }
+:root:not(.light) .ftab:hover { background:rgba(255,255,255,.08); color:#fff; }
+:root:not(.light) .ftab[aria-selected='true'] {
+  background:linear-gradient(180deg, rgba(255,255,255,.20), rgba(255,255,255,.08)); border-color:rgba(255,255,255,.22); color:#fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 8px 22px -8px color-mix(in srgb, var(--aur-a) 70%, transparent);
+}
+:root:not(.light) .ftab[aria-selected='true'] .n { background:color-mix(in srgb, var(--aur-a) 40%, transparent); }
+:root:not(.light) .ftab.shared[aria-selected='true'] { box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 8px 22px -8px color-mix(in srgb, var(--aur-b) 70%, transparent); }
+:root:not(.light) .ftab.shared[aria-selected='true'] .n { background:color-mix(in srgb, var(--aur-b) 40%, transparent); }
+@media (prefers-reduced-motion: reduce) { .ftab { transition:none; } }
+
+/* Круглые стеклянные кнопки поверх обложек альбомов (избранное, быстрый альбом): значок строго по центру. */
+.orb {
+  position: absolute; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 9999px; padding: 0;
+  color: #fff; background: rgba(20, 20, 30, 0.34); border: 1px solid rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: opacity .2s ease, transform .2s ease, background-color .2s ease, box-shadow .2s ease;
+}
+.orb svg { display: block; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+.orb:hover { transform: scale(1.08); background: rgba(20, 20, 30, 0.5); }
+.orb:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.orb-star { box-shadow: 0 0 18px -2px rgba(251, 191, 36, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.4); border-color: rgba(252, 211, 77, 0.6); }
+.orb-zap { background: rgba(124, 58, 237, 0.7); border-color: rgba(221, 214, 254, 0.7); box-shadow: 0 0 20px -2px rgba(139, 92, 246, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+.orb-zap:hover { background: rgba(139, 92, 246, 0.85); }
+@media (prefers-reduced-motion: reduce) { .orb, .orb:hover { transition: none; transform: none; } }

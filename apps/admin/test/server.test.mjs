@@ -47,6 +47,13 @@ describe('админка', () => {
         if (req.method === 'POST' && req.url === '/internal/duplicates/scan') return j(200, { queued: true });
         if (req.method === 'POST' && req.url === '/internal/duplicates/merge') return j(200, { merged: 1, removedFiles: 0, bytes: 14110 });
         if (req.method === 'POST' && req.url === '/internal/duplicates/apply') return j(200, { started: 1 });
+        if (req.method === 'GET' && req.url.startsWith('/internal/faces?')) return j(200, { total: 2, enabled: { faces: true, pets: true }, groups: [{ id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 1, cover: '90' }, { id: '6', name: null, kind: 'pet', count: 4, owners: ['anna'], hiddenBy: 0, cover: '91' }] });
+        if (req.method === 'GET' && req.url.startsWith('/internal/faces/5?')) return j(200, { group: { id: '5', name: 'Валя <b>', kind: 'person', count: 120, owners: ['anna', 'boris'], hiddenBy: 0, cover: '90' }, total: 2, faces: [{ id: '90', fileId: '41', owner: 'anna', source: 'manual', score: 0.9 }, { id: '92', fileId: '42', owner: 'boris', source: 'auto', score: 0.8 }] });
+        if (req.method === 'GET' && req.url === '/internal/faces/detections/90/crop') { res.writeHead(200, { 'content-type': 'image/webp', 'content-length': 4 }); return res.end('WEBP'); }
+        if (req.method === 'PATCH' && req.url === '/internal/faces/5') return j(200, { ok: true });
+        if (req.method === 'POST' && req.url === '/internal/faces/merge') return j(200, { merged: JSON.parse(body).from.length });
+        if (req.method === 'DELETE' && req.url === '/internal/faces/6') return j(200, { ok: true });
+        if (req.method === 'POST' && req.url === '/internal/faces/5/remove-face') return j(200, { ok: true });
         if (req.method === 'GET' && req.url === '/internal/albums-deleted') return j(200, { albums: [{ id: '8', name: 'Личное <i>', owner: 'boris', count: 4, sharedWith: 0, deletedAt: '2026-11-08T10:00:00.000Z' }] });
         if (req.method === 'POST' && req.url === '/internal/albums/8/restore') return j(200, { name: 'Личное (2)' });
         if (req.method === 'DELETE' && req.url === '/internal/albums-deleted/8') return j(200, { ok: true });
@@ -605,6 +612,46 @@ describe('админка', () => {
     const csrf = csrfOf((await req('GET', '/', { cookie })).text);
     await req('POST', '/logout', { cookie, form: { csrf } });
     assert.equal((await req('GET', '/', { cookie })).status, 303);
+  });
+
+  it('вкладка «Лица»: список с крупными карточками, группа, вырезка, объединить, переименовать, убрать лицо, распустить', async () => {
+    const cookie = await login();
+    assert.equal((await req('GET', '/faces')).status, 303, 'без входа не открывается');
+    const list = await req('GET', '/faces?kind=person&q=%D0%B2%D0%B0&unnamed=1', { cookie });
+    assert.equal(list.status, 200);
+    assert.ok(calls.some((c) => c.startsWith('GET /internal/faces?') && c.includes('kind=person') && c.includes('unnamed=1') && c.includes('limit=24')));
+    assert.ok(list.text.includes('Валя &lt;b&gt;') && !list.text.includes('Валя <b>'), 'имя экранировано');
+    assert.ok(list.text.includes('src="/faces/crop/90"') && list.text.includes('(общая)') && list.text.includes('скрыта у 1') && list.text.includes('питомец'));
+    assert.ok(list.text.includes('href="/faces" aria-current="page"') || list.text.includes('aria-current="page">Лица'));
+    const csrf = csrfOf(list.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    const crop = await req('GET', '/faces/crop/90', { cookie });
+    assert.equal(crop.status, 200);
+    assert.equal(crop.headers['content-type'], 'image/webp');
+    const one = await req('GET', '/faces/5', { cookie });
+    assert.equal(one.status, 200);
+    assert.ok(one.text.includes('Убрать из группы') && one.text.includes('/faces/crop/92') && one.text.includes('подписано человеком') && one.text.includes('Распустить группу'));
+    // объединить
+    assert.equal((await post('/faces/merge', { into: '5', from: '6' })).status, 303);
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/faces/merge') && c.includes('"into":"5"') && c.includes('"from":["6"]')));
+    const n = calls.length;
+    await post('/faces/merge', { into: 'x' });
+    await post('/faces/merge', { into: '5' });
+    assert.equal(calls.length, n, 'без группы или без «влить» на сервер ничего не уходит');
+    await post('/faces/5/rename', { name: ' Валя ' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/faces/5') && c.includes('"name":"Валя"')));
+    await post('/faces/5/rename', { clear: '1', name: 'x' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/faces/5') && c.includes('"name":null')));
+    await post('/faces/5/rename', { name: '   ' });
+    await post('/faces/5/remove-face', { det: '92', offset: '0' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/faces/5/remove-face') && c.includes('"detectionId":"92"')));
+    const m = calls.length;
+    await post('/faces/5/remove-face', { det: 'abc' });
+    assert.equal(calls.length, m);
+    await post('/faces/6/dissolve', {});
+    assert.ok(calls.some((c) => c.startsWith('DELETE /internal/faces/6')));
+    assert.equal((await post('/faces/zzz', {})).status, 404);
+    assert.equal((await req('POST', '/faces/merge', { cookie, form: { into: '5', from: '6' } })).status, 403, 'без csrf нельзя');
   });
 
   it('неверный пароль даёт 401, после 5 неудач вход блокируется даже с верным', async () => {
