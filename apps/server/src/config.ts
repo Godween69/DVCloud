@@ -19,6 +19,8 @@ export interface Config {
   yandexLoginToken: string; // общий секрет сервера и помощника входа
   yandexBase: string; // адрес Диска (меняется только в тестах)
   backupDir: string; // куда в контейнере подключён диск для копий (папка, USB, сетевая папка); пусто = копия «в папку» недоступна
+  usbDir: string; // папка внутри контейнера, куда мини-ПК сам подключает переносной USB-диск; пусто = способ «USB-диск» выключен
+  controlDir: string; // папка команд хосту («подключить» и «безопасно извлечь» диск); пусто = управление диском из админки выключено
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -80,5 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     yandexLoginToken,
     yandexBase,
     backupDir: (env.DVCLOUD_BACKUP_DIR ?? '/backup').replace(/\/+$/, ''),
+    usbDir: (env.DVCLOUD_USB_DIR ?? '').replace(/\/+$/, ''),
+    controlDir: (env.DVCLOUD_CONTROL_DIR ?? '').replace(/\/+$/, ''),
   };
 }

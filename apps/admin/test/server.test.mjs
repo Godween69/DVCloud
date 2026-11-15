@@ -15,7 +15,12 @@ describe('админка', () => {
   const calls = [];
   let backupCfg = { kind: 'folder', folder: '', host: '', port: 22, user: '', path: '', withDerived: false, limitMbit: 0 };
   let backupJob = null;
-  const backupState = () => ({ config: backupCfg, rootAvailable: true, publicKey: backupCfg.kind === 'ssh' ? 'ssh-ed25519 AAAATESTKEY dvcloud-backup' : null, job: backupJob, last: { state: 'done', step: 'Готово', percent: 100, startedAt: '2026-11-08T08:00:00.000Z', finishedAt: '2026-11-08T08:30:00.000Z', error: null, result: { files: 120, bytes: 5368709120, dumpBytes: 20480, pending: 0, destination: '/backup/dvcloud-backup' } } });
+  const usbState = { configured: true, mounted: true, fstype: 'ntfs3', totalBytes: 1000 * 1024 ** 3, freeBytes: 600 * 1024 ** 3, canControl: true, lastCommand: null };
+  const runsState = [
+    { id: 7, startedAt: '2026-11-10T08:00:00.000Z', finishedAt: '2026-11-10T09:00:00.000Z', kind: 'usb', state: 'done', folder: 'Backup_DVCloud_10.11.2026', destination: '/backup-usb/Backup_DVCloud_10.11.2026', files: 120, bytes: 5368709120, dbBytes: 20480, error: null, dumpName: 'dvcloud-1.dump', migration: '0022_x.sql', verifiedAt: null, verify: null, available: true, canManage: true, withDb: true, withFiles: true },
+    { id: 6, startedAt: '2026-11-09T08:00:00.000Z', finishedAt: null, kind: 'usb', state: 'error', folder: 'Backup_DVCloud_09.11.2026', destination: '/backup-usb/Backup_DVCloud_09.11.2026', files: null, bytes: null, dbBytes: null, error: 'Остановлено вами', dumpName: null, migration: null, verifiedAt: null, verify: null, available: false, canManage: true, withDb: true, withFiles: true },
+  ];
+  const backupState = () => ({ config: backupCfg, usb: usbState, runs: runsState, needBytes: 300 * 1024 ** 3, plannedFolder: 'Backup_DVCloud_10.11.2026', newFolder: 'Backup_DVCloud_10.11.2026', rootAvailable: true, publicKey: backupCfg.kind === 'ssh' ? 'ssh-ed25519 AAAATESTKEY dvcloud-backup' : null, job: backupJob, last: { state: 'done', step: 'Готово', percent: 100, startedAt: '2026-11-08T08:00:00.000Z', finishedAt: '2026-11-08T08:30:00.000Z', error: null, result: { files: 120, bytes: 5368709120, dumpBytes: 20480, pending: 0, destination: '/backup/dvcloud-backup' } } });
   let peopleJob = null; // что сервер отдаёт как состояние долгой операции над группами
 
   before(async () => {
@@ -82,6 +87,8 @@ describe('админка', () => {
         if (req.method === 'POST' && req.url === '/internal/share-everything') return j(200, { albums: 1, links: 3 });
         if (req.method === 'GET' && req.url === '/internal/backup') return j(200, backupState());
         if (req.method === 'PATCH' && req.url === '/internal/backup/config') { const b = JSON.parse(body); if (b.host === 'плохо') return j(400, { message: 'Сервер: адрес или имя' }); backupCfg = { ...backupCfg, ...b }; return j(200, backupState()); }
+        if (req.method === 'POST' && req.url.startsWith('/internal/backup/usb/')) return j(200, usbState);
+        if (req.method === 'POST' && /^\/internal\/backup\/runs\/\d+\/(verify|delete|forget|restore-files|restore-db)$/.test(req.url)) { const b = body ? JSON.parse(body) : {}; if ((req.url.endsWith('/delete') && b.confirm !== 'Backup_DVCloud_10.11.2026') || (req.url.endsWith('/restore-db') && b.confirm !== 'ВОССТАНОВИТЬ БАЗУ')) return j(400, { message: 'Подтверждение не совпало' }); return j(200, { job: { action: req.url.split('/').pop(), state: 'running' } }); }
         if (req.method === 'POST' && req.url === '/internal/backup/check') return j(200, { where: '/backup/dvcloud-backup', freeBytes: 5 * 1024 ** 3 });
         if (req.method === 'POST' && req.url === '/internal/backup/cancel') { backupJob = { ...backupJob, state: 'error', step: 'Остановлено', error: 'Копирование остановлено вами' }; return j(200, { job: backupJob }); }
         if (req.method === 'POST' && req.url === '/internal/backup/start') { backupJob = { state: 'running', step: 'Копирую файлы', percent: 42, startedAt: '2026-11-09T08:00:00.000Z', finishedAt: null, error: null, result: null }; return j(200, { job: backupJob }); }
@@ -618,6 +625,58 @@ describe('админка', () => {
     assert.ok(page.text.includes('action="/backup/cancel"') && page.text.includes('Остановить копирование'), 'пока копия идёт, есть кнопка остановки');
     assert.equal((await post('/backup/cancel', {})).status, 303);
     assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/cancel')));
+    backupJob = null;
+  });
+
+  it('копии: USB-диск, журнал, проверка, удаление и восстановление с подтверждением и кнопкой «Отмена»', async () => {
+    const cookie = await login();
+    let page = await req('GET', '/backup', { cookie });
+    assert.ok(page.text.includes('USB-диск в мини-ПК') && page.text.includes('Backup_DVCloud_10.11.2026'), 'карточка диска и имя папки по умолчанию');
+    assert.ok(page.text.includes('подключён') && page.text.includes('ntfs3') && page.text.includes('места хватает'), 'состояние диска и «влезет»');
+    assert.ok(page.text.includes('action="/backup/usb/eject"') && !page.text.includes('action="/backup/usb/mount"'), 'подключённый диск можно безопасно извлечь, кнопки «Подключить» нет');
+    assert.ok(page.text.includes('Журнал копий') && page.text.includes('/backup/run/7/restore') && page.text.includes('/backup/run/7/delete'), 'журнал с действиями');
+    assert.ok(page.text.includes('папки нет на месте') && page.text.includes('Убрать запись'), 'у копии без папки есть только «Убрать запись»');
+    assert.ok(!page.text.includes('<script'), 'без скриптов');
+    const csrf = csrfOf(page.text);
+    const post = (path, form) => req('POST', path, { cookie, form: { csrf, ...form } });
+    await post('/backup/usb', { folderMode: 'custom', folder: 'Family 2026' });
+    assert.ok(calls.some((c) => c.startsWith('PATCH /internal/backup/config') && c.includes('"kind":"usb"') && c.includes('"folderMode":"custom"') && c.includes('"folder":"Family 2026"')));
+    await post('/backup/usb', { folderMode: 'new' });
+    const last = calls.filter((c) => c.startsWith('PATCH /internal/backup/config')).pop();
+    assert.ok(last.includes('"folderMode":"new"') && !last.includes('"folder"'), 'для режима «новая» своё имя не отправляется');
+    await post('/backup/usb/eject', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/usb/eject')));
+    await post('/backup/usb/mount', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/usb/mount')));
+    await post('/backup/run/7/verify', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/runs/7/verify')));
+    await post('/backup/run/6/forget', {});
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/runs/6/forget')));
+    // страница удаления: есть «Отмена» и поле для имени папки; неверное имя сервер отклоняет, ошибка видна
+    page = await req('GET', '/backup/run/7/delete', { cookie });
+    assert.equal(page.status, 200);
+    assert.ok(page.text.includes('Удалить копию с диска?') && page.text.includes('href="/backup">Отмена') && page.text.includes('Backup_DVCloud_10.11.2026'));
+    await post('/backup/run/7/delete', { confirm: 'не то' });
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('Подтверждение не совпало'), 'ошибка подтверждения видна');
+    await post('/backup/run/7/delete', { confirm: 'Backup_DVCloud_10.11.2026' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/runs/7/delete')));
+    // страница восстановления: файлы и база, у каждого «Отмена»; слова-подтверждения обязательны
+    page = await req('GET', '/backup/run/7/restore', { cookie });
+    assert.ok(page.text.includes('Восстановить из копии') && page.text.includes('ВОССТАНОВИТЬ БАЗУ') && (page.text.match(/href="\/backup">Отмена/g) ?? []).length === 2);
+    await post('/backup/run/7/restore-files', { confirm: 'ВОССТАНОВИТЬ', overwrite: '1' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/runs/7/restore-files') && c.includes('"overwrite":true')));
+    await post('/backup/run/7/restore-db', { confirm: 'ВОССТАНОВИТЬ БАЗУ' });
+    assert.ok(calls.some((c) => c.startsWith('POST /internal/backup/runs/7/restore-db')));
+    assert.equal((await req('GET', '/backup/run/999/delete', { cookie })).status, 303, 'чужой номер: возврат на страницу копий');
+    assert.equal((await req('POST', '/backup/run/7/delete', { cookie, form: { csrf: 'wrong', confirm: 'x' } })).status, 403, 'без верного токена нельзя');
+    // идёт проверка: подпись кнопки остановки другая
+    backupJob = { action: 'verify', runId: 7, note: null, state: 'running', step: 'Сверяю файлы копии с облаком', percent: null, startedAt: '2026-11-10T08:00:00.000Z', finishedAt: null, error: null, result: null };
+    page = await req('GET', '/backup', { cookie });
+    assert.ok(page.text.includes('Сверяю файлы копии с облаком') && page.text.includes('action="/backup/cancel"') && !page.text.includes('Остановить копирование'));
+    backupJob = { action: 'verify', runId: 7, note: 'Копия в порядке: выгрузка базы читается', state: 'done', step: 'Готово', percent: 100, startedAt: '2026-11-10T08:00:00.000Z', finishedAt: '2026-11-10T08:01:00.000Z', error: null, result: null };
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('Копия в порядке: выгрузка базы читается'), 'итог проверки показан');
+    backupJob = { ...backupJob, state: 'error', error: 'есть проблемы' };
+    assert.ok((await req('GET', '/backup', { cookie })).text.includes('Проверка нашла проблему.'));
     backupJob = null;
   });
 

@@ -112,6 +112,12 @@ export function createApi({ baseUrl, token, fetchImpl = fetch }) {
     checkBackup: () => call('POST', '/internal/backup/check', {}),
     startBackup: () => call('POST', '/internal/backup/start', {}),
     cancelBackup: () => call('POST', '/internal/backup/cancel', {}),
+    usbBackup: (cmd) => call('POST', `/internal/backup/usb/${encodeURIComponent(cmd)}`, {}, 30000),
+    verifyBackup: (id) => call('POST', `/internal/backup/runs/${encodeURIComponent(id)}/verify`, {}),
+    deleteBackup: (id, confirm) => call('POST', `/internal/backup/runs/${encodeURIComponent(id)}/delete`, { confirm }),
+    forgetBackup: (id) => call('POST', `/internal/backup/runs/${encodeURIComponent(id)}/forget`, {}),
+    restoreBackupFiles: (id, confirm, overwrite) => call('POST', `/internal/backup/runs/${encodeURIComponent(id)}/restore-files`, { confirm, overwrite }),
+    restoreBackupDb: (id, confirm) => call('POST', `/internal/backup/runs/${encodeURIComponent(id)}/restore-db`, { confirm }),
     requests: async () => (await call('GET', '/internal/quota-requests')).requests,
     resolveRequest: (id) => call('POST', `/internal/quota-requests/${encodeURIComponent(id)}/resolve`, {}),
   };

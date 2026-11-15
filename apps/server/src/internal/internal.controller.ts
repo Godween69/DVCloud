@@ -11,7 +11,7 @@ import { AdminMediaService, ClearTarget, DatesJob, DirStat, MediaOverview } from
 import { MediaSettings, parseMediaPatch } from '../files/media-settings';
 import { AdminFace, AdminGroup, FaceJob, PeopleService } from '../files/people.service';
 import { StorageService } from '../files/storage.service';
-import { BackupJob, BackupService, BackupStatus, parseBackupPatch } from '../files/backup.service';
+import { BackupJob, BackupService, BackupStatus, UsbStatus, parseBackupPatch } from '../files/backup.service';
 
 @Controller('internal/health')
 export class InternalHealthController {
@@ -515,6 +515,11 @@ export class InternalMediaController {
   }
 }
 
+function runId(raw: string): number {
+  if (!/^\d{1,15}$/.test(raw)) throw new BadRequestException('Номер копии: число');
+  return Number(raw);
+}
+
 // Резервная копия: настройки места, проверка связи, запуск по кнопке и ход.
 @Controller('internal/backup')
 @UseGuards(InternalTokenGuard)
@@ -550,6 +555,61 @@ export class InternalBackupController {
     const job = await this.backup.start();
     await this.audit.write('backup.start', 'backup', {});
     return { job };
+  }
+
+  // Журнал: проверить копию, удалить её с диска, вернуть из неё файлы или базу. Идут в фоне, ход виден в состоянии (job).
+  @Post('runs/:id/verify')
+  @HttpCode(200)
+  async verify(@Param('id') id: string): Promise<{ job: BackupJob }> {
+    const job = await this.backup.verify(runId(id));
+    await this.audit.write('backup.verify', id, {});
+    return { job };
+  }
+
+  @Post('runs/:id/delete')
+  @HttpCode(200)
+  async remove(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ job: BackupJob }> {
+    requireJson(req);
+    const job = await this.backup.remove(runId(id), strField(asObject(body), 'confirm', 0, 200));
+    await this.audit.write('backup.delete', id, {});
+    return { job };
+  }
+
+  @Post('runs/:id/forget')
+  @HttpCode(200)
+  async forget(@Param('id') id: string): Promise<{ ok: true }> {
+    await this.backup.forget(runId(id));
+    await this.audit.write('backup.forget', id, {});
+    return { ok: true };
+  }
+
+  @Post('runs/:id/restore-files')
+  @HttpCode(200)
+  async restoreFiles(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ job: BackupJob }> {
+    requireJson(req);
+    const o = asObject(body);
+    const job = await this.backup.restoreFiles(runId(id), strField(o, 'confirm', 0, 200), o.overwrite === true);
+    await this.audit.write('backup.restore_files', id, { overwrite: o.overwrite === true });
+    return { job };
+  }
+
+  @Post('runs/:id/restore-db')
+  @HttpCode(200)
+  async restoreDb(@Param('id') id: string, @Body() body: unknown, @Req() req: Request): Promise<{ job: BackupJob }> {
+    requireJson(req);
+    const job = await this.backup.restoreDb(runId(id), strField(asObject(body), 'confirm', 0, 200));
+    await this.audit.write('backup.restore_db', id, {});
+    return { job };
+  }
+
+  // USB-диск: подключить и безопасно извлечь (команда уходит мини-ПК).
+  @Post('usb/:cmd')
+  @HttpCode(200)
+  async usb(@Param('cmd') cmd: string): Promise<UsbStatus> {
+    if (cmd !== 'mount' && cmd !== 'eject') throw new BadRequestException('Команда: mount или eject');
+    const st = await this.backup.usbCommand(cmd);
+    await this.audit.write(`backup.usb_${cmd}`, 'usb', {});
+    return st;
   }
 
   // Остановить идущее копирование.
