@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { ApiError, createApi } from './lib/api.mjs';
 import { loadAdminConfig } from './lib/config.mjs';
-import { CSS, FACES_JS, FACE_PER, VIEWER_JS, backupPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, datesPage, facePage, facesFragment, facesMergePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
+import { CSS, FACES_JS, FACE_PER, VIEWER_JS, backupPage, backupRunPage, dupPage, filePage, filesPage, formatSize, transferConfirmPage, loginPage, mediaPage, datesPage, facePage, facesFragment, facesMergePage, facesPage, parseQuotaGb, secretPage, sharingPage, storagePage, usersPage, vaultPage } from './lib/html.mjs';
 import { verifyPassword } from './lib/password.mjs';
 import { createLimiter } from './lib/ratelimit.mjs';
 import { createSessions } from './lib/sessions.mjs';
@@ -340,10 +340,24 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
 
   // Резервная копия. Значения проверяет сервер DVCloud, его текст ошибки показывается как есть.
   async function backupAction(session, res, path, form) {
+    let rm;
     try {
       if (path === '/backup/folder') {
         await api.saveBackup({ kind: 'folder', folder: (form.get('folder') ?? '').trim() });
         session.flash = { kind: 'ok', text: 'Выбрано: диск или папка' };
+      } else if (path === '/backup/usb') {
+        await api.saveBackup({ kind: 'usb', folderMode: form.get('folderMode') ?? 'new', ...(form.get('folderMode') === 'custom' ? { folder: (form.get('folder') ?? '').trim() } : {}) });
+        session.flash = { kind: 'ok', text: 'Выбрано: USB-диск в мини-ПК' };
+      } else if (path === '/backup/usb/mount' || path === '/backup/usb/eject') {
+        const st = await api.usbBackup(path.endsWith('mount') ? 'mount' : 'eject');
+        session.flash = { kind: 'ok', text: path.endsWith('mount') ? `Диск подключён${st.freeBytes ? `, свободно ${formatSize(st.freeBytes)}` : ''}` : 'Диск отключён, его можно вынимать' };
+      } else if ((rm = /^\/backup\/run\/(\d{1,15})\/(verify|delete|forget|restore-files|restore-db)$/.exec(path))) {
+        const id = rm[1];
+        if (rm[2] === 'verify') { await api.verifyBackup(id); session.flash = { kind: 'ok', text: 'Проверка копии запущена. Ход виден ниже' }; }
+        else if (rm[2] === 'forget') { await api.forgetBackup(id); session.flash = { kind: 'ok', text: 'Запись убрана из журнала' }; }
+        else if (rm[2] === 'delete') { await api.deleteBackup(id, form.get('confirm') ?? ''); session.flash = { kind: 'ok', text: 'Удаление копии запущено. Ход виден ниже' }; }
+        else if (rm[2] === 'restore-files') { await api.restoreBackupFiles(id, form.get('confirm') ?? '', form.get('overwrite') === '1'); session.flash = { kind: 'ok', text: 'Восстановление файлов запущено. Ход виден ниже' }; }
+        else { await api.restoreBackupDb(id, form.get('confirm') ?? ''); session.flash = { kind: 'ok', text: 'Восстановление базы запущено. Ход виден ниже' }; }
       } else if (path === '/backup/ssh') {
         const port = Number(form.get('port') ?? '22');
         await api.saveBackup({ kind: 'ssh', host: (form.get('host') ?? '').trim(), port, user: (form.get('user') ?? '').trim(), path: (form.get('path') ?? '').trim() });
@@ -711,6 +725,22 @@ export function createAdminApp({ cfg, api, now = Date.now }) {
         loadError = e.message;
       }
       return html(res, 200, vaultPage({ albums, users, csrf: session.csrf, flash, loadError }));
+    }
+
+    if (req.method === 'GET' && (fm = /^\/backup\/run\/(\d{1,15})\/(delete|restore)$/.exec(path))) {
+      const flash = session.flash;
+      session.flash = null;
+      let b = null;
+      try {
+        b = await api.backup();
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        session.flash = { kind: 'error', text: e.message };
+        return redirect(res, '/backup');
+      }
+      const run = (b.runs ?? []).find((x) => String(x.id) === fm[1]);
+      if (!run) { session.flash = { kind: 'error', text: 'Такой копии нет в журнале' }; return redirect(res, '/backup'); }
+      return html(res, 200, backupRunPage({ run, mode: fm[2], csrf: session.csrf, flash }));
     }
 
     if (req.method === 'GET' && path === '/backup') {

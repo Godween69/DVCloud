@@ -136,6 +136,12 @@ meter::-webkit-meter-optimum-value, meter::-webkit-meter-suboptimum-value { back
 meter::-webkit-meter-even-less-good-value { background:var(--bad); border-radius:6px; }
 meter::-moz-meter-bar { background:var(--acc); border-radius:6px; }
 meter:-moz-meter-sub-optimum::-moz-meter-bar { background:var(--warn); } meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background:var(--bad); }
+/* Копии: карточка USB-диска и журнал */
+.ico { width:20px; height:20px; vertical-align:-4px; margin-right:6px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.diskstate { margin:10px 0; } .diskstate .chip { margin-right:6px; }
+.radios label { display:block; margin:8px 0; } .radios input[type=text] { margin-left:8px; }
+.tablewrap { overflow-x:auto; } table.runs td { font-size:14px; } table.runs .acts { white-space:nowrap; } table.runs .acts form, table.runs .acts a { display:inline-block; margin:2px 4px 2px 0; }
+.bigconfirm { max-width:640px; } .bigconfirm input[type=text] { width:100%; margin:6px 0 10px; }
 progress { width:100%; height:8px; appearance:none; -webkit-appearance:none; border:0; border-radius:6px; background:var(--soft); }
 progress::-webkit-progress-bar { background:var(--soft); border-radius:6px; border:1px solid var(--line); }
 progress::-webkit-progress-value { background:var(--ok); border-radius:6px; } progress::-moz-progress-bar { background:var(--ok); border-radius:6px; }
@@ -851,6 +857,8 @@ ${flashHtml(flash, loadError)}
 }
 
 // ── Резервная копия: куда, что копировать, запуск по кнопке, ход ──
+const ACTION_FAIL = { backup: 'Копия не получилась.', verify: 'Проверка нашла проблему.', delete: 'Удаление не получилось.', 'restore-files': 'Файлы не восстановлены.', 'restore-db': 'База не восстановлена.' };
+const ICON_DRIVE = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg>';
 const when = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '—');
 
 export function backupPage({ b, csrf, flash, loadError }) {
@@ -861,13 +869,36 @@ export function backupPage({ b, csrf, flash, loadError }) {
   const res = (j) => { const r = j?.result; if (!r) return ''; const parts = []; if (r.bytes > 0 || r.files > 0) parts.push(`точная копия: передано файлов ${esc(r.files)}, всего ${esc(formatSize(r.bytes))}${r.pending ? `, ещё не догнано (новое за время копии): ${esc(r.pending)}` : ', проверено: расхождений нет'}`); if (r.readable > 0) parts.push(`по людям: ${esc(r.readable)} файлов`); if (r.dumpBytes > 0) parts.push(`база: ${esc(formatSize(r.dumpBytes))}`); return parts.join('; ') || 'готово'; };
   const statusPanel = b ? `<section class="panel"><div class="panel-head"><div><h2>Состояние ${info(['Копия запускается только вашей кнопкой, сама по расписанию не идёт.','Во время копирования облако работает как обычно: копия идёт в фоне с самым низким приоритетом. Страница обновляется сама, её можно закрыть.','Каждый раз копируются только новые и изменённые файлы, поэтому повторная копия быстрая. Удалённые вами файлы из копии не стираются: это страховка от случайного удаления.','После копирования выполняется проверка: файлы на месте назначения сверяются с облаком по размеру.'])}</h2>
 <p class="muted">${running ? 'Идёт копирование.' : last ? 'Последний запуск закончен.' : 'Копия ещё не делалась.'}</p></div>
-<div>${post(csrf, '/backup/check', {}, 'Проверить место')}<form class="inline" method="post" action="/backup/start">${csrfInput(csrf)}<button class="primary" type="submit"${running ? ' disabled' : ''}>${running ? 'Идёт…' : 'Сделать копию сейчас'}</button></form>${running ? `<form class="inline" method="post" action="/backup/cancel">${csrfInput(csrf)}<button class="danger" type="submit">Остановить копирование</button></form>` : ''}</div></div>
+<div>${post(csrf, '/backup/check', {}, 'Проверить место')}<form class="inline" method="post" action="/backup/start">${csrfInput(csrf)}<button class="primary" type="submit"${running ? ' disabled' : ''}>${running ? 'Идёт…' : 'Сделать копию сейчас'}</button></form>${running ? `<form class="inline" method="post" action="/backup/cancel">${csrfInput(csrf)}<button class="danger" type="submit">${(job.action ?? 'backup') === 'backup' ? 'Остановить копирование' : 'Остановить'}</button></form>` : ''}</div></div>
 ${running ? `<p role="status"><b>${esc(job.step)}</b>${job.percent !== null ? `, ${esc(job.percent)}%` : ''}. Начато ${esc(when(job.startedAt))}.</p><progress max="100" value="${esc(job.percent ?? 0)}" aria-label="Ход копирования"></progress>` : ''}
-${!running && job?.state === 'error' ? `<div class="msg error" role="alert"><b>Копия не получилась.</b> ${esc(job.error ?? '')}</div>` : ''}
+${!running && job?.state === 'error' ? `<div class="msg error" role="alert"><b>${esc(ACTION_FAIL[job.action ?? 'backup'])}</b> ${esc(job.error ?? '')}</div>` : ''}
+${!running && job?.state === 'done' && job.action && job.action !== 'backup' && job.note ? `<div class="msg ok" role="status">${esc(job.note)}</div>` : ''}
 ${!running && last?.state === 'done' ? `<p>Последняя удачная: <b>${esc(when(last.finishedAt))}</b>, ${res(last)}. Место: ${esc(last.result?.destination ?? '')}.</p>` : ''}
 ${!running && last?.state === 'error' && !job ? `<div class="msg error"><b>Прошлая копия не получилась</b> (${esc(when(last.finishedAt))}): ${esc(last.error ?? '')}</div>` : ''}
 </section>` : '';
   const chip = (on) => (on ? '<span class="chip ok">выбрано</span>' : '');
+  const u = b?.usb;
+  const runs = b?.runs ?? [];
+  const lastUsb = runs.find((r) => r.kind === 'usb' && r.available);
+  const need = b?.needBytes ?? 0;
+  const fits = u?.freeBytes != null && need > 0 ? (need * 1.02 > u.freeBytes ? '<span class="chip bad">не хватит места</span>' : '<span class="chip ok">места хватает</span>') : '';
+  const usbCard = c && u ? `<section class="panel"><div class="panel-head"><div><h2>${ICON_DRIVE}USB-диск в мини-ПК ${chip(c.kind === 'usb')} ${info(['Воткните переносной диск в USB мини-ПК: он подключится сам, и копия пойдёт прямо на него. Это самый быстрый способ.','Папка копии называется <b>Backup_DVCloud_</b> и сегодняшняя дата, создавать её не нужно. Потом её можно переименовать как угодно.','Перед тем как вынуть диск, нажмите «Безопасно извлечь»: так Windows потом не потребует проверки диска.','Если диск не подключается после того, как его вынули без извлечения, проверьте его в Windows командой chkdsk.'])}</h2>
+<p class="muted">Воткнули в мини-ПК — он подключился сам.</p></div>
+<div>${u.canControl && !u.mounted ? post(csrf, '/backup/usb/mount', {}, 'Подключить диск') : ''}${u.canControl && u.mounted ? post(csrf, '/backup/usb/eject', {}, 'Безопасно извлечь', '', '') : ''}</div></div>
+<div class="diskstate">${!u.configured ? '<div class="msg error">USB-диск не настроен на мини-ПК (роль minipc_dvcloud).</div>' : u.mounted ? `<span class="chip ok">подключён</span>${u.fstype ? `<span class="chip">${esc(u.fstype)}</span>` : ''} всего ${esc(formatSize(u.totalBytes ?? 0))}, свободно <b>${esc(formatSize(u.freeBytes ?? 0))}</b>. Копия файлов займёт около ${esc(formatSize(need))} ${fits}` : '<span class="chip bad">не подключён</span> Воткните диск в мини-ПК и подождите несколько секунд. Если он уже воткнут, нажмите «Подключить диск». Если не подключается, проверьте диск в Windows (chkdsk).'}${u.lastCommand && !u.lastCommand.ok ? `<div class="msg error">Последняя команда диску не удалась: ${esc(u.lastCommand.message)}</div>` : ''}</div>
+<form method="post" action="/backup/usb">${csrfInput(csrf)}<div class="radios">
+<label><input type="radio" name="folderMode" value="new"${c.folderMode === 'new' ? ' checked' : ''}> Новая папка <b>${esc(b.newFolder ?? 'Backup_DVCloud_…')}</b> ${info('Каждый день, когда вы делаете копию, создаётся новая папка с датой. Если в тот же день запустить копию ещё раз, она продолжит ту же папку.')}</label>
+<label><input type="radio" name="folderMode" value="last"${c.folderMode === 'last' ? ' checked' : ''}> Дописать в последнюю копию${lastUsb ? `: <b>${esc(lastUsb.folder)}</b>` : ' (копий на диске ещё нет)'} ${info('Копируется только новое и изменённое: быстро и без второй полной копии на диске.')}</label>
+<label><input type="radio" name="folderMode" value="custom"${c.folderMode === 'custom' ? ' checked' : ''}> Своё имя <input type="text" name="folder" value="${esc(c.folderMode === 'custom' ? c.folder : '')}" maxlength="64" placeholder="например Family 2026" aria-label="Своё имя папки"></label>
+</div><p><button class="primary" type="submit">Выбрать этот способ</button></p></form></section>` : '';
+  const runState = (r) => (r.state === 'done' ? '<span class="chip ok">готово</span>' : r.state === 'running' ? '<span class="chip">идёт</span>' : '<span class="chip bad">не закончена</span>');
+  const verifyText = (r) => { if (!r.verifiedAt) return '<span class="muted">не проверялась</span>'; const v = r.verify; const bad = v && (v.dumpOk === false || v.differ > 0); return `${bad ? '<span class="chip bad">есть проблемы</span>' : '<span class="chip ok">в порядке</span>'} <span class="muted">${esc(when(r.verifiedAt))}</span>`; };
+  const runRow = (r) => `<tr><td>${esc(when(r.startedAt))}</td><td>${r.kind === 'usb' ? 'USB-диск' : r.kind === 'ssh' ? 'Сервер' : 'Диск/папка'}<br><small class="muted">${esc(r.kind === 'ssh' ? r.destination : r.folder)}</small></td>
+<td>${r.files != null ? `файлов ${esc(r.files)}, ${esc(formatSize(r.bytes ?? 0))}` : '—'}${r.dbBytes ? `<br><small class="muted">база ${esc(formatSize(r.dbBytes))}</small>` : ''}</td>
+<td>${runState(r)}${r.state === 'error' && r.error ? `<br><small class="muted">${esc(r.error)}</small>` : ''}${r.available === false ? '<br><span class="chip bad">папки нет на месте</span>' : ''}</td><td>${verifyText(r)}</td>
+<td class="acts">${r.canManage && r.available && r.state !== 'running' ? `<form method="post" action="/backup/run/${esc(r.id)}/verify">${csrfInput(csrf)}<button type="submit"${running ? ' disabled' : ''}>Проверить</button></form><a class="btn" href="/backup/run/${esc(r.id)}/restore">Восстановить…</a><a class="btn danger" href="/backup/run/${esc(r.id)}/delete">Удалить…</a>` : r.available === false && r.state !== 'running' ? post(csrf, `/backup/run/${r.id}/forget`, {}, 'Убрать запись') : ''}</td></tr>`;
+  const journal = b ? `<section class="panel"><h2>Журнал копий ${info(['Здесь записан каждый запуск копирования: когда, куда, что и чем закончилось.','<b>Проверить</b> — сверяет копию с облаком по размеру файлов и проверяет, что выгрузка базы читается. Ничего не меняет.','<b>Восстановить</b> — возвращает файлы или базу из копии в облако, только после подтверждения.','<b>Удалить</b> — стирает папку копии с диска, после подтверждения. Облако не затрагивается.'])}</h2>
+${runs.length ? `<div class="tablewrap"><table class="runs"><thead><tr><th>Когда</th><th>Куда</th><th>Что</th><th>Итог</th><th>Проверка</th><th></th></tr></thead><tbody>${runs.map(runRow).join('')}</tbody></table></div>` : '<p class="muted">Копий ещё не было. Нажмите «Сделать копию сейчас».</p>'}</section>` : '';
   const folderCard = c ? `<section class="panel"><form method="post" action="/backup/folder">${csrfInput(csrf)}<div class="panel-head"><div><h2>Диск или папка ${chip(c.kind === 'folder')} ${info(['Подходит для внешнего диска (USB), второго диска в компьютере и сетевой папки (NAS, другой компьютер дома).','Облако видит одну папку, куда подключён такой диск. Подключить диск к облаку нужно один раз на самом сервере (это делается через настройки сервера, не из админки): в инструкции по копии это раздел «Подключить диск».','Здесь можно указать подпапку на этом диске, например <b>dvcloud</b>. Пусто — копия ляжет в корень диска, в папку <b>dvcloud-backup</b>.','Если ниже написано, что диск не подключён, сначала подключите его, и только потом запускайте копию.'])}</h2>
 <p class="muted">USB-диск, второй диск или сетевая папка, подключённые к серверу.</p></div></div>
 ${b.rootAvailable ? '<p class="muted">Диск для копий подключён.</p>' : c.kind !== 'folder' ? '' : '<div class="msg error">Диск для копий не подключён к облаку. Подробнее в «Инфо» выше.</div>'}
@@ -900,9 +931,42 @@ ${b.publicKey ? `<div class="secret" style="font-size:13px">${esc(b.publicKey)}<
 ${topBar('backup', csrf)}
 ${flashHtml(flash, loadError)}
 ${statusPanel}
+${usbCard}
+${journal}
 ${folderCard}
 <section class="panel"><h2>Как восстановить из копии ${info(['В копии лежат две части: папка <b>files</b> (все фото и видео как они лежат в облаке) и папка <b>db</b> (выгрузки базы данных, последние семь).','Восстановление делается на сервере и описано по шагам в файле docs/BACKUP.md в репозитории облака.','Проверить, что выгрузка читается, можно командой pg_restore --list на файле из папки db.'])}</h2>
 <p class="muted">Пошаговая инструкция лежит в docs/BACKUP.md.</p></section>`, running ? '<meta http-equiv="refresh" content="3">' : '');
+}
+
+// Подтверждение удаления копии и восстановления из неё: отдельная страница с кнопкой «Отмена».
+export function backupRunPage({ run, mode, csrf, flash }) {
+  const where = `${esc(run.kind === 'usb' ? 'USB-диск' : run.kind === 'ssh' ? 'Сервер' : 'Диск/папка')}, <b>${esc(run.folder || run.destination)}</b>`;
+  const about = `<p>Копия от <b>${esc(when(run.startedAt))}</b>: ${where}${run.files != null ? `, файлов ${esc(run.files)}, ${esc(formatSize(run.bytes ?? 0))}` : ''}.</p>`;
+  if (mode === 'delete') {
+    const name = String(run.destination).split('/').filter(Boolean).pop() ?? '';
+    return layout('DV Cloud: удалить копию', `
+${topBar('backup', csrf)}
+${flashHtml(flash, null)}
+<section class="panel bigconfirm"><h1>Удалить копию с диска?</h1>${about}
+<p>Папка копии и всё в ней будет стёрта с диска, вернуть её нельзя. Облако и его файлы не затрагиваются.</p>
+<form method="post" action="/backup/run/${esc(run.id)}/delete">${csrfInput(csrf)}
+<label>Для подтверждения введите имя папки: <b>${esc(name)}</b><input type="text" name="confirm" autocomplete="off" aria-label="Имя папки копии"></label>
+<button class="danger" type="submit">Удалить копию</button> <a class="btn" href="/backup">Отмена</a></form></section>`);
+  }
+  return layout('DV Cloud: восстановить из копии', `
+${topBar('backup', csrf)}
+${flashHtml(flash, null)}
+<section class="panel bigconfirm"><h1>Восстановить из копии</h1>${about}
+${run.withFiles ? `<h2>Файлы</h2><p>Возвращает в облако файлы из точной копии. Обычно возвращаются только недостающие файлы, ничего не перезаписывается. С галочкой ниже файлы облака, которые отличаются от файлов копии, заменяются файлами копии.</p>
+<form method="post" action="/backup/run/${esc(run.id)}/restore-files">${csrfInput(csrf)}
+<label><input type="checkbox" name="overwrite" value="1"> Заменить и отличающиеся файлы</label>
+<label>Для подтверждения введите слово <b>ВОССТАНОВИТЬ</b><input type="text" name="confirm" autocomplete="off" aria-label="Подтверждение восстановления файлов"></label>
+<button class="primary" type="submit">Восстановить файлы</button> <a class="btn" href="/backup">Отмена</a></form>` : '<p class="muted">В этой копии нет точной копии файлов.</p>'}
+${run.withDb ? `<h2>База данных</h2><p>Возвращает людей, альбомы, группы и настройки к состоянию на момент копии. Всё, что изменилось после неё, будет потеряно. Перед этим автоматически сохраняется выгрузка текущей базы рядом с копией. Работает, только если копия сделана этой же версией облака.</p>
+<form method="post" action="/backup/run/${esc(run.id)}/restore-db">${csrfInput(csrf)}
+<label>Для подтверждения введите <b>ВОССТАНОВИТЬ БАЗУ</b><input type="text" name="confirm" autocomplete="off" aria-label="Подтверждение восстановления базы"></label>
+<button class="danger" type="submit">Восстановить базу</button> <a class="btn" href="/backup">Отмена</a></form>` : '<p class="muted">В этой копии нет выгрузки базы.</p>'}
+<p><a class="btn" href="/backup">Назад к копиям</a></p></section>`);
 }
 
 export function secretPage({ title, login, password }) {
