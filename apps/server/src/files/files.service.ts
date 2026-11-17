@@ -27,6 +27,7 @@ export interface FileRow {
   trashed_at: Date | null;
   blob_id: string | null;
   shot_override?: boolean | null; // ручная отметка: true скриншот, false фото, пусто решает автоматика
+  mine?: boolean;               // только в ленте: файл принадлежит зрителю, а не общему альбому
 }
 
 export interface BlobRow {
@@ -55,9 +56,11 @@ export interface PublicFile {
   height: number | null;
   // Считается ли картинка скриншотом (ручная отметка или автоматика). Есть в списках ленты, в остальных ответах может отсутствовать.
   screenshot?: boolean;
+  // Мой файл или из общего альбома. Есть в лентах; в остальных ответах может отсутствовать.
+  mine?: boolean;
 }
 
-export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null; shot?: boolean | null }): PublicFile {
+export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null; shot?: boolean | null; mine?: boolean }): PublicFile {
   return {
     id: f.id,
     name: f.original_name,
@@ -70,6 +73,7 @@ export function toPublicFile(f: FileRow & { w?: number | null; h?: number | null
     width: f.w ?? null,
     height: f.h ?? null,
     ...(f.shot !== undefined && f.shot !== null ? { screenshot: f.shot } : {}),
+    ...(f.mine !== undefined ? { mine: f.mine } : {}),
   };
 }
 
@@ -327,6 +331,17 @@ export class FilesService {
   private feedFilter(ownerId: string, o: { trashed?: boolean; albumId?: string; kind?: FeedKind; person?: string }): { where: string; params: unknown[] } {
     const params: unknown[] = [ownerId];
     let where = `owner_id = $1 AND trashed_at IS ${o.trashed ? 'NOT NULL' : 'NULL'}`;
+    // Общие альбомы: файлы чужого альбома попадают в ленту, только если получатель включил этот раздел.
+    // Внутри самого альбома и в корзине правило не действует — там всё как было.
+    if (o.albumId === undefined && !o.trashed) {
+      const sf = o.kind === 'photos' ? 'in_photos' : o.kind === 'videos' ? 'in_videos' : o.kind === 'screenshots' ? 'in_screenshots' : 'in_library';
+      where = `(owner_id = $1 OR EXISTS (
+        SELECT 1 FROM album_items si
+          JOIN albums sa ON sa.id = si.album_id AND sa.deleted_at IS NULL
+          JOIN album_shares sh ON sh.album_id = sa.id AND sh.user_id = $1
+          LEFT JOIN album_share_settings st ON st.album_id = sa.id AND st.user_id = $1
+        WHERE si.file_id = files.id AND COALESCE(st.${sf}, false))) AND trashed_at IS NULL`;
+    }
     if (o.albumId !== undefined) {
       params.push(o.albumId);
       where += ` AND id IN (SELECT file_id FROM album_items WHERE album_id = $${params.length})`;
@@ -351,7 +366,7 @@ export class FilesService {
     return { where, params };
   }
 
-  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: FeedKind; at?: string; tz?: string; after?: string; person?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
+  async list(ownerId: string, opts: { trashed: boolean; limit: number; before?: string; albumId?: string; kind?: FeedKind; at?: string; tz?: string; after?: string; person?: string; viewerId?: string }): Promise<{ files: FileRow[]; next: string | null; prev: string | null }> {
     const col = opts.trashed ? 'trashed_at' : 'taken_at';
     const filt = this.feedFilter(ownerId, opts);
     const params: unknown[] = [...filt.params];
@@ -378,10 +393,12 @@ export class FilesService {
       params.push(`${m[1]}-${m[2]}-01`, tz);
       where += ` AND taken_at < ((($${params.length - 1}::date + interval '1 month')::timestamp) AT TIME ZONE $${params.length})`;
     }
+    params.push(opts.viewerId ?? ownerId);
+    const mineAt = params.length;   // чей файл: в ленте общего альбома зритель не владелец
     params.push(opts.limit + 1);
     const up = opts.after !== undefined; // идём вверх: берём ближайшие к ключу, потом разворачиваем в обычный порядок
     const dir = up ? 'ASC' : 'DESC';
-    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean }>(`SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
+    const r = await this.db.query<FileRow & { w: number | null; h: number | null; shot: boolean; mine: boolean }>(`SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot, (files.owner_id = $${mineAt}) AS mine FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id WHERE ${where} ORDER BY ${col} ${dir}, id ${dir} LIMIT $${params.length}`, params);
     const more = r.rows.length > opts.limit;
     let rows = more ? r.rows.slice(0, opts.limit) : r.rows;
     if (up) rows = rows.reverse();
@@ -425,6 +442,48 @@ export class FilesService {
       `SELECT files.*, p.width AS w, p.height AS h, COALESCE(files.shot_override, p.screenshot, false) AS shot FROM files LEFT JOIN file_fingerprints p ON p.file_id = files.id
        WHERE files.owner_id = $1 AND files.trashed_at IS NULL AND files.id = ANY($2::bigint[]) ORDER BY taken_at DESC, id DESC`, [ownerId, ids]);
     return r.rows;
+  }
+
+  // Свои ссылки на файлы общего альбома: содержимое на диске не копируется, создаётся запись человека.
+  // Нужно, чтобы из чужих фото можно было собрать свой альбом. Место считается по квоте, как при загрузке:
+  // не хватает — понятная ошибка до создания чего-либо, а не половина результата.
+  async linkShared(user: UserRow, ids: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    const need: { id: string; sha: string; name: string; taken: Date; size: number }[] = [];
+    let bytes = 0;
+    for (const id of ids) {
+      if (!ID_RE.test(id)) continue;
+      const own = await this.db.query<{ id: string }>('SELECT id FROM files WHERE id = $1 AND owner_id = $2', [id, user.id]);
+      if (own.rows[0]) { map.set(id, id); continue; }
+      // Такое же содержимое у человека уже есть: берём его запись, второй раз не грузим.
+      const live = await this.db.query<{ id: string }>(
+        `SELECT g.id FROM files g JOIN files f ON f.sha256 = g.sha256
+         WHERE f.id = $1 AND g.owner_id = $2 AND g.trashed_at IS NULL LIMIT 1`, [id, user.id]);
+      if (live.rows[0]) { map.set(id, live.rows[0].id); continue; }
+      const src = await this.db.query<{ sha256: string; original_name: string; taken_at: Date; size_bytes: string; blob_id: string | null }>(
+        `SELECT f.sha256, f.original_name, f.taken_at, f.size_bytes, f.blob_id FROM files f
+         WHERE f.id = $1 AND f.trashed_at IS NULL AND EXISTS (
+           SELECT 1 FROM album_items ai JOIN album_shares s ON s.album_id = ai.album_id WHERE ai.file_id = f.id AND s.user_id = $2)`, [id, user.id]);
+      const s = src.rows[0];
+      if (!s || !s.blob_id) continue;   // чужой и недоступный файл молча пропускается, как раньше
+      need.push({ id, sha: s.sha256, name: s.original_name, taken: s.taken_at, size: Number(s.size_bytes) });
+      bytes += Number(s.size_bytes);
+    }
+    if (need.length === 0) return map;
+    const { usedBytes } = await this.usage(user.id);
+    const left = user.quota_bytes === null ? Infinity : Math.max(0, Number(user.quota_bytes) - usedBytes);
+    if (bytes > left) {
+      const gib = (n: number) => `${(n / 1073741824).toFixed(1)} ГиБ`;
+      throw new BadRequestException(`Не хватает места для своей копии: нужно ${gib(bytes)}, свободно ${left === Infinity ? 'без ограничения' : gib(left)}. Уменьшите выбор или попросите администратора добавить место.`);
+    }
+    for (const n of need) {
+      const blob = await this.blobBySha(n.sha);
+      if (!blob) continue;
+      const { file, created } = await this.linkBlob(user, blob, n.name, n.taken);
+      if (created) { this.thumbs.warm(file); this.fingerprints.warm(file); }
+      map.set(n.id, file.id);
+    }
+    return map;
   }
 
   // Оглавление ленты для полосы времени: сколько файлов в каждом месяце (по часовому поясу человека), новые сверху.

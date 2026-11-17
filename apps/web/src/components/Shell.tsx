@@ -79,6 +79,9 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   const foreign = child || (inAlbum && album !== null && !album.mine); // чужой общий альбом: только смотреть, сохранять, скачивать
   const active = inAlbum || inSug ? albumFeed : inPerson ? personFeed : view === 'search' ? search : view === 'photos' ? photos : view === 'videos' ? videos : view === 'screenshots' ? shots : library; // из какой ленты листает просмотрщик
 
+  // Чужие файлы в лентах: удалять и менять вид нельзя, в свой альбом добавить можно.
+  const viewerForeign = !!viewer && active.files.find((f) => f.id === viewer.id)?.mine === false;
+  const selectedForeign = useMemo(() => [...selected].some((id) => active.files.find((f) => f.id === id)?.mine === false), [selected, active.files]);
   const reloadPeople = useCallback(() => { api.peopleGroups(true).then(setPeopleList).catch(() => {}); }, []); // скрытые приходят тоже: прячет их сам список
   const [yandexOn, setYandexOn] = useState(false);
   useEffect(() => { if (!user.isChild) api.yandexStatus().then((y) => setYandexOn(y.enabled)).catch(() => {}); }, []);
@@ -127,6 +130,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
   useEffect(() => { leftPerson.current.clear(); if (person) personFeed.loadMore(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [person?.id]);
   useEffect(() => {
     // Разделы подгружаются заново при входе: за это время файлы могли добавиться или уйти в корзину.
+    if (view === 'library') void library.jump(null);   // допуски общих альбомов могли измениться
     if (view === 'photos') void photos.jump(null);
     if (view === 'videos') void videos.jump(null);
     if (view === 'screenshots') void shots.jump(null);
@@ -503,7 +507,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         )}
         {view === 'albums' && album && (
           <>
-            <AlbumHeader album={album} count={albumFeed.loaded && !albumFeed.hasMore ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
+            <AlbumHeader album={album} count={albumFeed.loaded && !albumFeed.hasMore ? albumFeed.files.length : album.count} onBack={() => changeView('albums')} onRenamed={(a) => { setAlbum(a); if (quick.target?.id === a.id) quick.set({ id: a.id, name: a.name }); say('Название изменено'); }} onUpdated={(a) => { const was = album?.show.library; setAlbum(a); refreshAlbums(); if (a.mine && was !== undefined && a.show.library !== was) say(a.show.library ? 'Альбом снова в библиотеке' : 'Альбом в архиве'); }} onDeleted={() => { if (quick.target?.id === album.id) quick.set(null); say('Альбом удалён, фото остались'); changeView('albums'); }} onError={say}
               onShare={() => setSharing(true)} onLeft={() => { say('Альбом убран из вашего списка'); changeView('albums'); }}
               isQuick={quick.target?.id === album.id} onQuick={() => { const on = quick.target?.id !== album.id; quick.set(on ? { id: album.id, name: album.name } : null); say(on ? `Быстрый альбом: «${album.name}». В библиотеке нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />
             {gallery(albumFeed, undefined, true)}
@@ -532,7 +536,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
       <HelpSheet topic={helpKeyFor(view)} open={helpOpen} onClose={() => setHelpOpen(false)} />
       <AnimatePresence>
         {selecting && (view === 'library' || view === 'photos' || view === 'videos' || view === 'screenshots' || inAlbum || inSug || inPerson) && (
-          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum || inSug} removeLabel={inSug ? 'Убрать из предложения' : undefined} noTrash={inSug} shared={foreign} onHide={() => { void hideSelected(); }}
+          <SelectionBar key="selbar" ids={[...selected]} total={active.files.length} zipName={inAlbum && album ? album.name : 'DV Cloud'} inAlbum={inAlbum || inSug} removeLabel={inSug ? 'Убрать из предложения' : undefined} noTrash={inSug} shared={child} mixed={selectedForeign} onHide={() => { void hideSelected(); }}
             onAlbum={() => setPicker([...selected])} quickName={quick.target?.name} onQuick={() => { void quickSelected(); }} onRemoveFromAlbum={inSug ? () => sugRemove([...selected]) : () => { void askRemove([...selected]); }} inPerson={inPerson} onRemoveFromPerson={() => { void removeSelectedFromPerson(); }} kinds={view === 'screenshots' ? ['photo'] : view === 'photos' || view === 'library' ? ['screenshot'] : ['screenshot', 'photo']} onKind={(k) => { void changeKind([...selected], k); }} onAll={() => setSelected(new Set(active.files.map((f) => f.id)))} onCancel={endSelect}
             onTooMany={() => say(`За один раз можно скачать до ${MAX_ZIP_IDS} выбранных файлов. Для большего сложите их в альбом и скачайте альбом целиком.`)} />
         )}
@@ -544,7 +548,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         onDone={(r) => { const a = r.album; setTargetPicker(false); quick.set(a); refreshAlbums(); say(a ? `Быстрый альбом: «${a.name}». Нажимайте «+» на фото` : 'Быстрый альбом выключен'); }} />}
       <AnimatePresence>
         {viewer && openIndex >= 0 && (
-          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={closeViewer} onTrash={foreign ? undefined : inSug ? (f) => sugRemove([f.id]) : inAlbum ? (f) => { void askRemove([f.id]); } : (f) => toTrash(f.id)} fromAlbum={inAlbum || inSug} removeTitle={inSug ? 'Убрать из предложения' : undefined} onKind={foreign ? undefined : (f, k) => { void changeKind([f.id], k); }} readOnly={foreign} onAlbumChanged={albumChanged} onError={say}
+          <Viewer key="viewer" files={active.files} index={openIndex} onIndex={(i) => setViewer({ id: active.files[i].id })} onClose={closeViewer} onTrash={child ? undefined : inSug ? (f) => sugRemove([f.id]) : inAlbum ? (f) => { void askRemove([f.id]); } : (f) => toTrash(f.id)} fromAlbum={inAlbum || inSug} removeTitle={inSug ? 'Убрать из предложения' : undefined} onKind={child ? undefined : (f, k) => { void changeKind([f.id], k); }} readOnly={child} foreignFile={viewerForeign} onAlbumChanged={albumChanged} onError={say}
             quick={quick.target ? { id: quick.target.id, name: quick.target.name, has: quick.has } : null} onQuick={quickFile}
             people={peopleOn ? { groups: (peopleList?.people ?? []).filter((p) => !p.hidden), onChanged: reloadPeople, onLeft: (fid) => { leftPerson.current.add(fid); }, onNote: say } : null} />
         )}

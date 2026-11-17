@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { stat } from 'node:fs/promises';
 import { DbService } from '../db/db.service';
-import { FileRow, hiddenFromLibrary, ID_RE } from './files.service';
+import { FilesService, FileRow, hiddenFromLibrary, ID_RE } from './files.service';
+import { UserRow } from '../users/users.service';
 import { cleanFileName, withSuffix } from './names';
 import { StorageService } from './storage.service';
 import { openFile, ZipEntry } from './zip';
@@ -129,9 +130,14 @@ const toPublic = (r: AlbumRow, viewerId: string): PublicAlbum => {
   };
 };
 
-const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name, a.in_library, a.in_photos, a.in_videos, a.in_screenshots, a.kind, a.favorite,
+const ALBUM_SELECT = `SELECT a.id, a.owner_id, a.name, a.created_at, u.display_name AS owner_name,
+  CASE WHEN a.owner_id = $1 THEN a.in_library ELSE COALESCE((SELECT in_library FROM album_share_settings WHERE user_id = $1 AND album_id = a.id), false) END AS in_library,
+  CASE WHEN a.owner_id = $1 THEN a.in_photos ELSE COALESCE((SELECT in_photos FROM album_share_settings WHERE user_id = $1 AND album_id = a.id), false) END AS in_photos,
+  CASE WHEN a.owner_id = $1 THEN a.in_videos ELSE COALESCE((SELECT in_videos FROM album_share_settings WHERE user_id = $1 AND album_id = a.id), false) END AS in_videos,
+  CASE WHEN a.owner_id = $1 THEN a.in_screenshots ELSE COALESCE((SELECT in_screenshots FROM album_share_settings WHERE user_id = $1 AND album_id = a.id), false) END AS in_screenshots,
+  a.kind, a.favorite,
   (SELECT count(*) FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL) AS n,
-  (SELECT f.id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1) AS cover,
+  COALESCE((SELECT ai.file_id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND ai.file_id = a.cover_file_id AND f.trashed_at IS NULL), (SELECT f.id FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = a.id AND f.trashed_at IS NULL ORDER BY f.taken_at DESC, f.id DESC LIMIT 1)) AS cover,
   (SELECT count(*) FROM album_shares s WHERE s.album_id = a.id) AS shared_with
   FROM albums a JOIN users u ON u.id = a.owner_id AND a.deleted_at IS NULL`; // удалённые человеком альбомы никому не видны, кроме админа
 
@@ -148,6 +154,7 @@ export class AlbumsService {
   constructor(
     private readonly db: DbService,
     private readonly storage: StorageService,
+    private readonly files: FilesService,
   ) {}
 
   // Свои альбомы и те, которыми поделились. Свои сначала. Среди своих: избранные, потом по типу (универсальные, фото, видео,
@@ -212,22 +219,65 @@ export class AlbumsService {
   }
 
   // Где показывать файлы альбома: частичное изменение допусков. Переданные поля меняются, остальные остаются.
-  async setShow(ownerId: string, id: string, raw: unknown): Promise<PublicAlbum> {
-    await this.get(ownerId, id);
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new BadRequestException('Поле show: допуски альбома');
-    const o = raw as Record<string, unknown>;
-    const col: Record<keyof AlbumShow, string> = { library: 'in_library', photos: 'in_photos', videos: 'in_videos', screenshots: 'in_screenshots' };
-    const sets: string[] = [];
-    const params: unknown[] = [id, ownerId];
-    for (const k of SHOW_KEYS) {
-      if (!(k in o)) continue;
-      if (typeof o[k] !== 'boolean') throw new BadRequestException(`show.${k}: да или нет`);
-      params.push(o[k]);
-      sets.push(`${col[k]} = $${params.length}`);
+  // Работает и для своих альбомов (обновляет albums.in_*), и для shared (обновляет/вставляет в album_share_settings).
+  async setShow(userId: string, id: string, raw: unknown): Promise<PublicAlbum> {
+    if (!ID_RE.test(id)) throw new NotFoundException('Альбом не найден');
+    
+    // Проверяем: свой альбом или shared (один запрос с явным приведением типов)
+    const r = await this.db.query<{ owner_id: string; is_shared: boolean }>(
+      `SELECT a.owner_id::text AS owner_id, 
+              EXISTS(SELECT 1 FROM album_shares s WHERE s.album_id = a.id AND s.user_id = $2::bigint) AS is_shared
+       FROM albums a 
+       WHERE a.id = $1::bigint AND a.deleted_at IS NULL`, 
+      [id, userId]
+    );
+    
+    if (!r.rows[0]) throw new NotFoundException('Альбом не найден');
+    
+    const isOwner = r.rows[0].owner_id === userId;
+    const isShared = r.rows[0].is_shared;
+    
+    if (!isOwner && !isShared) {
+      throw new NotFoundException('Альбом не найден');
     }
-    if (sets.length === 0) throw new BadRequestException('show: укажите library, photos, videos или screenshots');
-    await this.db.query(`UPDATE albums SET ${sets.join(', ')} WHERE id = $1 AND owner_id = $2`, params);
-    return this.get(ownerId, id);
+    
+    // Парсим параметры
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new BadRequestException('Поле show: допуски альбома');
+    }
+    const o = raw as Record<string, unknown>;
+    
+    if (isOwner) {
+      // Свой альбом: обновляем albums
+      const col: Record<keyof AlbumShow, string> = { library: 'in_library', photos: 'in_photos', videos: 'in_videos', screenshots: 'in_screenshots' };
+      const sets: string[] = [];
+      const params: unknown[] = [id, userId];
+      for (const k of SHOW_KEYS) {
+        if (!(k in o)) continue;
+        if (typeof o[k] !== 'boolean') throw new BadRequestException(`show.${k}: да или нет`);
+        params.push(o[k]);
+        sets.push(`${col[k]} = $${params.length}`);
+      }
+      if (sets.length === 0) throw new BadRequestException('show: укажите library, photos, videos или screenshots');
+      await this.db.query(`UPDATE albums SET ${sets.join(', ')} WHERE id = $1 AND owner_id = $2`, params);
+    } else {
+      // Shared album: обновляем/вставляем в album_share_settings
+      // Значения ставим строго в порядке колонок; не переданные ключи не меняем (при первой записи — выключено).
+      for (const k of SHOW_KEYS) {
+        if (k in o && typeof o[k] !== 'boolean') throw new BadRequestException(`show.${k}: да или нет`);
+      }
+      if (!SHOW_KEYS.some((k) => k in o)) throw new BadRequestException('show: укажите library, photos, videos или screenshots');
+      const vals = SHOW_KEYS.map((k) => (k in o ? o[k] === true : null));
+      const sets = SHOW_KEYS.map((k, i) => `in_${k} = COALESCE($${i + 3}::boolean, album_share_settings.in_${k})`);
+      await this.db.query(
+        `INSERT INTO album_share_settings (user_id, album_id, in_library, in_photos, in_videos, in_screenshots)
+         VALUES ($1, $2, COALESCE($3::boolean, false), COALESCE($4::boolean, false), COALESCE($5::boolean, false), COALESCE($6::boolean, false))
+         ON CONFLICT (user_id, album_id) DO UPDATE SET ${sets.join(', ')}`,
+        [userId, id, ...vals],
+      );
+    }
+    
+    return (await this.getVisible(userId, id)).album;
   }
 
   // Звёздочка: свой альбом в избранное или обратно.
@@ -238,18 +288,40 @@ export class AlbumsService {
     return this.get(ownerId, id);
   }
 
+  // Обложка альбома по выбору: файл должен лежать в этом альбоме и не быть в корзине.
+  // Передайте null, чтобы вернуть обложку «самое свежее фото».
+  async setCover(ownerId: string, id: string, fileId: string | null): Promise<PublicAlbum> {
+    await this.get(ownerId, id);
+    if (fileId !== null) {
+      if (!ID_RE.test(fileId)) throw new BadRequestException('Неверный номер файла');
+      const r = await this.db.query<{ n: string }>(
+        `SELECT count(*) AS n FROM album_items ai JOIN files f ON f.id = ai.file_id WHERE ai.album_id = $1 AND f.id = $2 AND f.owner_id = $3 AND f.trashed_at IS NULL`,
+        [id, fileId, ownerId],
+      );
+      if (Number(r.rows[0].n) === 0) throw new BadRequestException('Такого файла нет в этом альбоме');
+    }
+    await this.db.query('UPDATE albums SET cover_file_id = $1 WHERE id = $2 AND owner_id = $3', [fileId, id, ownerId]);
+    return this.get(ownerId, id);
+  }
+
   // Добавить фото в альбом. Одно фото может лежать в нескольких альбомах; повторное добавление ничего не меняет.
   // Альбом определённого типа принимает только подходящее: не подошедшие пропускаются и считаются в rejected.
-  async addFiles(ownerId: string, albumId: string, ids: string[]): Promise<{ added: number; rejected: number }> {
+  async addFiles(ownerId: string, albumId: string, ids: string[], user?: UserRow): Promise<{ added: number; rejected: number }> {
     const album = await this.get(ownerId, albumId);
-    const total = (await this.db.query<{ n: string }>('SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[])', [ownerId, ids])).rows[0];
+    // Чужие файлы из общих альбомов: сначала свои ссылки на то же содержимое, потом в альбом.
+    let use = ids;
+    if (user) {
+      const map = await this.files.linkShared(user, ids);
+      use = ids.map((x) => map.get(x) ?? x);
+    }
+    const total = (await this.db.query<{ n: string }>('SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[])', [ownerId, use])).rows[0];
     const r = await this.db.query(
       `INSERT INTO album_items (file_id, album_id)
        SELECT f.id, $2 FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($3::bigint[]) AND (${KIND_SQL[album.kind]})
        ON CONFLICT (album_id, file_id) DO NOTHING`,
-      [ownerId, albumId, ids],
+      [ownerId, albumId, use],
     );
-    const fit = (await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[]) AND (${KIND_SQL[album.kind]})`, [ownerId, ids])).rows[0];
+    const fit = (await this.db.query<{ n: string }>(`SELECT count(*) AS n FROM files f WHERE f.owner_id = $1 AND f.trashed_at IS NULL AND f.id = ANY($2::bigint[]) AND (${KIND_SQL[album.kind]})`, [ownerId, use])).rows[0];
     return { added: r.rowCount ?? 0, rejected: Number(total.n) - Number(fit.n) };
   }
 

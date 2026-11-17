@@ -11,6 +11,7 @@ interface Props {
   removeLabel?: string; // подпись кнопки «убрать» (в предложенном альбоме иная)
   noTrash?: boolean; // без кнопки «В корзину»
   shared?: boolean; // чужой общий альбом: можно только смотреть и скачать
+  mixed?: boolean;   // в наборе есть чужие файлы: удалять и менять вид нельзя, в свой альбом и ZIP можно
   onHide?: () => void;
   onAlbum: () => void;
   quickName?: string; // быстрый альбом, если выбран: кнопка кладёт выбранное туда без окна
@@ -29,13 +30,15 @@ const btn = 'flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium 
 const plain = `${btn} text-gray-800 hover:bg-black/5 disabled:opacity-40 dark:text-gray-100 dark:hover:bg-white/10`; // кнопка без заливки, цвета темы
 
 // Панель внизу экрана, пока включён режим «Выбрать».
-export function SelectionBar({ ids, total, zipName, inAlbum, removeLabel, noTrash, shared, onHide, onAlbum, quickName, onQuick, onRemoveFromAlbum, inPerson, onRemoveFromPerson, kinds, onKind, onAll, onCancel, onTooMany }: Props) {
+export function SelectionBar({ ids, total, zipName, inAlbum, removeLabel, noTrash, shared, mixed, onHide, onAlbum, quickName, onQuick, onRemoveFromAlbum, inPerson, onRemoveFromPerson, kinds, onKind, onAll, onCancel, onTooMany }: Props) {
   const [sure, setSure] = useState(false); // «убрать из группы» нельзя отменить, поэтому нужно нажать дважды
   useEffect(() => { if (!sure) return; const t = setTimeout(() => setSure(false), 4000); return () => clearTimeout(t); }, [sure]);
   useEffect(() => { setSure(false); }, [ids.length]);
   const none = ids.length === 0;
   const tooMany = ids.length > MAX_ZIP_IDS;
   const off = 'pointer-events-none opacity-40';
+  const mut = !shared && !mixed;   // действия, меняющие файлы: только над своими
+  const hint = 'В выборе есть файлы из общих альбомов: они принадлежат другим людям, удалить их нельзя. В свой альбом добавить можно — это будет ваша ссылка на тот же снимок.';
   return (
     <motion.div
       initial={{ y: 24, opacity: 0, scale: 0.96 }} animate={{ y: 0, opacity: 1, scale: 1, transition: { type: 'spring', stiffness: 420, damping: 34 } }}
@@ -45,19 +48,20 @@ export function SelectionBar({ ids, total, zipName, inAlbum, removeLabel, noTras
         <button type="button" onClick={onAll} disabled={ids.length >= total} className={plain}><CheckCheck className="size-4" aria-hidden /><span className="hidden sm:inline">Выбрать всё</span></button>
         {!shared && quickName && <button type="button" onClick={onQuick} disabled={none} className={`${btn} btn-accent text-white disabled:opacity-40`}><Zap className="size-4" aria-hidden /><span className="max-w-[9rem] truncate">В «{quickName}»</span></button>}
         {!shared && <button type="button" onClick={onAlbum} disabled={none} className={plain}><FolderPlus className="size-4" aria-hidden /><span className="hidden sm:inline">{quickName ? 'Другой альбом' : 'В альбом'}</span></button>}
-        {!shared && kinds?.map((k) => (
+        {mut && kinds?.map((k) => (
           <button key={k} type="button" onClick={() => onKind?.(k)} disabled={none} className={plain} title={k === 'screenshot' ? 'Пометить выбранные картинки как скриншоты (видео не меняются)' : 'Пометить выбранные картинки как фото (видео не меняются)'}>
             {k === 'screenshot' ? <Smartphone className="size-4" aria-hidden /> : <ImageIcon className="size-4" aria-hidden />}<span className="hidden sm:inline">{k === 'screenshot' ? 'В скриншоты' : 'Это фото'}</span>
           </button>
         ))}
-        {inAlbum && !shared && <button type="button" onClick={onRemoveFromAlbum} disabled={none} className={plain}><FolderMinus className="size-4" aria-hidden /><span className="hidden sm:inline">{removeLabel ?? 'Убрать из альбома'}</span></button>}
-        {inPerson && !shared && (
+        {inAlbum && mut && <button type="button" onClick={onRemoveFromAlbum} disabled={none} className={plain}><FolderMinus className="size-4" aria-hidden /><span className="hidden sm:inline">{removeLabel ?? 'Убрать из альбома'}</span></button>}
+        {inPerson && mut && (
           <button type="button" disabled={none} onClick={() => { if (sure) { setSure(false); onRemoveFromPerson?.(); } else setSure(true); }} title="Эти фото больше не попадут в эту группу"
             className={sure ? `${btn} bg-red-600 text-white hover:bg-red-500` : plain}>
             <UserMinus className="size-4" aria-hidden /><span className={sure ? '' : 'hidden sm:inline'}>{sure ? `Точно убрать ${ids.length}?` : 'Убрать из группы'}</span>
           </button>
         )}
-        {!shared && !noTrash && <button type="button" onClick={onHide} disabled={none} title="В корзину: файлы можно восстановить" className={plain}><Trash2 className="size-4" aria-hidden /><span className="hidden sm:inline">В корзину</span></button>}
+        {!shared && !noTrash && <button type="button" onClick={onHide} disabled={none || mixed} title={mixed ? hint : 'В корзину: файлы можно восстановить'} className={plain}><Trash2 className="size-4" aria-hidden /><span className="hidden sm:inline">В корзину</span></button>}
+        {mixed && <span className="px-2 text-xs text-amber-700 dark:text-amber-300" title={hint}>есть чужие файлы</span>}
         {tooMany ? (
           <button type="button" onClick={onTooMany} className={plain}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать ZIP</span></button>
         ) : (

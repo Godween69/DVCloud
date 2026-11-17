@@ -21,6 +21,7 @@ interface Props {
   onTrash?: (f: FileItem) => void; // нет у файлов чужого общего альбома
   onKind?: (f: FileItem, kind: 'screenshot' | 'photo') => void; // ручная смена «фото» / «скриншот» (только картинки)
   readOnly?: boolean;
+  foreignFile?: boolean;   // файл из общего альбома: удалять и менять вид нельзя, в свой альбом можно
   onAlbumChanged: (f: FileItem, r: PickResult) => void;
   onError: (message: string) => void;
   quick: { id: string; name: string; has: (id: string) => boolean } | null; // «быстрый альбом»
@@ -65,13 +66,18 @@ const QuickSlot = memo(function QuickSlot({ name, has, onAdd }: { name: string; 
 
 const btn = 'flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20';
 
-export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, removeTitle, onKind, readOnly, onAlbumChanged, onError, quick, onQuick, people }: Props) {
+// Подсказка на погашенных кнопках чужого файла.
+const FOREIGN_HINT = 'Файл из общего альбома: он принадлежит другому человеку, удалить его нельзя. В свой альбом добавить можно — это будет ваша ссылка на тот же снимок.';
+
+export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, removeTitle, onKind, readOnly, foreignFile, onAlbumChanged, onError, quick, onQuick, people }: Props) {
   const file = files[index];
   const cur = useRef(file?.id);
   cur.current = file?.id;
   const busy = useRef(false);
   const onTrashRef = useRef(onTrash);
   onTrashRef.current = onTrash;
+  const foreignRef = useRef(foreignFile);
+  foreignRef.current = foreignFile;
   const fileRef = useRef(file);
   fileRef.current = file;
   const lastDelRef = useRef(0);
@@ -218,7 +224,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, rem
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       if (e.code === 'KeyI' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); setInfoOn((v) => !v); }
       else if (e.code === 'KeyA' && !readOnly && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); void quickRef.current(); }
-      else if (e.key === 'Delete' && onTrashRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      else if (e.key === 'Delete' && onTrashRef.current && !foreignRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // Del = сразу в корзину, без вопроса (файл можно вернуть кнопкой «Восстановить»). Повтор от зажатой клавиши и быстрый второй
         // удар не считаются: иначе при зажатой клавише улетела бы вся серия снимков.
         e.preventDefault();
@@ -257,7 +263,7 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, rem
         <button type="button" className={btn} onClick={onClose} aria-label="Закрыть"><X className="size-5" aria-hidden /></button>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{file.name}</p>
-          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{albumName ? ` · ${albumName}` : ''}</p>
+          <p className="truncate text-sm text-white/60">{formatDateTime(file.takenAt)} · {formatBytes(file.size)}{albumName ? ` · ${albumName}` : ''}{foreignFile ? ' · из общего альбома' : ''}</p>
         </div>
         {quick && !readOnly && <QuickSlot name={quick.name} has={quick.has(file.id)} onAdd={addQuick} />}
         {!readOnly && <AlbumButton name={albumName} label={albumLabel} onOpen={openPicker} />}
@@ -265,12 +271,12 @@ export function Viewer({ files, index, onIndex, onClose, onTrash, fromAlbum, rem
         {people && !video && <button type="button" className={`${btn} ${faces === 'on' ? '!bg-violet-600' : ''}`} onClick={() => setFaces(faces === 'on' ? 'off' : 'on')} aria-pressed={faces === 'on'} aria-label="Показать, кто на фото" title="Кто на фото"><ScanFace className="size-5" aria-hidden /></button>}
         {video && <button type="button" className={btn} onClick={() => setVfit(vfit === 'fit' ? 'orig' : 'fit')} aria-label={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по окну'} title={vfit === 'fit' ? 'Показать в своём размере' : 'Растянуть по размеру окна'}>{vfit === 'fit' ? <Minimize2 className="size-5" aria-hidden /> : <Maximize2 className="size-5" aria-hidden />}</button>}
         {onKind && !video && !readOnly && (
-          <button type="button" className={btn} onClick={() => onKind(file, file.screenshot ? 'photo' : 'screenshot')} aria-label={file.screenshot ? 'Это фото, не скриншот' : 'Это скриншот'} title={file.screenshot ? 'Сейчас это скриншот. Нажмите, чтобы считать фото' : 'Сейчас это фото. Нажмите, чтобы считать скриншотом'}>
+          <button type="button" disabled={foreignFile} className={`${btn} ${foreignFile ? 'cursor-not-allowed opacity-40' : ''}`} onClick={() => onKind(file, file.screenshot ? 'photo' : 'screenshot')} aria-label={foreignFile ? 'Вид снимка менять нельзя: файл из общего альбома' : file.screenshot ? 'Это фото, не скриншот' : 'Это скриншот'} title={foreignFile ? FOREIGN_HINT : file.screenshot ? 'Сейчас это скриншот. Нажмите, чтобы считать фото' : 'Сейчас это фото. Нажмите, чтобы считать скриншотом'}>
             {file.screenshot ? <ImageIcon className="size-5" aria-hidden /> : <Smartphone className="size-5" aria-hidden />}
           </button>
         )}
         <a className={btn} href={fileUrl(file.id, true)} download={file.name} aria-label="Скачать" title="Скачать"><Download className="size-5" aria-hidden /></a>
-        {onTrash && <button type="button" className={btn} onClick={() => onTrash(file)} aria-label={fromAlbum ? (removeTitle ?? 'Убрать из альбома') : 'В корзину'} title={fromAlbum ? `${removeTitle ?? 'Убрать из альбома'} (клавиша Del)` : 'В корзину (клавиша Del; файл можно восстановить)'}>{fromAlbum ? <FolderMinus className="size-5" aria-hidden /> : <Trash2 className="size-5" aria-hidden />}</button>}
+        {onTrash && <button type="button" disabled={foreignFile} className={`${btn} ${foreignFile ? 'cursor-not-allowed opacity-40' : ''}`} onClick={() => onTrash(file)} aria-label={foreignFile ? 'Удалить нельзя: файл из общего альбома' : fromAlbum ? (removeTitle ?? 'Убрать из альбома') : 'В корзину'} title={foreignFile ? FOREIGN_HINT : fromAlbum ? `${removeTitle ?? 'Убрать из альбома'} (клавиша Del)` : 'В корзину (клавиша Del; файл можно восстановить)'}>{fromAlbum ? <FolderMinus className="size-5" aria-hidden /> : <Trash2 className="size-5" aria-hidden />}</button>}
       </div>
 
       <div ref={stage} onClick={onStageClick} onWheel={onWheel} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-4 sm:px-16">

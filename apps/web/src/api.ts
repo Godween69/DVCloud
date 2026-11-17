@@ -137,6 +137,7 @@ export const api = {
   albumCreate: (name: string, kind: AlbumKind = 'any') => request<{ album: Album }>('POST', '/api/albums', { name, kind }).then((r) => r.album),
   albumFavorite: (id: string, favorite: boolean) => request<{ album: Album }>('PATCH', `/api/albums/${id}/favorite`, { favorite }).then((r) => r.album),
   albumRename: (id: string, name: string) => request<{ album: Album }>('PATCH', `/api/albums/${id}`, { name }).then((r) => r.album),
+  albumCover: (id: string, coverFileId: string | null) => request<{ album: Album }>('PATCH', `/api/albums/${id}/cover`, { coverFileId }).then((r) => r.album),
   albumShow: (id: string, show: Partial<AlbumShow>) => request<{ album: Album }>('PATCH', `/api/albums/${id}/show`, show).then((r) => r.album),
   albumDelete: (id: string) => request<{ ok: true }>('DELETE', `/api/albums/${id}`),
   albumFiles: (id: string, before?: string, at?: string, after?: string) => {

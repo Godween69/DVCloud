@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion';
-import { Archive, ArchiveRestore, ArrowLeft, Check, Download, Eye, EyeOff, FolderPlus, Folders, Images, Loader2, LogOut, Pencil, Share2, SlidersHorizontal, Star, Trash2, Users, Zap } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Check, Download, Eye, EyeOff, FolderPlus, Folders, ImagePlus, Images, Loader2, LogOut, Pencil, Share2, SlidersHorizontal, Star, Trash2, Users, X, Zap } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AlbumBuilder } from './AlbumBuilder';
+import { CoverPicker } from './CoverPicker';
 import { api, ApiError, thumbUrl } from '../api';
 import { albumZipHref } from '../lib/albums';
 import { countFiles } from '../lib/format';
@@ -272,6 +273,7 @@ interface HeaderProps {
   count: number;
   onBack: () => void;
   onRenamed: (a: Album) => void;
+  onUpdated: (a: Album) => void;   // архив, допуски, обложка: название не меняется
   onDeleted: () => void;
   onError: (m: string) => void;
   isQuick: boolean;
@@ -281,10 +283,11 @@ interface HeaderProps {
 }
 
 // Шапка открытого альбома: назад, название (можно переименовать), скачать целиком, удалить альбом.
-export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onError, isQuick, onQuick, onShare, onLeft }: HeaderProps) {
+export function AlbumHeader({ album, count, onBack, onRenamed, onUpdated, onDeleted, onError, isQuick, onQuick, onShare, onLeft }: HeaderProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(album.name);
   const [confirm, setConfirm] = useState(false);
+  const [pickingCover, setPickingCover] = useState(false);
 
   useEffect(() => { setName(album.name); setEditing(false); setConfirm(false); }, [album.id, album.name]);
   useEffect(() => {
@@ -338,15 +341,17 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
       {album.mine && <span className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${album.show.library ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300' : 'bg-amber-500/15 text-amber-800 dark:text-amber-300'}`} title={album.show.library ? 'Фото этого альбома видны в библиотеке' : 'Фото этого альбома не показываются в библиотеке: альбом в архиве'}>{album.show.library ? <Images className="size-3.5" aria-hidden /> : <Archive className="size-3.5" aria-hidden />}{album.show.library ? 'В библиотеке' : 'В архиве'}</span>}
       {!album.mine ? (
         <div className="ml-auto flex flex-wrap items-center gap-1">
+          <ShowMenu album={album} onChanged={onUpdated} onError={onError} />
           {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
           <button type="button" onClick={leave} className={ghost} title="Альбом исчезнет из вашего списка, у владельца он останется"><LogOut className="size-4" aria-hidden /><span className="hidden sm:inline">Убрать из списка</span></button>
         </div>
       ) : (
       <div className="ml-auto flex flex-wrap items-center gap-1">
-        <ArchiveButton album={album} onChanged={onRenamed} onError={onError} />
-        <ShowMenu album={album} onChanged={onRenamed} onError={onError} />
+        {album.mine && <ArchiveButton album={album} onChanged={onUpdated} onError={onError} />}
+        <ShowMenu album={album} onChanged={onUpdated} onError={onError} />
         <button type="button" onClick={onShare} className={ghost}><Share2 className="size-4" aria-hidden /><span className="hidden sm:inline">{album.sharedWith > 0 ? `Общий (${album.sharedWith})` : 'Поделиться'}</span></button>
         <button type="button" onClick={onQuick} aria-pressed={isQuick} title={isQuick ? 'Фото из библиотеки кладутся сюда одним нажатием «+». Нажмите, чтобы выключить' : 'Фото из библиотеки будут кладываться сюда одним нажатием «+»'} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isQuick ? 'bg-violet-600 text-white hover:bg-violet-500' : 'text-violet-700 hover:bg-violet-600/10 dark:text-violet-300'}`}><Zap className="size-4" aria-hidden /><span className="hidden sm:inline">{isQuick ? 'Быстрый альбом' : 'Набирать сюда'}</span></button>
+        {!editing && <button type="button" onClick={() => setPickingCover(true)} className={ghost}><ImagePlus className="size-4" aria-hidden /><span className="hidden sm:inline">Обложка</span></button>}
         {!editing && <button type="button" onClick={() => setEditing(true)} className={ghost}><Pencil className="size-4" aria-hidden /><span className="hidden sm:inline">Переименовать</span></button>}
         {count > 0 && <a href={albumZipHref(album.id)} download className={ghost}><Download className="size-4" aria-hidden /><span className="hidden sm:inline">Скачать альбом</span></a>}
         <button type="button" onClick={() => (confirm ? remove() : setConfirm(true))} className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${confirm ? 'bg-red-600 text-white hover:bg-red-500' : 'text-red-700 hover:bg-red-500/10 dark:text-red-300'}`}>
@@ -354,6 +359,7 @@ export function AlbumHeader({ album, count, onBack, onRenamed, onDeleted, onErro
         </button>
       </div>
       )}
+      {pickingCover && album.mine && <CoverPicker album={album} onChanged={onUpdated} onError={onError} onClose={() => setPickingCover(false)} />}
     </motion.div>
   );
 }

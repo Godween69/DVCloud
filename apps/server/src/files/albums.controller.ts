@@ -167,6 +167,18 @@ export class AlbumsController {
     return { album: await this.albums.setFavorite(req.user.id, id, asObject(req.body).favorite) };
   }
 
+  // Обложка альбома по выбору. Тело: { coverFileId: номер } или { coverFileId: null } (вернуть «самое свежее»).
+  @Patch(':id/cover')
+  async cover(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ album: PublicAlbum }> {
+    requireJson(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const o = asObject(req.body);
+    if (!('coverFileId' in o)) throw new BadRequestException('Поле coverFileId: номер файла или null');
+    const cf = o.coverFileId;
+    if (cf !== null && typeof cf !== 'string') throw new BadRequestException('Поле coverFileId: номер файла или null');
+    return { album: await this.albums.setCover(req.user.id, id, cf as string | null) };
+  }
+
   @Delete(':id')
   async remove(@Req() req: Req_, @Res({ passthrough: true }) res: Response, @Param('id') id: string): Promise<{ ok: true }> {
     res.setHeader('Cache-Control', 'no-store');
@@ -180,7 +192,7 @@ export class AlbumsController {
     const lim = limit === undefined ? 100 : Number(limit);
     if (!Number.isInteger(lim) || lim < 1 || lim > 500) throw new BadRequestException('limit: от 1 до 500');
     const { album, ownerId } = await this.albums.getVisible(req.user.id, id);
-    const r = await this.files.list(ownerId, { trashed: false, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined });
+    const r = await this.files.list(ownerId, { trashed: false, viewerId: req.user.id, limit: lim, before: typeof before === 'string' ? before : undefined, albumId: album.id, at: typeof at === 'string' ? at : undefined, tz: typeof tz === 'string' ? tz : undefined, after: typeof after === 'string' ? after : undefined });
     res.setHeader('Cache-Control', 'no-store');
     return { album, files: r.files.map(toPublicFile), next: r.next, prev: r.prev };
   }

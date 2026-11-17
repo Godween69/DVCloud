@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, Info, LayoutGrid, LogOut, Moon, Search, ShieldCheck, Smartphone, Sun, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, Info, LayoutGrid, LogOut, Moon, Search, ShieldCheck, Smartphone, Sun, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
@@ -42,10 +42,8 @@ function AddMenu({ onAdd, onAddFolder }: { onAdd: () => void; onAddFolder: () =>
   const item = 'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-gray-800 transition-colors hover:bg-paper-200 dark:text-gray-100 dark:hover:bg-gray-800';
   return (
     <div ref={box} className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} aria-label="Добавить" className="flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-medium text-white transition-[filter,transform,box-shadow] hover:brightness-110 active:scale-[0.97] sm:px-3.5" style={{ background: 'linear-gradient(135deg, var(--aur-a), var(--aur-b))', boxShadow: '0 0 14px -2px color-mix(in srgb, var(--aur-a) 60%, transparent)' }}>
-        <Upload className="size-4" aria-hidden />
-        <span className="hidden sm:inline">Добавить</span>
-        <ChevronDown className={`hidden size-4 transition-transform sm:block ${open ? 'rotate-180' : ''}`} aria-hidden />
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} aria-label="Добавить" title="Добавить" className="flex size-9 items-center justify-center rounded-xl text-white transition-[filter,transform,box-shadow] hover:brightness-110 active:scale-[0.97]" style={{ background: 'linear-gradient(135deg, var(--aur-a), var(--aur-b))', boxShadow: '0 0 14px -2px color-mix(in srgb, var(--aur-a) 60%, transparent)' }}>
+        <Upload className="size-5" aria-hidden />
       </button>
       <AnimatePresence>
       {open && (
@@ -73,6 +71,25 @@ const LENS = { background: 'color-mix(in srgb, var(--aur-a) 22%, var(--lens-base
 export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn, peopleOn, yandexOn, theme, onToggleTheme, onLogout, onHelp, hideDock }: Props) {
   const child = user.isChild === true; // детский режим: только библиотека, фото, видео и альбомы
   const items = child ? ([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['albums', 'Альбомы']] as const) : ([['library', 'Библиотека'], ['photos', 'Фото'], ['videos', 'Видео'], ['screenshots', 'Скриншоты'], ['albums', 'Альбомы'], ...(peopleOn ? [['people', 'Люди'] as const] : []), ['similar', 'Похожие'], ['trash', 'Корзина'], ...(yandexOn ? [['yandex', 'Яндекс Диск'] as const] : [])] as const);
+  // Подписи разделов показываем только если влезают все, иначе одни значки: полосы прокрутки нет.
+  const navRef = useRef<HTMLElement | null>(null);
+  const [labels, setLabels] = useState(false);
+  useLayoutEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const fit = () => {
+      const spans = Array.from(el.querySelectorAll<HTMLElement>('[data-nav-label]'));
+      const saved = spans.map((s) => s.style.display);
+      spans.forEach((s) => { s.style.display = 'inline'; });   // замер с подписями
+      const need = el.scrollWidth;
+      spans.forEach((s, i) => { s.style.display = saved[i]; });
+      setLabels(need <= el.clientWidth);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [items.length]);
   const pct = usage && usage.quotaBytes ? Math.min(100, (usage.usedBytes / usage.quotaBytes) * 100) : null;
   const tone = pct === null ? 'bg-violet-500' : pct >= 90 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-violet-500';
   const textTone = pct !== null && pct >= 85 ? 'font-medium text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400';
@@ -85,10 +102,9 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
           <span className="flex size-8 items-center justify-center rounded-xl text-white" style={{ background: 'linear-gradient(135deg, var(--aur-a), var(--aur-b))', boxShadow: '0 0 12px -2px color-mix(in srgb, var(--aur-a) 60%, transparent)' }}>
             <Cloud className="size-4.5" aria-hidden />
           </span>
-          <span className="hidden whitespace-nowrap font-semibold tracking-tight text-gray-900 2xl:inline dark:text-white">DV Cloud</span>
         </div>
 
-        <nav aria-label="Разделы" className="ml-1 hidden min-w-0 gap-0.5 overflow-x-auto sm:ml-4 sm:flex">
+        <nav ref={navRef} aria-label="Разделы" className="ml-1 hidden min-w-0 flex-1 gap-0.5 overflow-hidden sm:ml-4 sm:flex">
           {items.map(([id, label]) => {
             const Icon = NAV_ICON[id];
             const on = view === id;
@@ -96,7 +112,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
               <button key={id} type="button" onClick={() => onView(id)} aria-current={on ? 'page' : undefined} title={label} className="group relative flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 aria-[current=page]:text-gray-900 dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:text-white">
                 {on && <motion.span layoutId="nav-lens" className="absolute inset-0 rounded-full" style={LENS} transition={{ type: 'spring', stiffness: 520, damping: 38 }} />}
                 <Icon className="relative size-[22px] transition-transform duration-200 group-hover:scale-110" aria-hidden />
-                <span className={`relative ${on ? '' : 'hidden 2xl:inline'}`}>{label}</span>
+                <span data-nav-label="" className={`relative ${labels || on ? '' : 'hidden'}`}>{label}</span>
               </button>
             );
           })}
@@ -104,8 +120,8 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
 
         <div className="ml-auto flex items-center gap-1 sm:gap-3">
           {usage && (
-            <div className="hidden w-40 md:block" title="Сколько места занято, включая корзину">
-              <div className={`mb-1 text-right text-xs ${textTone}`}>{usage.quotaBytes ? `${formatBytes(usage.usedBytes)} из ${formatBytes(usage.quotaBytes)}` : `${formatBytes(usage.usedBytes)} занято`}</div>
+            <div className="hidden w-fit md:block" title="Сколько места занято, включая корзину">
+              <div className={`mb-1 whitespace-nowrap px-1 text-right text-xs ${textTone}`}>{usage.quotaBytes ? `${formatBytes(usage.usedBytes)} из ${formatBytes(usage.quotaBytes)}` : `${formatBytes(usage.usedBytes)} занято`}</div>
               <div className="h-1.5 overflow-hidden rounded-full bg-paper-300 dark:bg-gray-800" role="progressbar" aria-label="Занятое место" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct === null ? undefined : Math.round(pct)}>
                 <motion.div className={`h-full rounded-full ${tone}`} initial={false} animate={{ width: `${pct ?? 100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} style={pct === null ? { opacity: 0.35 } : undefined} />
               </div>
