@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronRight, Info, LogOut, Moon, Settings, ShieldCheck, Smartphone, Sun } from 'lucide-react';
+import { ChevronRight, LogOut, Moon, Settings, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Theme } from '../lib/theme';
 import type { User } from '../types';
@@ -12,7 +12,6 @@ interface Props {
   theme: Theme;
   onToggleTheme: () => void;
   onLogout: () => void;
-  onHelp: () => void;
 }
 
 const iconBtn =
@@ -21,7 +20,7 @@ const item =
   'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-gray-800 transition-colors hover:bg-paper-200 dark:text-gray-100 dark:hover:bg-gray-800';
 
 // Шестерёнка: одно меню вместо отдельных кнопок (безопасность, устройства, тема, справка, выход).
-export function SettingsMenu({ user, view, onView, theme, onToggleTheme, onLogout, onHelp }: Props) {
+export function SettingsMenu({ user, view, onView, theme, onToggleTheme, onLogout }: Props) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -73,10 +72,6 @@ export function SettingsMenu({ user, view, onView, theme, onToggleTheme, onLogou
               </span>
             </button>
             <div className="my-1 h-px bg-paper-300 dark:bg-gray-700" />
-            <button type="button" role="menuitem" onClick={() => { setOpen(false); onHelp(); }} className={item}>
-              <Info className="size-5 text-gray-500 dark:text-gray-400" aria-hidden />
-              <span className="font-medium">Справка</span>
-            </button>
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onLogout(); }} className={`${item} text-red-600 dark:text-red-400`}>
               <LogOut className="size-5" aria-hidden />
               <span className="font-medium">Выйти</span>

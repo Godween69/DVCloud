@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, LayoutGrid, Search, Settings, Smartphone, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
+import { Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, Info, LayoutGrid, Search, Settings, Smartphone, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
@@ -134,7 +134,10 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
             </button>
           )}
           {!child && <AddMenu onAdd={onAdd} onAddFolder={onAddFolder} />}
-          <SettingsMenu user={user} view={view} onView={onView} theme={theme} onToggleTheme={onToggleTheme} onLogout={onLogout} onHelp={onHelp} />
+          <button type="button" onClick={onHelp} className={iconBtn} aria-label="Справка по разделу" title="Справка по разделу">
+            <Info className="size-5" aria-hidden />
+          </button>
+          <SettingsMenu user={user} view={view} onView={onView} theme={theme} onToggleTheme={onToggleTheme} onLogout={onLogout} />
         </div>
       </div>
     </header>
