@@ -1,9 +1,11 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AuthController } from './auth/auth.controller';
 import { SecurityController } from './auth/security.controller';
 import { DvAuthClient } from './auth/dvauth.client';
 import { SessionGuard } from './auth/session.guard';
 import { DeviceTokensService } from './auth/device-tokens.service';
+import { DeviceCleanupService } from './auth/device-cleanup.service';
 import { DevicesController } from './auth/devices.controller';
 import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
@@ -49,7 +51,16 @@ import { UsersService } from './users/users.service';
 @Module({})
 export class CoreModule {
   static forRoot(cfg: Config): DynamicModule {
-    const providers = [{ provide: CONFIG, useValue: cfg }, DbService, AuditService, UsersService, SessionsService, DvAuthClient];
+    const providers = [
+      { provide: CONFIG, useValue: cfg },
+      DbService,
+      AuditService,
+      UsersService,
+      SessionsService,
+      DeviceTokensService,
+      DeviceCleanupService,
+      DvAuthClient,
+    ];
     return { module: CoreModule, providers, exports: providers.map((p) => (typeof p === 'function' ? p : p.provide)) };
   }
 }
@@ -60,7 +71,7 @@ export class AppModule {
   static forRoot(cfg: Config): DynamicModule {
     return {
       module: AppModule,
-      imports: [CoreModule.forRoot(cfg)],
+      imports: [ScheduleModule.forRoot(), CoreModule.forRoot(cfg)],
       controllers: [HealthController, AuthController, SecurityController, DevicesController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController, YandexController],
       providers: [SessionGuard, DeviceTokensService, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService, LoginClient, YandexService],
     };

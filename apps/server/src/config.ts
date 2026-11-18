@@ -2,25 +2,26 @@
 export interface Config {
   port: number;
   host: string;
-  internalPort: number; // внутренний порт для админки, наружу не публикуется
+  internalPort: number;
   internalHost: string;
   internalToken: string;
   databaseUrl: string;
   dataDir: string;
   cookieSecure: boolean;
-  trustProxy: number; // сколько прокси стоит перед сервером (0 = никого)
+  trustProxy: number;
   sessionIdleDays: number;
-  maxUploadBytes: number; // предел размера одного файла
-  authUrl: string; // адрес сервиса DV Auth (второй фактор); пусто = второй фактор отключён
-  authSecret: string; // секрет этого приложения в DV Auth
-  mlUrl: string; // адрес ML-сервиса (поиск по смыслу); пусто = поиск недоступен
-  secretsKey: string; // ключ шифрования чужих секретов в базе (сессия Яндекса); пусто = раздел «Яндекс Диск» выключен
-  yandexLoginUrl: string; // адрес помощника входа по QR (отдельный контейнер); пусто = раздел выключен
-  yandexLoginToken: string; // общий секрет сервера и помощника входа
-  yandexBase: string; // адрес Диска (меняется только в тестах)
-  backupDir: string; // куда в контейнере подключён диск для копий (папка, USB, сетевая папка); пусто = копия «в папку» недоступна
-  usbDir: string; // папка внутри контейнера, куда мини-ПК сам подключает переносной USB-диск; пусто = способ «USB-диск» выключен
-  controlDir: string; // папка команд хосту («подключить» и «безопасно извлечь» диск); пусто = управление диском из админки выключено
+  deviceInactiveMonths: number;
+  maxUploadBytes: number;
+  authUrl: string;
+  authSecret: string;
+  mlUrl: string;
+  secretsKey: string;
+  yandexLoginUrl: string;
+  yandexLoginToken: string;
+  yandexBase: string;
+  backupDir: string;
+  usbDir: string;
+  controlDir: string;
 }
 
 function intVar(env: NodeJS.ProcessEnv, name: string, def: number, min: number, max: number): number {
@@ -73,6 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cookieSecure: (env.DVCLOUD_COOKIE_SECURE ?? 'true') !== 'false',
     trustProxy: intVar(env, 'DVCLOUD_TRUST_PROXY', 0, 0, 10),
     sessionIdleDays: intVar(env, 'DVCLOUD_SESSION_IDLE_DAYS', 14, 1, 365),
+    deviceInactiveMonths: intVar(env, 'DVCLOUD_DEVICE_INACTIVE_MONTHS', 6, 3, 12),
     maxUploadBytes: intVar(env, 'DVCLOUD_MAX_UPLOAD_BYTES', 50 * 1024 ** 3, 1, Number.MAX_SAFE_INTEGER),
     authUrl,
     authSecret,

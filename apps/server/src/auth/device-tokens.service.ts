@@ -1,28 +1,30 @@
-import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { createHash, randomBytes, verify } from 'node:crypto';
 import { DbService } from '../db/db.service';
+import { AuditService } from '../db/audit.service';
 import { CONFIG } from '../tokens';
 import type { Config } from '../config';
 
 const MAX_DEVICES_PER_USER = 1;
-const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000; // ±5 минут
+const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 const sha256 = (s: string): Buffer => createHash('sha256').update(s).digest();
 
 function buildSignatureBase(method: string, path: string, ts: string, nonce: string, body: string): string {
   return `${method}\n${path}\n${ts}\n${nonce}\n${createHash('sha256').update(body).digest('hex')}`;
 }
 
-// Кэш nonce в памяти процесса: защита от replay-атак
 const nonceCache = new Map<string, number>();
 
 @Injectable()
 export class DeviceTokensService {
+  private readonly logger = new Logger(DeviceTokensService.name);
+
   constructor(
     private readonly db: DbService,
+    private readonly audit: AuditService,
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
-  // Создание токена устройства. Если активное устройство уже есть — 409.
   async createDevice(userId: string, deviceName: string, devicePubkeyBase64: string): Promise<string> {
     const existing = await this.db.query(
       'SELECT id FROM device_tokens WHERE user_id = $1 AND revoked_at IS NULL',
@@ -36,14 +38,20 @@ export class DeviceTokensService {
     }
     const token = `dvc_${randomBytes(32).toString('base64url')}`;
     const pubkeyDer = Buffer.from(devicePubkeyBase64, 'base64');
-    await this.db.query(
-      'INSERT INTO device_tokens (user_id, token_hash, device_name, device_pubkey) VALUES ($1, $2, $3, $4)',
+    const result = await this.db.query(
+      'INSERT INTO device_tokens (user_id, token_hash, device_name, device_pubkey) VALUES ($1, $2, $3, $4) RETURNING id',
       [userId, sha256(token), deviceName, pubkeyDer],
     );
+    const deviceId = result.rows[0].id;
+
+    await this.audit.write('user', 'device.created', `user:${userId}`, {
+      deviceId,
+      deviceName,
+    });
+
     return token;
   }
 
-  // Аутентификация по Bearer-токену с проверкой ECDSA-подписи.
   async authenticate(
     token: string,
     method: string,
@@ -69,11 +77,9 @@ export class DeviceTokensService {
     if (r.rows.length === 0) return null;
     const row = r.rows[0];
 
-    // Проверка timestamp (окно ±5 минут)
     const ts = parseInt(tsHeader, 10);
     if (!Number.isFinite(ts) || Math.abs(Date.now() - ts * 1000) > TIMESTAMP_WINDOW_MS) return null;
 
-    // Проверка nonce (кэш 5 минут)
     const nonceKey = `${row.id}:${nonceHeader}`;
     if (nonceCache.has(nonceKey)) return null;
     nonceCache.set(nonceKey, Date.now());
@@ -82,7 +88,6 @@ export class DeviceTokensService {
       if (now - v > TIMESTAMP_WINDOW_MS) nonceCache.delete(k);
     }
 
-    // Проверка ECDSA P-256 подписи (DER-формат, как выдаёт Android Keystore)
     try {
       const sigBase = buildSignatureBase(method, path, tsHeader, nonceHeader, body);
       const valid = verify(
@@ -96,7 +101,6 @@ export class DeviceTokensService {
       return null;
     }
 
-    // Обновление last_seen_at (не чаще раза в минуту, чтобы не нагружать БД)
     await this.db.query(
       "UPDATE device_tokens SET last_seen_at = now(), last_ip = $2 WHERE id = $1 AND last_seen_at < now() - interval '1 minute'",
       [row.id, ip],
@@ -121,12 +125,46 @@ export class DeviceTokensService {
       [deviceId, userId],
     );
     if (r.rowCount === 0) throw new HttpException('Устройство не найдено или уже отозвано', HttpStatus.NOT_FOUND);
+
+    await this.audit.write('user', 'device.revoked', `user:${userId}`, {
+      deviceId,
+      reason: 'user_request',
+    });
   }
 
   async revokeAllForUser(userId: string): Promise<void> {
-    await this.db.query(
+    const r = await this.db.query(
       'UPDATE device_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL',
       [userId],
     );
+
+    if (r.rowCount && r.rowCount > 0) {
+      await this.audit.write('user', 'device.revoked', `user:${userId}`, {
+        count: r.rowCount,
+        reason: 'revoke_all',
+      });
+    }
+  }
+
+  async revokeInactive(months: number): Promise<number> {
+    const r = await this.db.query(
+      `UPDATE device_tokens
+          SET revoked_at = now()
+        WHERE revoked_at IS NULL
+          AND last_seen_at < now() - ($1 || ' months')::interval`,
+      [String(months)],
+    );
+
+    const count = r.rowCount ?? 0;
+    if (count > 0) {
+      this.logger.log(`Отозвано ${count} неактивных устройств (старше ${months} мес.)`);
+
+      await this.audit.write('system', 'device.inactive_revoked', 'system', {
+        count,
+        inactiveMonths: months,
+      });
+    }
+
+    return count;
   }
 }

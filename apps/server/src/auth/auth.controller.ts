@@ -15,9 +15,9 @@ export const COOKIE = 'dvcloud_sid';
 export class AuthController {
   constructor(
     private readonly sessions: SessionsService,
-    private readonly deviceTokens: DeviceTokensService,
     private readonly dvauth: DvAuthClient,
     private readonly users: UsersService,
+    private readonly deviceTokens: DeviceTokensService,
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
@@ -35,15 +35,14 @@ export class AuthController {
         const deviceToken = await this.deviceTokens.createDevice(user.id, device.name.slice(0, 200), device.pubkey);
         return { user: toPublic(user), deviceToken };
       } catch {
-        // Если устройство уже есть или ключ некорректен — всё равно возвращаем сессию без deviceToken
+        // Если устройство уже есть или ключ некорректен — возвращаем сессию без deviceToken
       }
     }
     return { user: toPublic(user) };
   }
-  }
 
   // Для этого человека сессия открывается только если он ещё активен (второй шаг мог идти минуты).
-  private async finishById(res: Response, subject: string, device?: { name: string; pubkey: string }): Promise<{ user: PublicUser }> {
+  private async finishById(res: Response, subject: string, device?: { name: string; pubkey: string }): Promise<{ user: PublicUser; deviceToken?: string }> {
     const user = await this.users.findById(subject);
     if (!user || user.disabled) throw new UnauthorizedException('Вход недоступен');
     return this.finish(res, user, device);
@@ -64,6 +63,7 @@ export class AuthController {
       if (r.required && r.ticket) return { twoFactor: { ticket: r.ticket, methods: r.methods ?? [] } };
     }
     await this.sessions.clearFails(user.login);
+    const device = (o as any).device ? { name: String((o as any).device.name || ''), pubkey: String((o as any).device.pubkey || '') } : undefined;
     return this.finish(res, user, device);
   }
 
@@ -78,7 +78,8 @@ export class AuthController {
       code: strField(o, 'code', 1, 40),
       ip: req.ip ?? 'unknown',
     });
-    return this.finishById(res, r.subject);
+    const device = (o as any).device ? { name: String((o as any).device.name || ''), pubkey: String((o as any).device.pubkey || '') } : undefined;
+    return this.finishById(res, r.subject, device);
   }
 
   // Шаг 2б: подтверждение в DVChat. start выдаёт QR и число, status опрашивает страница входа.
@@ -99,7 +100,8 @@ export class AuthController {
   async chatStatus(@Body() body: unknown, @Req() req: Request, @Res({ passthrough: true }) res: Response): Promise<{ state: string; user?: PublicUser }> {
     requireJson(req);
     const r = await this.dvauth.call<{ state: string; subject?: string }>('POST', '/v1/login/chat/status', { ticket: strField(asObject(body), 'ticket', 20, 64) });
-    if (r.state === 'approved' && r.subject) return { state: 'approved', ...(await this.finishById(res, r.subject)) };
+    const device = (asObject(body) as any).device ? { name: String((asObject(body) as any).device.name || ''), pubkey: String((asObject(body) as any).device.pubkey || '') } : undefined;
+    if (r.state === 'approved' && r.subject) return { state: 'approved', ...(await this.finishById(res, r.subject, device)) };
     res.setHeader('Cache-Control', 'no-store');
     return { state: r.state };
   }

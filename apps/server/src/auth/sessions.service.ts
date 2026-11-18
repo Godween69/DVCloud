@@ -4,6 +4,7 @@ import { Config } from '../config';
 import { DbService } from '../db/db.service';
 import { CONFIG } from '../tokens';
 import { UserRow, UsersService } from '../users/users.service';
+import { DeviceTokensService } from './device-tokens.service';
 import { dummyHash, verifyPassword } from './password';
 
 const MAX_FAILS_PER_LOGIN = 5; // за 15 минут
@@ -97,6 +98,5 @@ export class SessionsService {
       }
       await this.db.query('DELETE FROM sessions WHERE token_hash = $1', [hash]);
     }
-  }
   }
 }
