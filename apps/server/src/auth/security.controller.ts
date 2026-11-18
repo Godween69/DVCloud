@@ -5,6 +5,7 @@ import { UserRow } from '../users/users.service';
 import { ChatChallenge, DvAuthClient, FactorStatus } from './dvauth.client';
 import { SessionGuard } from './session.guard';
 import { SessionsService } from './sessions.service';
+import { DeviceTokensService } from './device-tokens.service';
 
 type Authed = Request & { user: UserRow };
 
@@ -15,6 +16,7 @@ type Authed = Request & { user: UserRow };
 export class SecurityController {
   constructor(
     private readonly sessions: SessionsService,
+    private readonly deviceTokens: DeviceTokensService,
     private readonly dvauth: DvAuthClient,
   ) {}
 
@@ -103,5 +105,17 @@ export class SecurityController {
     requireJson(req);
     await this.confirmFactor(req, asObject(body));
     return this.dvauth.call('POST', '/v1/chat/unlink', this.subject(req));
+  }
+
+  @Post('revoke-all-devices')
+  @UseGuards(SessionGuard)
+  @HttpCode(200)
+  async revokeAllDevices(@Body() body: unknown, @Req() req: Request & { user: UserRow }): Promise<{ ok: true }> {
+    requireJson(req);
+    const o = asObject(body);
+    const ip = req.ip ?? 'unknown';
+    await this.sessions.checkCredentials(req.user.login, strField(o, 'password', 1, 200), ip);
+    await this.deviceTokens.revokeAllForUser(req.user.id);
+    return { ok: true };
   }
 }

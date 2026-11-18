@@ -6,6 +6,7 @@ import { CONFIG } from '../tokens';
 import { PublicUser, toPublic, UserRow, UsersService } from '../users/users.service';
 import { SessionGuard } from './session.guard';
 import { SessionsService } from './sessions.service';
+import { DeviceTokensService } from './device-tokens.service';
 import { ChatChallenge, DvAuthClient } from './dvauth.client';
 
 export const COOKIE = 'dvcloud_sid';
@@ -14,6 +15,7 @@ export const COOKIE = 'dvcloud_sid';
 export class AuthController {
   constructor(
     private readonly sessions: SessionsService,
+    private readonly deviceTokens: DeviceTokensService,
     private readonly dvauth: DvAuthClient,
     private readonly users: UsersService,
     @Inject(CONFIG) private readonly cfg: Config,
@@ -24,18 +26,27 @@ export class AuthController {
     return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${this.cfg.cookieSecure ? '; Secure' : ''}`;
   }
 
-  private async finish(res: Response, user: UserRow): Promise<{ user: PublicUser }> {
+  private async finish(res: Response, user: UserRow, device?: { name: string; pubkey: string }): Promise<{ user: PublicUser; deviceToken?: string }> {
     const token = await this.sessions.createSession(user.id);
     res.setHeader('Set-Cookie', this.cookie(token, this.cfg.sessionIdleDays * 86400));
     res.setHeader('Cache-Control', 'no-store');
+    if (device && device.name && device.pubkey) {
+      try {
+        const deviceToken = await this.deviceTokens.createDevice(user.id, device.name.slice(0, 200), device.pubkey);
+        return { user: toPublic(user), deviceToken };
+      } catch {
+        // Если устройство уже есть или ключ некорректен — всё равно возвращаем сессию без deviceToken
+      }
+    }
     return { user: toPublic(user) };
+  }
   }
 
   // Для этого человека сессия открывается только если он ещё активен (второй шаг мог идти минуты).
-  private async finishById(res: Response, subject: string): Promise<{ user: PublicUser }> {
+  private async finishById(res: Response, subject: string, device?: { name: string; pubkey: string }): Promise<{ user: PublicUser }> {
     const user = await this.users.findById(subject);
     if (!user || user.disabled) throw new UnauthorizedException('Вход недоступен');
-    return this.finish(res, user);
+    return this.finish(res, user, device);
   }
 
   // Шаг 1: пароль. Если у человека включён второй фактор (его знает DV Auth), сессии ещё нет:
@@ -53,7 +64,7 @@ export class AuthController {
       if (r.required && r.ticket) return { twoFactor: { ticket: r.ticket, methods: r.methods ?? [] } };
     }
     await this.sessions.clearFails(user.login);
-    return this.finish(res, user);
+    return this.finish(res, user, device);
   }
 
   // Шаг 2а: код из приложения-аутентификатора или запасной код.

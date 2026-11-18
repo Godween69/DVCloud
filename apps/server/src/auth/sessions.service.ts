@@ -17,6 +17,7 @@ export class SessionsService {
   constructor(
     private readonly db: DbService,
     private readonly users: UsersService,
+    private readonly deviceTokens: DeviceTokensService,
     @Inject(CONFIG) private readonly cfg: Config,
   ) {}
 
@@ -85,6 +86,17 @@ export class SessionsService {
   }
 
   async logout(token: string | undefined): Promise<void> {
-    if (token) await this.db.query('DELETE FROM sessions WHERE token_hash = $1', [sha256(token)]);
+    if (token) {
+      const hash = sha256(token);
+      const r = await this.db.query<{ user_id: string }>(
+        'SELECT user_id FROM sessions WHERE token_hash = $1',
+        [hash],
+      );
+      if (r.rows.length > 0) {
+        try { await this.deviceTokens.revokeAllForUser(r.rows[0].user_id); } catch {}
+      }
+      await this.db.query('DELETE FROM sessions WHERE token_hash = $1', [hash]);
+    }
+  }
   }
 }

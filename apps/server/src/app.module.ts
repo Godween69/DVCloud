@@ -3,6 +3,8 @@ import { AuthController } from './auth/auth.controller';
 import { SecurityController } from './auth/security.controller';
 import { DvAuthClient } from './auth/dvauth.client';
 import { SessionGuard } from './auth/session.guard';
+import { DeviceTokensService } from './auth/device-tokens.service';
+import { DevicesController } from './auth/devices.controller';
 import { SessionsService } from './auth/sessions.service';
 import { Config } from './config';
 import { AuditService } from './db/audit.service';
@@ -59,8 +61,8 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [CoreModule.forRoot(cfg)],
-      controllers: [HealthController, AuthController, SecurityController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController, YandexController],
-      providers: [SessionGuard, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService, LoginClient, YandexService],
+      controllers: [HealthController, AuthController, SecurityController, DevicesController, FilesController, AlbumsController, ZipController, SimilarController, SearchController, PeopleController, UploadsController, YandexController],
+      providers: [SessionGuard, DeviceTokensService, ActivityService, StorageService, ThumbsService, VideoService, MediaSettingsService, MlClient, EmbedService, PeopleService, PeopleScanService, SearchService, FilesService, AlbumsService, FingerprintService, SimilarService, UploadsService, LoginClient, YandexService],
     };
   }
 }
