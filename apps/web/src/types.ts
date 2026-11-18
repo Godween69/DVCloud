@@ -189,3 +189,13 @@ export interface YandexItem {
   error: string | null;
   fileId: string | null;
 }
+
+// Подключённые устройства (токены устройств, см. docs/AUTH.md)
+export interface Device {
+  id: string;
+  deviceName: string;
+  createdAt: string;
+  lastSeenAt: string;
+  lastIp: string | null;
+  revokedAt: string | null;
+}

@@ -22,6 +22,7 @@ import { AlbumStrip } from './AlbumStrip';
 import { Gallery } from './Gallery';
 import { YandexView } from './YandexView';
 import { SecurityView } from './SecurityView';
+import { DevicesView } from './DevicesView';
 import { SelectionBar } from './SelectionBar';
 import { ShareDialog } from './ShareDialog';
 import { Toast, type ToastData } from './Toast';
@@ -524,6 +525,7 @@ export function Shell({ user, onLogout }: { user: User; onLogout: () => void }) 
         {view === 'search' && <SearchView search={search} status={searchStatus} named={named} onOpen={(id) => setViewer({ id })} onPerson={(id) => { const p = peopleList?.people.find((x) => x.id === id); if (p) { setView('people'); setAlbum(null); setPerson(p); endSelect(); } }} />}
         {view === 'yandex' && <YandexView onError={say} />}
         {view === 'security' && <SecurityView onError={say} />}
+        {view === 'devices' && <DevicesView onError={say} />}
         {view === 'similar' && <SimilarView onTrashed={(ids) => { ids.forEach((id) => library.remove(id)); refreshUsage(); say(ids.length === 1 ? 'Файл в корзине' : `В корзине файлов: ${ids.length}`); }} onError={say} />}
         {view === 'trash' && (
           <TrashView files={trash.files} loaded={trash.loaded} loading={trash.loading} hasMore={trash.hasMore} error={trash.error} onMore={() => trash.loadMore()}

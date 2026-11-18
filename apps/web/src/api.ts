@@ -1,4 +1,4 @@
-import type { Album, AlbumKind, AlbumRef, AlbumShow, AlbumSuggestion, FaceGuess, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, YandexItem, YandexStatus } from './types';
+import type { Album, AlbumKind, AlbumRef, AlbumShow, AlbumSuggestion, FaceGuess, Challenge, ClaimResult, Estimate, PeopleList, FaceBox, Person, UploadSession, FactorStatus, FileItem, LoginResult, SimilarResult, SearchResult, SearchStatus, Usage, User, Device, YandexItem, YandexStatus } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -35,7 +35,7 @@ async function request<T>(method: string, path: string, body?: unknown, high = f
   }
   if (!r.ok) {
     // 401 на проверке пароля или кода (вход, второй шаг, настройки безопасности) означает «неверно», а не «сессия кончилась».
-    const soft = path.startsWith('/api/auth/') && !(method === 'GET' && path === '/api/auth/security');
+    const soft = path.startsWith('/api/auth/') && !path.startsWith('/api/auth/devices') && !(method === 'GET' && path === '/api/auth/security');
     if (r.status === 401 && !soft) onUnauthorized();
     throw new ApiError(r.status, typeof json?.message === 'string' ? json.message : `Ошибка сервера (${r.status})`);
   }
@@ -44,6 +44,12 @@ async function request<T>(method: string, path: string, body?: unknown, high = f
 
 function timeZone(): string {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+// Строка устройства из БД (snake_case) -> camelCase для интерфейса.
+interface DeviceRow { id: string; device_name: string; created_at: string; last_seen_at: string; last_ip: string | null; revoked_at: string | null }
+function toDevice(r: DeviceRow): Device {
+  return { id: r.id, deviceName: r.device_name, createdAt: r.created_at, lastSeenAt: r.last_seen_at, lastIp: r.last_ip, revokedAt: r.revoked_at };
 }
 
 export const api = {
@@ -64,6 +70,8 @@ export const api = {
   chatLinkStatus: () => request<{ state: 'pending' | 'approved' | 'failed' | 'none'; matrixId?: string; recoveryCodes?: string[] | null }>('POST', '/api/auth/security/chat/status', {}),
   chatUnlink: (password: string, code?: string) => request<{ ok: true }>('DELETE', '/api/auth/security/chat', { password, code }),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout', {}),
+  devices: () => request<DeviceRow[]>('GET', '/api/auth/devices').then((rows) => rows.map(toDevice)),
+  revokeDevice: (id: string) => request<{ ok: true }>('DELETE', `/api/auth/devices/${encodeURIComponent(id)}`),
   list: (trashed: boolean, before?: string, kind?: 'library' | 'photos' | 'videos' | 'screenshots', at?: string, after?: string, person?: string) => {
     const q = new URLSearchParams({ limit: '200' });
     if (trashed) q.set('trashed', '1');

@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, Info, LayoutGrid, LogOut, Moon, Search, ShieldCheck, Smartphone, Sun, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
+import { Cloud, Copy, FilePlus, FolderOpen, FolderUp, Film, Images, LayoutGrid, Search, Settings, Smartphone, Trash2, Upload, Users, CloudDownload } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatBytes } from '../lib/format';
 import type { Theme } from '../lib/theme';
 import type { Usage, User } from '../types';
+import { SettingsMenu } from './SettingsMenu';
 
-export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'people' | 'similar' | 'trash' | 'security' | 'search' | 'yandex';
+export type View = 'library' | 'photos' | 'videos' | 'screenshots' | 'albums' | 'people' | 'similar' | 'trash' | 'security' | 'devices' | 'search' | 'yandex';
 
 interface Props {
   user: User;
@@ -133,18 +134,7 @@ export function TopBar({ user, view, onView, usage, onAdd, onAddFolder, searchOn
             </button>
           )}
           {!child && <AddMenu onAdd={onAdd} onAddFolder={onAddFolder} />}
-          {!child && <button type="button" onClick={() => onView('security')} aria-current={view === 'security' ? 'page' : undefined} className={`${iconBtn} aria-[current=page]:bg-paper-200 dark:aria-[current=page]:bg-gray-800`} aria-label="Безопасность" title="Безопасность">
-            <ShieldCheck className="size-5" aria-hidden />
-          </button>}
-          <button type="button" onClick={onHelp} className={iconBtn} aria-label="Справка по разделу" title="Справка по разделу">
-            <Info className="size-5" aria-hidden />
-          </button>
-          <button type="button" onClick={onToggleTheme} className={iconBtn} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
-            {theme === 'dark' ? <Sun className="size-5" aria-hidden /> : <Moon className="size-5" aria-hidden />}
-          </button>
-          <button type="button" onClick={onLogout} className={iconBtn} aria-label={`Выйти (${user.displayName})`} title={`Выйти (${user.displayName})`}>
-            <LogOut className="size-5" aria-hidden />
-          </button>
+          <SettingsMenu user={user} view={view} onView={onView} theme={theme} onToggleTheme={onToggleTheme} onLogout={onLogout} onHelp={onHelp} />
         </div>
       </div>
     </header>
